@@ -7,7 +7,7 @@ import pandas_ta as ta
 import json
 from datetime import datetime
 from pathlib import Path
-from risk_manager import RiskManager
+from .risk_manager import RiskManager
 from typing import Dict
 
 class DeepPortfolioManager:
@@ -134,20 +134,32 @@ class DeepPortfolioManager:
                 
                 if trade_plan["approved"]:
                     lots = trade_plan["lots"]
+                    sl_pips = trade_plan["stop_loss_pips"]
                     
-                    # Store the state temporarily so we can log it when the trade closes
-                    # In a real bot, you'd attach this state array to the ticket ID!
-                    self._temporary_trade_states = getattr(self, '_temporary_trade_states', {})
-                    self._temporary_trade_states[symbol] = {
-                        "state": current_state.tolist(),
-                        "strategy": strategy_name
-                    }
+                    exec_result = self.broker.execute_trade(
+                        symbol=symbol,
+                        action=signal['action'],
+                        lots=lots,
+                        stop_loss_pips=sl_pips,
+                        take_profit_pips=sl_pips * 2.0  # Example: Setting a 1:2 Risk/Reward ratio
+                    )
                     
-                    brain = "🤖 AI Select" if self.is_ai_ready else "⚙️ Config Select"
-                    results.append(f"{brain} -> {symbol} [{strategy_name}]: {signal['action']} | Size: {lots}")
+                    if exec_result["success"]:
+                        ticket = exec_result["ticket"]
+                        fill_price = exec_result["price"]
+                        results.append(f"🟢 EXECUTED -> {symbol}: {signal['action']} | Size: {lots} | Price: {fill_price} | Ticket: #{ticket}")
+                        
+                        # (Optional) If you are using the AI logging, store the state here
+                        self._temporary_trade_states = getattr(self, '_temporary_trade_states', {})
+                        self._temporary_trade_states[symbol] = {
+                            "state": current_state.tolist(), # Assuming you saved current_state earlier
+                            "strategy": strategy_name
+                        }
+                    else:
+                        reason = exec_result["reason"]
+                        results.append(f"⚠️ EXECUTION FAILED -> {symbol}: {signal['action']} | Reason: {reason}")
                 else:
                     results.append(f"❌ {symbol} [{strategy_name}]: Rejected. {trade_plan['reason']}")
-
         return results if results else ["⚠️ No high-probability entries found."]
 
     def log_trade_for_learning(self, symbol: str, profit: float):

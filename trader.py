@@ -96,6 +96,67 @@ class Trader:
         mt5.shutdown()
         self.connected = False
         
+    def execute_trade(self, symbol: str, action: str, lots: float, stop_loss_pips: float = 0.0, take_profit_pips: float = 0.0) -> dict:
+        """
+        Builds and sends a live order to MetaTrader 5.
+        """
+        if not self.connected:
+            return {"success": False, "reason": "Not connected to MT5."}
+
+        # 1. Verify the symbol is available and visible
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            return {"success": False, "reason": f"{symbol} not found on broker."}
+        if not symbol_info.visible:
+            if not mt5.symbol_select(symbol, True):
+                return {"success": False, "reason": f"Could not select {symbol} in Market Watch."}
+
+        # 2. Define the Order Type and get the correct execution price
+        order_type = mt5.ORDER_TYPE_BUY if action.upper() == 'BUY' else mt5.ORDER_TYPE_SELL
+        tick = mt5.symbol_info_tick(symbol)
+        
+        if not tick:
+            return {"success": False, "reason": f"Could not fetch current price for {symbol}."}
+            
+        price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
+        point = symbol_info.point
+
+        # 3. Calculate Stop Loss and Take Profit prices
+        # Note: We multiply pips by 10 to convert to points for standard forex pairs.
+        sl_price = 0.0
+        tp_price = 0.0
+        
+        if order_type == mt5.ORDER_TYPE_BUY:
+            if stop_loss_pips > 0: sl_price = price - (stop_loss_pips * 10 * point)
+            if take_profit_pips > 0: tp_price = price + (take_profit_pips * 10 * point)
+        elif order_type == mt5.ORDER_TYPE_SELL:
+            if stop_loss_pips > 0: sl_price = price + (stop_loss_pips * 10 * point)
+            if take_profit_pips > 0: tp_price = price - (take_profit_pips * 10 * point)
+
+        # 4. Build the MT5 Request Dictionary
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": float(lots),
+            "type": order_type,
+            "price": price,
+            "sl": sl_price,
+            "tp": tp_price,
+            "deviation": 20,          # Max slippage allowed (in points)
+            "magic": 234000,          # Unique Bot ID (helps you identify bot trades vs manual)
+            "comment": "AI Bot Trade",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC, # Immediate or Cancel
+        }
+
+        # 5. Send the order!
+        result = mt5.order_send(request)
+        
+        # 6. Check if it succeeded
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return {"success": False, "reason": f"Order rejected. MT5 Code: {result.retcode}, {result.comment}"}
+
+        return {"success": True, "ticket": result.order, "price": result.price}
 
     def getPositions(self):
         if not self.connected:
