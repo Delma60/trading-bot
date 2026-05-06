@@ -1,10 +1,15 @@
 import time
 import threading
+import signal
+import sys
 from trader import Trader
 from strategies.strategy_manager import StrategyManager
 from manager.risk_manager import RiskManager
 from manager.portfolio_manager import PortfolioManager
 from chat import Chatbot
+
+# Global shutdown flag for graceful termination
+shutdown_event = threading.Event()
 
 def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minutes: int = 15):
     """
@@ -18,10 +23,12 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
     STOP_LOSS_PIPS = 20.0
     MAX_DAILY_LOSS = 50.0
 
-    while True:
+    while not shutdown_event.is_set():
         try:
-            # 1. Wait for the interval (convert minutes to seconds)
-            time.sleep(scan_interval_minutes * 60)
+            # 1. Wait for the interval (convert minutes to seconds) but check shutdown flag
+            if shutdown_event.wait(scan_interval_minutes * 60):
+                print("\n[Scanner]: 🛑 Shutdown signal received. Scanner stopping gracefully...")
+                break
             
             # 2. Wake up and scan!
             print("\n[Scanner]: Waking up to scan markets... 🔎")
@@ -38,7 +45,17 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
         except Exception as e:
             print(f"\n[Scanner]: ⚠️ Error during autonomous scan: {e}")
             # Sleep for a minute before retrying to prevent error spam
-            time.sleep(60)
+            if shutdown_event.wait(60):
+                break
+    
+    print("[System]: ✅ Background Scanner stopped.")
+
+def signal_handler(signum, frame):
+    """
+    Handle Ctrl+C (SIGINT) and termination signals gracefully.
+    """
+    print("\n[System]: 🛑 Shutdown signal received (Ctrl+C or termination).")
+    shutdown_event.set()
 
 if __name__ == "__main__":
     print("Initializing Quantitative Trading System...")
@@ -54,15 +71,19 @@ if __name__ == "__main__":
     portfolio_manager = PortfolioManager(broker, strategy_manager, risk_manager)
 
     # 4. Start the Background Scanner Thread
-    # We set daemon=True so that when you type "quit" in the chatbot, this background thread dies with it.
+    # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
         target=autonomous_scanner, 
         args=(portfolio_manager, 15) # Scan every 15 minutes
     )
-    scanner_thread.daemon = True 
+    scanner_thread.daemon = False
     scanner_thread.start()
 
-    # 5. Boot up the Chatbot on the Main Thread
+    # 5. Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
+
+    # 6. Boot up the Chatbot on the Main Thread
     bot = Chatbot(
         intents_filepath="intents.json", 
         broker=broker, 
@@ -70,6 +91,37 @@ if __name__ == "__main__":
         portfolio_manager=portfolio_manager
     )
 
-    # This will block the main thread and wait for your input, 
-    # but the scanner_thread is now happily running in the background!
-    bot.start_chat()
+    # 7. Run chatbot with proper exception handling and cleanup
+    try:
+        bot.start_chat()
+    except KeyboardInterrupt:
+        print("\n[System]: Keyboard interrupt detected.")
+        shutdown_event.set()
+    except Exception as e:
+        print(f"[System]: ❌ Unexpected error: {e}")
+        shutdown_event.set()
+    finally:
+        # === GRACEFUL SHUTDOWN SEQUENCE ===
+        print("\n[System]: Initiating graceful shutdown sequence...")
+        
+        # 1. Signal scanner thread to stop
+        shutdown_event.set()
+        
+        # 2. Wait for scanner thread to finish (with timeout)
+        print("[System]: Waiting for background scanner to stop...")
+        scanner_thread.join(timeout=5)
+        if scanner_thread.is_alive():
+            print("[System]: ⚠️ Scanner thread did not stop within timeout.")
+        
+        # 3. Disconnect from broker
+        if broker.connected:
+            print("[System]: Disconnecting from MetaTrader 5...")
+            try:
+                broker.disconnect()
+                print("[System]: ✅ Broker disconnected successfully.")
+            except Exception as e:
+                print(f"[System]: ⚠️ Error disconnecting broker: {e}")
+        
+        # 4. Final goodbye message
+        print("[System]: 👋 Trading bot shutdown complete. Goodbye!\n")
+        sys.exit(0)

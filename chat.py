@@ -859,10 +859,25 @@ class Chatbot:
         config.update({
             "trading_symbols": self.trading_symbols,
             "target_profit": self.target_profit,
+            "stop_loss": self.stop_loss,
             "risk_percentage": self.risk_percentage,
-            "max_daily_loss": self.max_daily_loss
+            "max_daily_loss": self.max_daily_loss,
+            "preferred_timeframes": self.preferred_timeframes
         })
         self._write_json(self.PROFILE_FILE, config)
+
+    def _load_trading_config(self) -> bool:
+        """Load trading configuration from profile.json file."""
+        config = self._read_json(self.PROFILE_FILE)
+        if "trading_symbols" in config:
+            self.trading_symbols = config.get("trading_symbols", [])
+            self.target_profit = config.get("target_profit", 0.0)
+            self.stop_loss = config.get("stop_loss", 0.0)
+            self.risk_percentage = config.get("risk_percentage", 0.0)
+            self.max_daily_loss = config.get("max_daily_loss", 0.0)
+            self.preferred_timeframes = config.get("preferred_timeframes", [])
+            return True
+        return False
 
     # --- Trading Execution ---
 
@@ -911,12 +926,85 @@ class Chatbot:
     # --- System Methods ---
 
     def start_chat(self):
-        """Main interaction loop[cite: 6]."""
-        print("\n[Bot]: System ready. Type 'scan' to hunt for trades.")
-        while True:
-            inp = input("You: ").strip()
-            if inp.lower() == "quit": break
-            self._handle_intent(inp)
+        """Establish broker connection and start the main chat loop."""
+        # === BROKER CONNECTION PHASE ===
+        print("")
+        data = self._read_json(self.PROFILE_FILE)
+        login = data.get("login")
+        password = data.get("password")
+        server = data.get("server")
+        
+        if (login and password and server):
+            print(f"[Bot][SYSTEM]: Found saved profile. Attempting to reconnect to account {login}...")
+            if self.broker.connect(login=login, password=password, server=server):
+                print(f"[Bot]: ✅ Welcome back! Your account is connected.")
+            else:
+                print("[Bot]: ⚠️ Saved credentials failed. Please log in again.")
+                login = password = server = None
+        
+        while not self.broker.connected:
+            try:
+                # Validate login input
+                login_input = int(input("[Bot]: Enter your MT5 Account Number: ").strip())
+            except ValueError:
+                print("[Bot]: Account Number must be a valid integer. Try again.")
+                continue
+                
+            if len(str(login_input)) < 5:
+                print("[Bot]: Account number too short. Try again.")
+                continue
+            
+            # Get password (hidden input)
+            password_input = getpass.getpass("[Bot]: Enter your MT5 Password: ")
+            if not password_input:
+                print("[Bot]: Password cannot be empty. Try again.")
+                continue
+
+            # Get server
+            server_input = input("[Bot]: Enter Broker Server (e.g., MetaQuotes-Demo): ").strip()
+            if not server_input:
+                print("[Bot]: Server cannot be empty. Try again.")
+                continue
+            
+            # Attempt connection
+            if self.broker.connect(login=login_input, password=password_input, server=server_input):
+                # Save credentials
+                data.update({
+                    "login": login_input,
+                    "password": password_input,
+                    "server": server_input
+                })
+                self._write_json(self.PROFILE_FILE, data)
+                print(f"[Bot]: ✅ Successfully connected! Account #{self.broker.login} is ready.")
+            else:
+                print("[Bot]: ❌ Connection failed. Please verify your credentials and ensure MT5 is running.")
+        
+        # === TRADING CONFIG PHASE ===
+        if not self._load_trading_config():
+            self.setup_trading_config()
+        else:
+            print(f"\n[Bot]: Welcome back!")
+            print(f"   📊 Watchlist: {', '.join(self.trading_symbols)}")
+            print(f"   🎯 Risk: {self.risk_percentage}%")
+            update = input("\n[Bot]: Update trading settings? (y/n): ").strip().lower()
+            if update in ['y', 'yes']:
+                self.setup_trading_config()
+        
+        # === MAIN CHAT LOOP ===
+        print("\n[Bot]: System ready! Type 'scan' to hunt for trades. Type 'quit' to exit.")
+        try:
+            while True:
+                inp = input("You: ").strip()
+                if not inp:
+                    continue
+                if inp.lower() == "quit":
+                    print("\n[Bot]: Initiating graceful shutdown...")
+                    break
+                self._handle_intent(inp)
+        except KeyboardInterrupt:
+            print("\n[Bot]: Interrupt detected during chat.")
+        except Exception as e:
+            print(f"\n[Bot]: ❌ Error during chat: {e}")
 
     # (Place existing _process_data, _build_model, and data formatters here)[cite: 6]
     
