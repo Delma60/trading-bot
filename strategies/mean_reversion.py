@@ -70,9 +70,12 @@ class MeanReversionStrategy:
                 }
 
             # DEFAULT: Nothing interesting is happening
+            print(f"[Mean Reversion Strategy]: Price is within bands. Close: {close_price:.4f}, Lower BB: {lower_band:.4f}, Upper BB: {upper_band:.4f}, RSI: {rsi:.1f}")
             return {"action": "WAIT", "confidence": 0.0, "reason": "Price is ranging inside the bands."}
             
         except KeyError as e:
+            print(f"[Mean Reversion Strategy]: KeyError - Missing expected column: {e}")
             return {"action": "WAIT", "confidence": 0.0, "reason": f"Missing indicator data: {e}"}
         except Exception as e:
+            print(f"[Mean Reversion Strategy]: Exception - Unexpected error: {e}")
             return {"action": "WAIT", "confidence": 0.0, "reason": f"Analysis error: {e}"}

@@ -73,8 +73,8 @@ if __name__ == "__main__":
     # 4. Start the Background Scanner Thread
     # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
-        target=autonomous_scanner, 
-        args=(portfolio_manager, 15) # Scan every 15 minutes
+        target=autonomous_scanner,
+        args=(portfolio_manager, 1)
     )
     scanner_thread.daemon = False
     scanner_thread.start()
