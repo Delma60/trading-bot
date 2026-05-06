@@ -5,4 +5,5 @@ data/data.pickle
 data/profile.json
 data/stats.json
 data/portfolio_config.json
+data/symbols/
 **/__pycache__/**

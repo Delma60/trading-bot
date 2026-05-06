@@ -74,7 +74,7 @@ if __name__ == "__main__":
     # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
         target=autonomous_scanner,
-        args=(portfolio_manager, 1)
+        args=(portfolio_manager, 10)
     )
     scanner_thread.daemon = False
     scanner_thread.start()

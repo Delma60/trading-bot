@@ -718,6 +718,7 @@ import random
 import re
 import getpass
 import numpy as np
+import pandas as pd
 import nltk
 from nltk.stem.lancaster import LancasterStemmer
 import tensorflow as tf
@@ -742,6 +743,7 @@ class Chatbot:
     STATS_FILE = DATA_DIR / "stats.json"
     DATA_PICKLE = DATA_DIR / "data.pickle"
     MODEL_FILE = DATA_DIR / "chatbot_model.keras"
+    SYMBOLS_CACHE_DIR = DATA_DIR / "symbols"
 
     def __init__(self, intents_filepath: str, broker: Trader, strategy_manager: StrategyManager, portfolio_manager: PortfolioManager):
         self.stemmer = LancasterStemmer()
@@ -760,6 +762,8 @@ class Chatbot:
         self.risk_percentage = 0.0
         self.max_daily_loss = 0.0
         self.preferred_timeframes = []
+        self.symbol_cache = []
+        self.symbol_lookup = {}
 
         # Action mappings
         self.action_mappings = {
@@ -776,6 +780,7 @@ class Chatbot:
         self.data = None
 
         self._initialize_nlp()
+        self._load_local_symbols()
 
     # --- IO Helpers ---
     def _log_interaction(self, user_input: str, intent: str, status: str = "completed"):
@@ -808,6 +813,214 @@ class Chatbot:
                 if validation_func(val): return val
                 print(f"[Bot]: {error_msg}")
             except ValueError: print(f"[Bot]: Please enter a valid {cast_type.__name__}.")
+
+    def _symbol_file_path(self, symbol: str) -> Path:
+        return self.SYMBOLS_CACHE_DIR / f"{symbol.upper()}.json"
+
+    def _load_local_symbols(self) -> list:
+        symbols = []
+        if not self.SYMBOLS_CACHE_DIR.exists():
+            return []
+
+        for file in self.SYMBOLS_CACHE_DIR.glob("*.json"):
+            if file.is_file():
+                try:
+                    data = self._read_json(file, {})
+                    if isinstance(data, dict) and data.get("symbol"):
+                        symbols.append(data)
+                except Exception:
+                    continue
+
+        self.symbol_cache = symbols
+        self.symbol_lookup = {item["symbol"].upper(): item for item in symbols}
+        return symbols
+
+    def _save_local_symbol(self, symbol_data: dict):
+        self.SYMBOLS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        symbol_file = self._symbol_file_path(symbol_data.get("symbol", "UNKNOWN"))
+        self._write_json(symbol_file, symbol_data)
+        self.symbol_cache = [item for item in self.symbol_cache if item.get("symbol", "").upper() != symbol_data.get("symbol", "").upper()]
+        self.symbol_cache.append(symbol_data)
+        self.symbol_lookup[symbol_data.get("symbol", "").upper()] = symbol_data
+
+    def _refresh_symbol_cache(self) -> list:
+        symbols = self.broker.getSymbols()
+        if not symbols:
+            return self._load_local_symbols()
+
+        symbol_data = []
+        for symbol in symbols:
+            symbol_name = getattr(symbol, 'name', None) or getattr(symbol, 'symbol', None)
+            if not symbol_name:
+                continue
+            
+            symbol_data.append(symbol_record)
+
+        self.symbol_cache = symbol_data
+        self.symbol_lookup = {item['symbol'].upper(): item for item in symbol_data}
+        return symbol_data
+
+    def _get_symbol_cache(self) -> list:
+        if self.symbol_cache:
+            return self.symbol_cache
+        cached = self._load_local_symbols()
+        if cached:
+            return cached
+        return self._refresh_symbol_cache()
+
+    def _infer_asset_class(self, symbol: str) -> str:
+        symbol = symbol.upper()
+        if any(symbol.startswith(prefix) for prefix in ["XAU", "XAG", "XPT", "XPD"]):
+            return "Metals"
+        if any(token in symbol for token in ["BTC", "ETH", "LTC", "XBT", "USDT", "DOGE"]):
+            return "Crypto"
+        if any(token in symbol for token in ["USD", "EUR", "JPY", "GBP", "AUD", "CAD", "CHF", "NZD"]):
+            return "Forex"
+        return "Forex"
+
+    def _find_symbols_in_text(self, inp: str) -> list:
+        candidates = re.findall(r"\b[A-Z]{6,7}\b", inp.upper())
+        valid_symbols = []
+        cache = self._get_symbol_cache()
+        available = {item['symbol'].upper() for item in cache if isinstance(item, dict) and item.get('symbol')}
+
+        for symbol in candidates:
+            if symbol in available or len(symbol) == 6:
+                valid_symbols.append(symbol)
+        return list(dict.fromkeys(valid_symbols))
+
+    def _add_symbols_to_portfolio(self, symbols: list) -> list:
+        if not symbols:
+            return []
+
+        added = []
+        for symbol in symbols:
+            symbol = symbol.upper()
+            if symbol not in self.trading_symbols:
+                self.trading_symbols.append(symbol)
+                added.append(symbol)
+
+            if hasattr(self.portfolio_manager, 'add_symbol'):
+                self.portfolio_manager.add_symbol(symbol, asset_class=self._infer_asset_class(symbol))
+
+        if added:
+            self._save_trading_config()
+        return added
+
+    def _get_portfolio_symbols(self) -> list:
+        if self.trading_symbols:
+            return self.trading_symbols
+        self._load_trading_config()
+        return self.trading_symbols
+
+    def _parse_timeframe_from_text(self, text: str) -> str:
+        match = re.search(r'\b(M1|M5|M15|M30|H1|H4|D1)\b', text.upper())
+        return match.group(1) if match else "H1"
+
+    def _normalize_ohlcv_dataframe(self, df):
+        if df is None or df.empty:
+            return df
+
+        if 'time' in df.columns:
+            try:
+                df = df.copy()
+                df['datetime'] = pd.to_datetime(df['time'], unit='s')
+                df = df.drop(columns=['time'], errors='ignore')
+            except Exception:
+                pass
+
+        volume_col = None
+        for candidate in ['volume', 'tick_volume', 'real_volume']:
+            if candidate in df.columns:
+                volume_col = candidate
+                break
+
+        keep_cols = ['datetime', 'open', 'high', 'low', 'close']
+        if volume_col:
+            keep_cols.append(volume_col)
+            df = df[keep_cols]
+            df = df.rename(columns={volume_col: 'volume'})
+        else:
+            df = df[[col for col in keep_cols if col in df.columns]]
+
+        return df
+
+    def _download_portfolio_ohlcv(self, timeframe: str = "H1", count: int = 200):
+        symbols = self._get_portfolio_symbols()
+        if not symbols:
+            print("[Bot]: No portfolio symbols found in profile.json. Add symbols to your portfolio first.")
+            return
+
+        if not self.broker.connected:
+            print("[Bot]: I need MT5 connected to download OHLCV data.")
+            return
+
+        output_dir = self.DATA_DIR / "ohlcv"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for symbol in symbols:
+            print(f"[Bot]: Downloading OHLCV for {symbol} ({timeframe})...")
+            df = self.broker.get_historical_rates(symbol, timeframe=timeframe, count=count)
+            if df is None or df.empty:
+                print(f"[Bot]: Failed to fetch OHLCV for {symbol}.")
+                continue
+
+            df = self._normalize_ohlcv_dataframe(df)
+            if df is None or df.empty:
+                print(f"[Bot]: No valid OHLCV data for {symbol}.")
+                continue
+
+            csv_path = output_dir / f"{symbol}.csv"
+            try:
+                df.to_csv(csv_path, index=False)
+                print(f"[Bot]: Saved {symbol} OHLCV to {csv_path}")
+            except Exception as e:
+                print(f"[Bot]: Failed to write CSV for {symbol}: {e}")
+
+        print("[Bot]: Portfolio OHLCV download complete.")
+
+    def _handle_symbol_command(self, inp: str) -> bool:
+        clean_inp = inp.lower().strip()
+        if (
+            any(keyword in clean_inp for keyword in ["generate ohlc", "generate ohlcv", "generate ohlvc", "download ohlc", "download ohlcv", "export ohlc", "export ohlcv", "download csv", "export csv", "ohlc csv", "ohlcv csv"]) or
+            ("generate" in clean_inp and "portfolio" in clean_inp) or
+            ("download" in clean_inp and "portfolio" in clean_inp)
+        ):
+            timeframe = self._parse_timeframe_from_text(inp)
+            self._download_portfolio_ohlcv(timeframe=timeframe)
+            return True
+
+        if any(keyword in clean_inp for keyword in ["available symbols", "show symbols", "list symbols", "my symbols", "what symbols", "portfolio symbols"]):
+            self._show_available_symbols()
+            return True
+
+        if any(keyword in clean_inp for keyword in ["add to portfolio", "add to watchlist", "add symbol", "add symbols", "track", "watchlist"]) or (
+            "add" in clean_inp and "portfolio" in clean_inp
+        ):
+            symbols = self._find_symbols_in_text(inp)
+            if not symbols:
+                print("[Bot]: I couldn't determine which symbol to add. Try 'Add AUDCAD to portfolio'.")
+                return True
+
+            added = self._add_symbols_to_portfolio(symbols)
+            if added:
+                print(f"[Bot]: ✅ Added {', '.join(added)} to your watchlist.")
+            else:
+                print(f"[Bot]: Those symbols are already in your list: {', '.join(symbols)}")
+            return True
+
+        return False
+
+    def _show_available_symbols(self):
+        symbols = self._get_portfolio_symbols()
+        if not symbols:
+            print("[Bot]: No portfolio symbols are configured. Add some symbols to profile.json first.")
+            return
+
+        print(f"[Bot]: Your portfolio symbols from profile.json:")
+        for idx, symbol in enumerate(symbols, start=1):
+            print(f"  {idx}. {symbol}")
+        print("[Bot]: Use 'Download OHLCV' to save historical data for these portfolio symbols.")
 
     # --- Conversational Parser ---
 
@@ -866,6 +1079,16 @@ class Chatbot:
         })
         self._write_json(self.PROFILE_FILE, config)
 
+    def _format_symbols_data(self):
+        if self.trading_symbols:
+            return {"symbols": ", ".join(self.trading_symbols)}
+
+        cache = self._get_symbol_cache()
+        if cache:
+            return {"symbols": ", ".join([item["symbol"] for item in cache[:20]])}
+
+        return {"symbols": "No symbols available."}
+
     def _load_trading_config(self) -> bool:
         """Load trading configuration from profile.json file."""
         config = self._read_json(self.PROFILE_FILE)
@@ -902,19 +1125,23 @@ class Chatbot:
     def _handle_intent(self, inp: str) -> bool:
         """Processes user input and routes to managers[cite: 6]."""
         clean_inp = inp.lower().strip()
-        if any(word in clean_inp for word in ["start", "trade", "scan"]):
+        if self._handle_symbol_command(inp):
+            return True
+
+        if any(word in clean_inp for word in ["start", "scan"]):
             self._execute_action("bulk_scan", inp)
             return True
 
         bag = self._bag_of_words(inp)
         results = self.model.predict(bag, verbose=0)[0]
         tag = self.labels[np.argmax(results)]
+        confidence = results[np.argmax(results)]
         
-        if results[np.argmax(results)] > 0.7:
+        if confidence > 0.7:
             self._execute_action(tag, inp)
             return True
         
-        print("[Bot]: I'm not sure. Try asking to 'scan' or 'check balance'.")
+        print("[Bot]: I'm not sure. Try asking to 'scan', 'show my symbols', or 'add AUDCAD to portfolio'.")
         return False
 
     def _get_intent_response(self, tag: str, live_data=None):

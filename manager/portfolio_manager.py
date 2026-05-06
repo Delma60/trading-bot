@@ -72,6 +72,40 @@ class PortfolioManager:
         model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
         return model
 
+    def _save_config(self):
+        try:
+            with self.CONFIG_PATH.open("w") as f:
+                json.dump(self.config, f, indent=4)
+        except Exception as e:
+            print(f"[Portfolio Manager]: Failed to save config: {e}")
+
+    def add_symbol(self, symbol: str, asset_class: str = None) -> bool:
+        symbol = symbol.upper()
+        if not asset_class:
+            asset_class = self._infer_asset_class(symbol)
+
+        if asset_class not in self.asset_classes:
+            self.asset_classes[asset_class] = []
+
+        if symbol in self.asset_classes[asset_class]:
+            return False
+
+        self.asset_classes[asset_class].append(symbol)
+        self.master_watchlist.append(symbol)
+        self.config["asset_classes"] = self.asset_classes
+        self._save_config()
+        return True
+
+    def _infer_asset_class(self, symbol: str) -> str:
+        symbol = symbol.upper()
+        if any(symbol.startswith(prefix) for prefix in ["XAU", "XAG", "XPT", "XPD"]):
+            return "Metals"
+        if any(token in symbol for token in ["BTC", "ETH", "LTC", "XBT", "USDT", "DOGE"]):
+            return "Crypto"
+        if any(token in symbol for token in ["USD", "EUR", "JPY", "GBP", "AUD", "CAD", "CHF", "NZD"]):
+            return "Forex"
+        return "Forex"
+
     def _get_current_market_state(self, symbol: str) -> np.ndarray:
         """Gathers and normalizes market regime features."""
         try:
