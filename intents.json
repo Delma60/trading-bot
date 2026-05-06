@@ -1,0 +1,540 @@
+{
+    "intents": [
+        {
+            "tag": "gratitude",
+            "patterns": [
+                "Thanks for the help!",
+                "I appreciate it!",
+                "Great job, bot!",
+                "You're doing awesome!",
+                "Thank you so much!",
+                "That's really helpful!",
+                "I'm grateful for your assistance!",
+                "Thanks a lot, bot!",
+                "I couldn't do this without you!",
+                "You're amazing, thank you!",
+                "Thanks for being there for me!",
+                "I really appreciate your support!",
+                "wow, you're great at this!",
+                "nice work, bot!",
+                "awesome, thanks for the help!",
+                "great, I appreciate it!",
+                "thanks, you're doing a fantastic job!",
+                "thank you, I couldn't ask for a better assistant!",
+                "thanks, you're a lifesaver!",
+                "thank you, I really value your help!"
+            ],
+            "responses": [
+                "You're welcome! Is there anything else I can help you with?",
+                "Glad I could assist! How else can I support your trading today?",
+                "Happy to help! Let me know if you need anything else.",
+                "My pleasure! Keep up the good work!",
+                "You're very welcome! Anything else you need?",
+                "I'm here to help! Just let me know if you have more questions.",
+                "No problem at all! I'm glad I could assist you.",
+                "You're welcome! I'm always here to support your trading journey.",
+                "Thank you for your kind words! Let me know if there's anything else I can do for you.",
+                "I'm happy to help! Don't hesitate to ask if you need more assistance.",
+                "You're welcome! I'm here to make your trading experience better.",
+                "Thanks for the appreciation! Let me know if you have any more questions or need further assistance.",
+                "You're very welcome! I'm here to help you succeed in your trading.",
+                "I'm glad I could assist! If you have any more questions or need help with anything else, just let me know.",
+                "Thank you for your kind words! I'm here to support you in any way I can with your trading.",
+                "You're welcome! I'm always here to help you with your trading needs.",
+                "I'm happy to assist! If you have any more questions or need further help, just ask.",
+                "Thank you for your appreciation! I'm here to make your trading experience as smooth as possible.",
+                "You're very welcome! If you need any more help or have questions, feel free to ask.",
+                "I'm glad I could assist! Let me know if there's anything else I can do to support your trading journey!"
+            ]
+        },
+        {
+            "tag": "greeting",
+            "patterns": [
+                "hello",
+                "hi",
+                "hey",
+                "good morning",
+                "good afternoon",
+                "good evening",
+                "hi there",
+                "hey there",
+                "hello there",
+                "greetings",
+                "what's up",
+                "how are you",
+                "ready to trade?",
+                "ready to check my account?",
+                "ready to place some trades?",
+                "ready to analyze the markets?"
+            ],
+            "responses": [
+                "Hello! How can I help you with your trading today?",
+                "Hi there! Ready to check your account or place some trades?",
+                "Hey! What would you like to do with your trading bot?",
+                "Good day! How can I assist you with your trading activities?",
+                "Hello! I'm here to help with your MT5 trading needs.",
+                "Hi! Let's get your trading started or check your positions.",
+                "Greetings! What trading information do you need?",
+                "Hey there! How can I help you manage your trades today?",
+                "Hello! Ready to analyze the markets or execute some orders?",
+                "Hi! What would you like to know about your trading account?"
+            ]
+        },
+        {
+            "tag": "trade_execution",
+            "patterns": [
+                "Place a trade for me",
+                "Execute a buy order",
+                "Sell my position",
+                "Open a new trade",
+                "Close my current trade",
+                "Go long on EURUSD",
+                "Go short on Gold",
+                "Buy 0.1 lots of BTCUSD",
+                "Sell 0.5 lots of USDJPY",
+                "Execute a market order"
+            ],
+            "responses": [
+                "Initiating a trade. Please wait for confirmation...",
+                "Sending your order to the broker now.",
+                "Trade request is being placed in the market.",
+                "Position request sent successfully."
+            ]
+        },
+        {
+            "tag": "account_summary",
+            "patterns": [
+                "What is my balance?",
+                "Show my account info",
+                "How much equity do I have?",
+                "Check free margin",
+                "Account status",
+                "Display account summary",
+                "What is my used margin?",
+                "How many lots am I trading?",
+                "Show balance and equity",
+                "What is my margin level?"
+            ],
+            "responses": [
+                "Your balance is {balance} with equity at {equity}. Free margin available: {free_margin}.",
+                "Account status: Balance {balance} | Equity {equity} | Margin Level {margin_level}%",
+                "Current metrics - Balance: {balance}, Equity: {equity}, Used Margin: {used_margin}",
+                "Here's your account snapshot: Balance {balance}, Equity {equity}, Free Margin {free_margin}",
+                "Your MT5 account shows: {balance} balance with {equity} equity available.",
+                "Account overview - Balance: {balance} | Equity: {equity} | Margin: {margin_level}%",
+                "I'm seeing your balance at {balance} and equity at {equity}.",
+                "Your account: {balance} balance, {equity} equity, {free_margin} free margin.",
+                "Balance {balance}, Equity {equity}, Margin Level {margin_level}% - here's your status.",
+                "Your trading account: {balance} (balance) and {equity} (equity)."
+            ]
+        },
+        {
+            "tag": "get_price",
+            "patterns": [
+                "What is the price of EURUSD?",
+                "Check BTCUSD",
+                "Give me the quote for Gold",
+                "How much is GBPUSD right now?",
+                "Price of XAUUSD",
+                "Show the current rate for USDJPY",
+                "What is the bid/ask on AUDUSD?",
+                "Latest price for silver",
+                "Get live quote for NGAS",
+                "Quote the currency pair USDCHF"
+            ],
+            "responses": [
+                "Pulling the live Bid/Ask prices for you now...",
+                "Let me check the terminal for the latest quote.",
+                "Fetching the current market price from MT5.",
+                "I have requested the latest rate from the broker.",
+                "Checking the real-time quote for that symbol.",
+                "The current price is being retrieved now.",
+                "Waiting on the latest market update for that instrument.",
+                "Let me confirm the live value from the price feed.",
+                "Obtaining the latest ask and bid for your requested pair.",
+                "I’m retrieving the current quote from the trading terminal."
+            ]
+        },
+        {
+            "tag": "open_buy",
+            "patterns": [
+                "Buy 0.1 lots of EURUSD",
+                "Go long on GBPUSD",
+                "Open a buy trade for XAUUSD",
+                "Execute a buy order",
+                "Buy BTC",
+                "Place a long position",
+                "Enter a buy on USDJPY",
+                "Open long on silver",
+                "Initiate buy order now",
+                "Start a buy trade"
+            ],
+            "responses": [
+                "Initiating a BUY order. Please wait for confirmation...",
+                "Sending your BUY request to the broker now.",
+                "Buy order is being placed in the market.",
+                "Long position request sent successfully.",
+                "The BUY trade is now being executed.",
+                "Opening the long side for your selected symbol.",
+                "Executing the buy entry at current market price.",
+                "Your long order is in progress.",
+                "Confirming the buy order with the broker.",
+                "Proceeding with the buy execution now."
+            ]
+        },
+        {
+            "tag": "open_sell",
+            "patterns": [
+                "Sell 0.5 lots of USDJPY",
+                "Go short on Gold",
+                "Open a sell trade for EURUSD",
+                "Execute a sell order",
+                "Sell BTC",
+                "Place a short position",
+                "Enter a sell on GBPUSD",
+                "Open short on silver",
+                "Initiate sell order now",
+                "Start a sell trade"
+            ],
+            "responses": [
+                "Initiating a SELL order. Please wait for confirmation...",
+                "Sending your SELL request to the broker now.",
+                "Sell order is being placed in the market.",
+                "Short position request sent successfully.",
+                "The SELL trade is now being executed.",
+                "Opening the short side for your selected symbol.",
+                "Executing the sell entry at current market price.",
+                "Your short order is in progress.",
+                "Confirming the sell order with the broker.",
+                "Proceeding with the sell execution now."
+            ]
+        },
+        {
+            "tag": "close_all",
+            "patterns": [
+                "Close all trades",
+                "Shut down all positions",
+                "Liquidate my account",
+                "Close everything",
+                "Exit all markets",
+                "Close every open position",
+                "End all active orders",
+                "Flatten the account",
+                "Close all orders now",
+                "Exit all trades immediately"
+            ],
+            "responses": [
+                "WARNING: Attempting to close all open positions immediately...",
+                "Executing mass closure of all active trades.",
+                "Sending close commands for every open order.",
+                "I’m closing every position in your account now.",
+                "All active trades are being terminated.",
+                "Performing a full account flatten operation.",
+                "Canceling exposure and closing all market positions.",
+                "Your account is being reset to flat.",
+                "Closing all trades and freeing margin now.",
+                "Initiating total position exit at the next available price."
+            ]
+        },
+        {
+            "tag": "active_positions",
+            "patterns": [
+                "Show my open trades",
+                "What positions are running?",
+                "List active orders",
+                "Am I in any trades right now?",
+                "Current positions",
+                "Open positions report",
+                "Show active trades",
+                "What orders are open?",
+                "List my open positions",
+                "Show me current exposure"
+            ],
+            "responses": [
+                "You have {position_count} open position(s). {positions}",
+                "Active trades: {positions} | Total exposure: {total_volume} units",
+                "Here are your open positions: {positions}",
+                "Current exposure - {position_count} trades running: {positions}",
+                "You're currently in {position_count} trade(s): {positions}",
+                "Open position report: {positions} | Combined volume: {total_volume}",
+                "Your active trades are: {positions} | Exposure: {total_volume} units",
+                "Current market positions: {positions}",
+                "You have {position_count} position(s) running: {positions}",
+                "Active positions: {positions}"
+            ]
+        },
+        {
+            "tag": "trade_history",
+            "patterns": [
+                "How much did I make today?",
+                "Show my daily profit",
+                "What is my PnL for this week?",
+                "Trade history",
+                "Did my last trade hit take profit?",
+                "Show past closed trades",
+                "What was yesterday's result?",
+                "Review my trading history",
+                "How did my account perform?",
+                "Show closed orders"
+            ],
+            "responses": [
+                "Calculating your Profit and Loss (PnL)...",
+                "Fetching your closed trade history from the server.",
+                "Reviewing your historical trade results now.",
+                "Pulling yesterday’s and today’s performance numbers.",
+                "Let me summarize your recent trading history.",
+                "I’m loading past orders and outcomes for analysis.",
+                "Your closed trades are being retrieved for review.",
+                "Computing performance metrics from recent history.",
+                "Displaying your historical trading results shortly.",
+                "Examining closed orders and profit/loss records."
+            ]
+        },
+        {
+            "tag": "ai_analysis",
+            "patterns": [
+                "What does the AI say about EURUSD?",
+                "Analyze Gold for me",
+                "Should I buy or sell BTC?",
+                "Run a prediction on GBPUSD",
+                "Give me a market forecast",
+                "What is the AI signal for AUDUSD?",
+                "What is the trend outlook?",
+                "Do I have a trading opportunity?",
+                "Evaluate the market conditions",
+                "Provide an AI trade recommendation"
+            ],
+            "responses": [
+                "Running the latest market data through the neural network...",
+                "Calculating AI predictions based on current indicators. One moment.",
+                "Analyzing trend strength and signal confidence now.",
+                "Getting the latest AI forecast for the selected instrument.",
+                "The model is reviewing price action and momentum.",
+                "Let me compute the AI trading bias for that symbol.",
+                "I’m checking whether the conditions favor buy or sell.",
+                "The prediction engine is synthesizing market data.",
+                "Fetching the AI-driven entry and exit guidance.",
+                "One moment while I determine the signal direction."
+            ]
+        },
+        {
+            "tag": "bot_control_pause",
+            "patterns": [
+                "Stop trading",
+                "Pause the bot",
+                "Halt all automated trades",
+                "Turn off AI trading",
+                "Sleep mode",
+                "Suspend trading",
+                "Disable auto trading",
+                "Stop the robot",
+                "Turn trading off",
+                "Pause strategy execution"
+            ],
+            "responses": [
+                "Pausing automated trading. I will not open any new positions until you tell me to resume.",
+                "AI execution is now on standby.",
+                "Automated trading has been paused successfully.",
+                "Your bot is paused and monitoring is suspended.",
+                "No new orders will be placed while paused.",
+                "Trading automation is disabled until resumed.",
+                "I’ve halted the bot and will await your next command.",
+                "The system is in pause mode and not executing trades.",
+                "Stopping trade execution and keeping current positions.",
+                "The bot is on hold; you can resume at any time."
+            ]
+        },
+        {
+            "tag": "bot_control_resume",
+            "patterns": [
+                "Start trading again",
+                "Resume the bot",
+                "Turn on AI trading",
+                "Activate auto trading",
+                "Wake up",
+                "Restart trading",
+                "Enable the bot",
+                "Begin automated trading",
+                "Reactivate strategy",
+                "Continue trading"
+            ],
+            "responses": [
+                "Automated trading resumed. The AI is now scanning the markets.",
+                "System activated. I will execute trades based on the strategy.",
+                "Your bot is back online and monitoring opportunities.",
+                "Resuming automation and looking for trade signals.",
+                "Trading is re-enabled; I’m ready to place new orders.",
+                "The AI engine is now active again.",
+                "I’ve restarted the bot and resumed market scanning.",
+                "The trading system is live and processing the strategy.",
+                "You are back in automated trading mode.",
+                "Resumed execution; the bot will trade according to your settings."
+            ]
+        },
+        {
+            "tag": "risk_management",
+            "patterns": [
+                "What is my risk exposure?",
+                "Check account risk",
+                "Show my drawdown",
+                "What is my max risk?",
+                "Analyze my risk level",
+                "How much am I risking?",
+                "Risk summary",
+                "Show leverage and risk",
+                "Is my account overexposed?",
+                "Evaluate risk management"
+            ],
+            "responses": [
+                "Reviewing your current risk exposure and leverage.",
+                "Fetching your account risk metrics now.",
+                "I’m calculating drawdown, exposure, and risk ratios.",
+                "Your risk level is being analyzed against open positions.",
+                "Checking whether your account is within safe risk limits.",
+                "Obtaining margin usage and risk details from MT5.",
+                "Analyzing current exposure and potential risk factors.",
+                "Your risk report is being generated.",
+                "One moment while I verify your account safety levels.",
+                "I’m validating your current risk before any new trade."
+            ]
+        },
+        {
+            "tag": "news_update",
+            "patterns": [
+                "What market news do you have?",
+                "Show trading headlines",
+                "Any economic events today?",
+                "News affecting EURUSD",
+                "Get latest market news",
+                "Is there an upcoming announcement?",
+                "What news should I watch?",
+                "Show economic calendar",
+                "Market news summary",
+                "Are there any news risks?"
+            ],
+            "responses": [
+                "Checking the economic calendar and market news now.",
+                "Fetching the latest headlines relevant to your trades.",
+                "I’m reviewing current news that may impact the market.",
+                "There are no major announcements at the moment.",
+                "I’ve found recent events that could move the pairs.",
+                "Let me summarize the key economic releases for you.",
+                "News risk is being assessed for your current positions.",
+                "I’m pulling the latest updates from the market feed.",
+                "Reviewing scheduled events that may affect prices.",
+                "Here are the top market news items for your instruments."
+            ]
+        },
+        {
+            "tag": "strategy_info",
+            "patterns": [
+                "What strategy are we using?",
+                "Describe the trading plan",
+                "How does the bot trade?",
+                "What is the current setup?",
+                "Explain the strategy",
+                "What are the entry rules?",
+                "How do you decide trades?",
+                "Show strategy summary",
+                "What indicators are active?",
+                "Give me the strategy details"
+            ],
+            "responses": [
+                "Reviewing the automated strategy and its current settings.",
+                "The bot uses defined entry and exit rules for market timing.",
+                "I’m summarizing the strategy logic for you now.",
+                "This system evaluates trend, momentum, and risk parameters.",
+                "Let me describe the active trading method step by step.",
+                "The strategy is built around signal confirmation and money management.",
+                "I’m checking which rules are active in the current session.",
+                "The bot follows your configured strategy settings and risk controls.",
+                "I’ll explain the conditions used for entering and exiting trades.",
+                "Here is the current strategy profile and its signal rules."
+            ]
+        },
+        {
+            "tag": "trading_symbols",
+            "patterns": [
+                "What symbols do I trade?",
+                "Show my trading symbols",
+                "What pairs am I configured for?",
+                "List my symbols",
+                "What instruments do I trade?",
+                "Show configured symbols",
+                "What currencies do I trade?",
+                "My trading pairs",
+                "What assets am I set up for?",
+                "Display trading symbols"
+            ],
+            "responses": [
+                "Your configured symbols are: {symbols}",
+                "Trading pairs set to: {symbols}",
+                "These are your active instruments: {symbols}",
+                "You're set up to trade: {symbols}",
+                "Your symbol configuration includes: {symbols}",
+                "Active trading pairs: {symbols}",
+                "Your trading symbols: {symbols}",
+                "Currently configured for: {symbols}",
+                "Your selected instruments: {symbols}",
+                "Trading setup includes these symbols: {symbols}"
+            ]
+        },
+        {
+            "tag": "trading_settings",
+            "patterns": [
+                "Show my trading settings",
+                "What are my trading parameters?",
+                "Display configuration",
+                "Show my risk settings",
+                "What is my trading setup?",
+                "Show target and stop loss",
+                "Display trading config",
+                "What are my trade settings?",
+                "Show my trading preferences",
+                "What is my risk management setup?",
+                "status report",
+                "trading status",
+                "account summary"
+            ],
+            "responses": [
+                "Trading Config - Symbols: {symbols} | Target: {target_profit} | Stop Loss: {stop_loss} | Risk: {risk_percentage}% | Max Daily Loss: {max_daily_loss} | Timeframes: {timeframes}",
+                "Your setup: Symbols {symbols} | TP: {target_profit} | SL: {stop_loss} | Risk: {risk_percentage}%",
+                "Configuration - Trading pairs: {symbols}, Target profit: {target_profit}, Stop loss: {stop_loss}, Risk: {risk_percentage}%, Daily limit: {max_daily_loss}",
+                "Symbols: {symbols} | Target: {target_profit} | Stop: {stop_loss} | Risk: {risk_percentage}% | Timeframes: {timeframes}",
+                "Risk Management - Symbols: {symbols}, Risk per trade: {risk_percentage}%, Max loss today: {max_daily_loss}, TP: {target_profit}, SL: {stop_loss}",
+                "Trading parameters: {symbols} | TP {target_profit} | SL {stop_loss} | {risk_percentage}% risk | Timeframes: {timeframes}",
+                "Your preferences - Symbols: {symbols}, Target: {target_profit}, Stop: {stop_loss}, Risk: {risk_percentage}%, Max daily: {max_daily_loss}",
+                "Setup summary - {symbols} | TP: {target_profit} | SL: {stop_loss} | Risk: {risk_percentage}% | Max daily loss: {max_daily_loss}",
+                "Configuration: Symbols {symbols} | Target profit {target_profit} | Stop loss {stop_loss} | Risk {risk_percentage}%",
+                "Trade settings - Pairs: {symbols}, Target: {target_profit}, Stop: {stop_loss}, Risk: {risk_percentage}%, Daily limit: {max_daily_loss}, Timeframes: {timeframes}"
+            ]
+        },
+        {
+            "tag": "update_config",
+            "patterns": [
+                "Change my settings",
+                "Update trading configuration",
+                "Modify my trading setup",
+                "Change risk settings",
+                "Update my parameters",
+                "Modify trading config",
+                "Change my targets",
+                "Update stop loss",
+                "Modify risk management",
+                "Change trading preferences"
+            ],
+            "responses": [
+                "I'll help you update your trading configuration.",
+                "Let's modify your trading settings now.",
+                "I'll guide you through updating your parameters.",
+                "Time to update your trading configuration.",
+                "I'll walk you through changing your settings.",
+                "Let's update your trading preferences.",
+                "I'll help you modify your risk management.",
+                "Ready to update your trading parameters.",
+                "Let's change your trading configuration.",
+                "I'll assist you in updating your settings."
+            ]
+        }
+    ]
+}

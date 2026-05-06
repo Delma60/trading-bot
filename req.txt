@@ -1,0 +1,10 @@
+MetaTrader5
+pandas
+scikit-learn
+python-telegram-bot
+numpy
+pandas
+nltk
+tensorflow
+requests
+psutil
