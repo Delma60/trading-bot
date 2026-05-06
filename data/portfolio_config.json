@@ -1,9 +1,6 @@
 {
     "asset_classes": {
-        "Forex": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"],
-        "Metals": ["XAUUSD", "XAGUSD"],
-        "Indices": ["US30", "NAS100"],
-        "Crypto": ["BTCUSD", "ETHUSD"]
+        "Forex": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
     },
     "allocation_limits": {
         "Forex": 2,

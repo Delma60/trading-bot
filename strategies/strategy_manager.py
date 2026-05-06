@@ -3,6 +3,7 @@ from strategies.arbitrage import ArbitrageStrategy
 from strategies.momentum import MomentumStrategy
 from strategies.breakout import BreakoutStrategy
 from strategies.scalping import ScalpingStrategy
+from strategies.trend_following import TrendFollowingStrategy
 from trader import Trader
 from .mean_reversion import MeanReversionStrategy
 
@@ -46,7 +47,7 @@ class StrategyManager:
             "News_Trading": DummyStrategy(),
             "Sentiment_Analysis": DummyStrategy(),
             "Arbitrage": ArbitrageStrategy(),
-            "Trend_Following": DummyStrategy()
+            "Trend_Following": TrendFollowingStrategy()
         }
     
     def get_strategy_description(self, strategy_name: str) -> str:
@@ -64,7 +65,7 @@ class StrategyManager:
         """Fetches the latest data and asks the chosen strategy what to do."""
         
         # 1. Ensure the requested strategy actually exists
-        if strategy not in self.strategies:
+        if strategy not in self.engines.keys():
             print(f"[Strategy Manager]: ⚠️ Unknown strategy '{strategy}'. Defaulting to Mean_Reversion.")
             strategy = "Mean_Reversion"
             

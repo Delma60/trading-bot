@@ -144,7 +144,7 @@ class PortfolioManager:
             # Get the state to feed the AI (and to log it if we take a trade!)
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
-            
+            print(f"[Portfolio Manager]: {symbol} assigned to strategy '{strategy_name}' by AI.")
             signal = self.strategy_manager.check_signals(symbol, strategy=strategy_name)
             
             if signal and signal.get('action') != 'WAIT':

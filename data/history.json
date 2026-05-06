@@ -52,5 +52,23 @@
         "input": "scan",
         "intent": "bulk_scan",
         "status": "completed"
+    },
+    {
+        "timestamp": "2026-05-06T15:13:23.642056",
+        "input": "scan",
+        "intent": "bulk_scan",
+        "status": "completed"
+    },
+    {
+        "timestamp": "2026-05-06T15:16:14.580923",
+        "input": "scan",
+        "intent": "bulk_scan",
+        "status": "completed"
+    },
+    {
+        "timestamp": "2026-05-06T15:18:51.805645",
+        "input": "scan",
+        "intent": "bulk_scan",
+        "status": "completed"
     }
 ]
