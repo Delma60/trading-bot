@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import Callable, Any, Optional
 
 from strategies.strategy_manager import StrategyManager
+from manager.portfolio_manager import PortfolioManager
+
 from trader import Trader
 
 
@@ -28,13 +30,19 @@ class Chatbot:
     DATA_PICKLE = Path("data/data.pickle")
     MODEL_FILE = Path("data/chatbot_model.keras")
 
-    def __init__(self, intents_filepath: str, broker: Trader, strategy_manager: StrategyManager):
+    def __init__(self, 
+                intents_filepath: str, 
+                broker: Trader, 
+                strategy_manager: StrategyManager,
+                portfolio_manager: PortfolioManager
+            ):
         self.stemmer = LancasterStemmer()
         self.intents_filepath = Path(intents_filepath)
         self.broker = broker  
 
         self.user_anchor = None
         self.strategy_manager = strategy_manager
+        self.portfolio_manager = portfolio_manager
         self.last_intent = None  
         self.active_suggestion = None  
 
@@ -305,14 +313,21 @@ class Chatbot:
 
     def _execute_bulk_scan(self) -> str:
         print("[Bot]: Scanning all symbols in your portfolio... 🔎")
-        results = []
-        for symbol in self.trading_symbols:
-            signal = self.strategy_manager.check_signals(symbol)
-            if signal and signal.get('action') != 'WAIT':
-                results.append(f"✅ {symbol}: {signal['action']} signal detected!")
-
-        return "Scan complete:\n" + "\n".join(results) if results else "I've scanned all symbols and found no high-probability entries right now. I'll keep monitoring."
-
+        
+        # The Portfolio Manager handles everything now
+        results = self.portfolio_manager.evaluate_portfolio_opportunities(
+            symbols=self.trading_symbols,
+            risk_pct=self.risk_percentage,
+            stop_loss=20.0, # Or self.stop_loss
+            max_daily_loss=self.max_daily_loss
+        )
+        
+        if not results or all("Portfolio Halt" in r for r in results) and len(results) == 1:
+            return results[0] if results else "No high-probability entries right now."
+            
+        health_report = self.portfolio_manager.get_portfolio_health()
+        return "Scan complete:\n" + "\n".join(results) + f"\n\n📊 Status: {health_report}"
+    
     def _get_proactive_insight(self) -> tuple[Optional[str], Optional[str]]:
         try:
             account = self.broker.getAccountInfo()

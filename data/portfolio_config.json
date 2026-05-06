@@ -1,0 +1,26 @@
+{
+    "asset_classes": {
+        "Forex": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"],
+        "Metals": ["XAUUSD", "XAGUSD"],
+        "Indices": ["US30", "NAS100"],
+        "Crypto": ["BTCUSD", "ETHUSD"]
+    },
+    "allocation_limits": {
+        "Forex": 2,
+        "Metals": 1,
+        "Indices": 1,
+        "Crypto": 1
+    },
+    "strategy_mapping": {
+        "default": "Mean_Reversion",
+        "asset_class_defaults": {
+            "Forex": "Mean_Reversion",
+            "Crypto": "Momentum_Strategy",
+            "Metals": "Breakout_Strategy",
+            "Indices": "Breakout_Strategy"
+        },
+        "symbol_overrides": {
+            "USDJPY": "Trend_Following"
+        }
+    }
+}

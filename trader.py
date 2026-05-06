@@ -1,6 +1,7 @@
 import MetaTrader5 as mt5
 import psutil
 import os
+import pandas as pd
 
 class Trader:
     
@@ -102,6 +103,27 @@ class Trader:
             return None
         positions = mt5.positions_get()
         return positions
+    
+    def get_historical_rates(self, symbol: str, timeframe: str = "H1", count: int = 50):
+        """Fetches historical OHLCV data for a symbol."""
+        if not self.connected:
+            return None
+            
+        # Map your string timeframe to MT5 timeframes
+        tf_mapping = {
+            "M15": mt5.TIMEFRAME_M15,
+            "H1": mt5.TIMEFRAME_H1,
+            "H4": mt5.TIMEFRAME_H4,
+            "D1": mt5.TIMEFRAME_D1
+        }
+        mt5_tf = tf_mapping.get(timeframe, mt5.TIMEFRAME_H1)
+        
+        rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 0, count)
+        if rates is None:
+            print(f"[Broker] Failed to fetch rates for {symbol}")
+            return None
+            
+        return pd.DataFrame(rates)
     
     def getBalance(self):
         if not self.connected:
