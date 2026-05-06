@@ -10,7 +10,7 @@ from pathlib import Path
 from .risk_manager import RiskManager
 from typing import Dict
 
-class DeepPortfolioManager:
+class PortfolioManager:
     """The ML-Driven Offense Engine: Learns which strategies work in which environments."""
     
     MODEL_PATH = Path("data/portfolio_meta_model.keras")

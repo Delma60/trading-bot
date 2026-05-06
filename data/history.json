@@ -1,0 +1,14 @@
+[
+    {
+        "timestamp": "2026-05-06T12:29:15.013890",
+        "input": "start trading",
+        "intent": "unrecognized",
+        "status": "failed"
+    },
+    {
+        "timestamp": "2026-05-06T12:45:34.844798",
+        "input": "start trade",
+        "intent": "trading_symbols",
+        "status": "completed"
+    }
+]
