@@ -1,1 +1,8 @@
 data/history.json
+# Runtime and generated data files
+data/chatbot_model.keras
+data/data.pickle
+data/profile.json
+data/stats.json
+data/portfolio_config.json
+**/__pycache__/**
