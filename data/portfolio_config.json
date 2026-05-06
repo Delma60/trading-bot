@@ -15,9 +15,9 @@
         "default": "Mean_Reversion",
         "asset_class_defaults": {
             "Forex": "Mean_Reversion",
-            "Crypto": "Momentum_Strategy",
-            "Metals": "Breakout_Strategy",
-            "Indices": "Breakout_Strategy"
+            "Crypto": "Momentum",
+            "Metals": "Breakout",
+            "Indices": "Breakout"
         },
         "symbol_overrides": {
             "USDJPY": "Trend_Following"

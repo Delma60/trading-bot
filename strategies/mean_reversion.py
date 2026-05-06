@@ -20,51 +20,59 @@ class MeanReversionStrategy:
         if df is None or len(df) < self.bb_length:
             return {"action": "WAIT", "confidence": 0.0, "reason": "Not enough data"}
 
-        # 1. Calculate Bollinger Bands
-        # Returns a DataFrame with 'BBL_20_2.0' (Lower), 'BBM_20_2.0' (Mid), 'BBU_20_2.0' (Upper)
-        bbands = ta.bbands(df['close'], length=self.bb_length, std=self.bb_std)
-        if bbands is None:
-             return {"action": "WAIT", "confidence": 0.0, "reason": "Indicator calculation failed"}
-             
-        df = pd.concat([df, bbands], axis=1)
+        try:
+            # 1. Calculate Bollinger Bands
+            bbands = ta.bbands(df['close'], length=self.bb_length, std=self.bb_std)
+            if bbands is None or len(bbands) == 0:
+                return {"action": "WAIT", "confidence": 0.0, "reason": "Indicator calculation failed"}
+            
+            df = pd.concat([df, bbands], axis=1)
 
-        # 2. Calculate RSI
-        df['RSI'] = ta.rsi(df['close'], length=self.rsi_length)
+            # 2. Calculate RSI
+            df['RSI'] = ta.rsi(df['close'], length=self.rsi_length)
 
-        # 3. Get the most recent completed candle (iloc[-1] is the live ticking candle, iloc[-2] is the last closed one)
-        # Using the last closed candle is safer to avoid repainting signals.
-        latest = df.iloc[-2]
+            # 3. Get the most recent completed candle
+            latest = df.iloc[-2]
 
-        # Dynamically find the column names pandas-ta generated
-        lower_band_col = f"BBL_{self.bb_length}_{self.bb_std}"
-        upper_band_col = f"BBU_{self.bb_length}_{self.bb_std}"
-        
-        close_price = latest['close']
-        rsi = latest['RSI']
-        lower_band = latest[lower_band_col]
-        upper_band = latest[upper_band_col]
+            # 4. Dynamically find the correct column names pandas_ta generated
+            # pandas_ta bbands returns columns like: BBL_20_2.0, BBM_20_2.0, BBU_20_2.0
+            bbl_cols = [col for col in df.columns if col.startswith('BBL_')]
+            bbu_cols = [col for col in df.columns if col.startswith('BBU_')]
+            
+            if not bbl_cols or not bbu_cols:
+                return {"action": "WAIT", "confidence": 0.0, "reason": "Bollinger Bands columns not found"}
+            
+            lower_band_col = bbl_cols[-1]  # Get the most recent BBL column
+            upper_band_col = bbu_cols[-1]  # Get the most recent BBU column
+            
+            close_price = latest['close']
+            rsi = latest['RSI']
+            lower_band = latest[lower_band_col]
+            upper_band = latest[upper_band_col]
 
-        # 4. The Logic Rules
-        
-        # BUY SIGNAL: Price pierced the bottom band AND RSI is deeply oversold
-        if close_price < lower_band and rsi < 30.0:
-            # Confidence increases the lower the RSI gets below 30
-            confidence = min(0.99, 0.70 + ((30.0 - rsi) / 100.0))
-            return {
-                "action": "BUY", 
-                "confidence": round(confidence, 2), 
-                "reason": f"Oversold Bounce (RSI: {rsi:.1f}, Price below Lower BB)"
-            }
+            # 5. The Logic Rules
+            # BUY SIGNAL: Price pierced the bottom band AND RSI is deeply oversold
+            if close_price < lower_band and rsi < 30.0:
+                confidence = min(0.99, 0.70 + ((30.0 - rsi) / 100.0))
+                return {
+                    "action": "BUY", 
+                    "confidence": round(confidence, 2), 
+                    "reason": f"Oversold Bounce (RSI: {rsi:.1f}, Price below Lower BB)"
+                }
 
-        # SELL SIGNAL: Price pierced the top band AND RSI is deeply overbought
-        elif close_price > upper_band and rsi > 70.0:
-            # Confidence increases the higher the RSI gets above 70
-            confidence = min(0.99, 0.70 + ((rsi - 70.0) / 100.0))
-            return {
-                "action": "SELL", 
-                "confidence": round(confidence, 2), 
-                "reason": f"Overbought Rejection (RSI: {rsi:.1f}, Price above Upper BB)"
-            }
+            # SELL SIGNAL: Price pierced the top band AND RSI is deeply overbought
+            elif close_price > upper_band and rsi > 70.0:
+                confidence = min(0.99, 0.70 + ((rsi - 70.0) / 100.0))
+                return {
+                    "action": "SELL", 
+                    "confidence": round(confidence, 2), 
+                    "reason": f"Overbought Rejection (RSI: {rsi:.1f}, Price above Upper BB)"
+                }
 
-        # DEFAULT: Nothing interesting is happening
-        return {"action": "WAIT", "confidence": 0.0, "reason": "Price is ranging inside the bands."}
+            # DEFAULT: Nothing interesting is happening
+            return {"action": "WAIT", "confidence": 0.0, "reason": "Price is ranging inside the bands."}
+            
+        except KeyError as e:
+            return {"action": "WAIT", "confidence": 0.0, "reason": f"Missing indicator data: {e}"}
+        except Exception as e:
+            return {"action": "WAIT", "confidence": 0.0, "reason": f"Analysis error: {e}"}

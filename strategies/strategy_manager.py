@@ -42,6 +42,7 @@ class StrategyManager:
             "News_Trading": DummyStrategy(),
             "Sentiment_Analysis": DummyStrategy(),
             "Arbitrage": DummyStrategy(),
+            "Trend_Following": DummyStrategy()
         }
     
     def get_strategy_description(self, strategy_name: str) -> str:

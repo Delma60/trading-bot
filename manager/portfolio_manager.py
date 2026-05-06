@@ -31,7 +31,7 @@ class PortfolioManager:
         for symbols in self.asset_classes.values():
             self.master_watchlist.extend(symbols)
             
-        self.available_strategies = ["Mean_Reversion", "Trend_Following", "Breakout_Strategy", "Momentum_Strategy"]
+        self.available_strategies = self.strategy_manager.engines.keys()
         
         # AI Initialization
         self.model = self._load_or_build_model()
@@ -74,27 +74,47 @@ class PortfolioManager:
 
     def _get_current_market_state(self, symbol: str) -> np.ndarray:
         """Gathers and normalizes market regime features."""
-        df = self.broker.get_historical_rates(symbol, timeframe="H1", count=50)
-        
-        if df is None or len(df) < 50:
-            return np.zeros((1, 4))
+        try:
+            df = self.broker.get_historical_rates(symbol, timeframe="H1", count=50)
             
-        df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
-        adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
-        df['ADX'] = adx_df['ADX_14']
-        df['RSI'] = ta.rsi(df['close'], length=14)
+            if df is None or len(df) < 50:
+                return np.zeros((1, 4))
+            
+            # Calculate technical indicators
+            atr_result = ta.atr(df['high'], df['low'], df['close'], length=14)
+            if atr_result is not None:
+                df['ATR'] = atr_result
+            
+            adx_result = ta.adx(df['high'], df['low'], df['close'], length=14)
+            if adx_result is not None and 'ADX_14' in adx_result.columns:
+                df['ADX'] = adx_result['ADX_14']
+            else:
+                df['ADX'] = 50.0  # Default middle value
+            
+            rsi_result = ta.rsi(df['close'], length=14)
+            if rsi_result is not None:
+                df['RSI'] = rsi_result
+            
+            latest = df.iloc[-1]
+            
+            # Extract values with defaults if missing
+            atr_val = latest.get('ATR', latest['close'] * 0.01)
+            adx_val = latest.get('ADX', 50.0)
+            rsi_val = latest.get('RSI', 50.0)
+            
+            norm_atr = (atr_val / latest['close']) * 100 if latest['close'] > 0 else 0 
+            norm_adx = adx_val / 100.0
+            norm_rsi = rsi_val / 100.0
+            norm_hour = datetime.now().hour / 24.0
+            
+            state = np.array([norm_atr, norm_adx, norm_rsi, norm_hour])
+            state = np.nan_to_num(state)
+            
+            return np.expand_dims(state, axis=0)
         
-        latest = df.iloc[-1]
-        
-        norm_atr = (latest['ATR'] / latest['close']) * 100 if latest['close'] > 0 else 0 
-        norm_adx = latest['ADX'] / 100.0
-        norm_rsi = latest['RSI'] / 100.0
-        norm_hour = datetime.now().hour / 24.0
-        
-        state = np.array([norm_atr, norm_adx, norm_rsi, norm_hour])
-        state = np.nan_to_num(state)
-        
-        return np.expand_dims(state, axis=0)
+        except Exception as e:
+            print(f"[Portfolio Manager]: Error getting market state for {symbol}: {e}")
+            return np.zeros((1, 4))
 
     def _assign_strategy_fallback(self, symbol: str) -> str:
         """Uses the config file if the AI isn't ready yet."""
@@ -199,7 +219,7 @@ class PortfolioManager:
         if account.margin_level and account.margin_level < 200:
             health = "🔴 High Risk (Low Margin)"
 
-        return f"{health} | PnL Today: ${daily_pnl:,.2f} | Exposure: {open_count}/{self.max_open_trades} Trades"
+        return f"{health} | PnL Today: ${daily_pnl:,.2f} | Exposure: {open_count}/{self.risk_manager.max_open_trades} Trades"
     def retrain_model(self):
         history = self._load_json(self.TRAINING_DATA_PATH, fallback=[])
         if len(history) < 50: return
@@ -211,3 +231,4 @@ class PortfolioManager:
         self.model.fit(X, y, epochs=50, batch_size=8, verbose=1)
         self.model.save(str(self.MODEL_PATH))
         print("[Portfolio AI]: Retraining complete.")
+        
