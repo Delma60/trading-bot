@@ -185,7 +185,21 @@ class PortfolioManager:
             if not self.is_ai_ready and len(history) >= 50:
                 self.is_ai_ready = True
                 self.retrain_model()
+    def get_portfolio_health(self) -> str:
+        """Generates a quick health report for the Chatbot."""
+        account = self.broker.getAccountInfo()
+        positions = self.broker.getPositions()
+        open_count = len(positions) if positions else 0
+        
+        if not account:
+            return "Unable to assess portfolio health."
+            
+        daily_pnl = account.equity - account.balance
+        health = "🟢 Healthy" if daily_pnl >= 0 else "🟡 Drawdown"
+        if account.margin_level and account.margin_level < 200:
+            health = "🔴 High Risk (Low Margin)"
 
+        return f"{health} | PnL Today: ${daily_pnl:,.2f} | Exposure: {open_count}/{self.max_open_trades} Trades"
     def retrain_model(self):
         history = self._load_json(self.TRAINING_DATA_PATH, fallback=[])
         if len(history) < 50: return

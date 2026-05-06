@@ -10,5 +10,17 @@
         "input": "start trade",
         "intent": "trading_symbols",
         "status": "completed"
+    },
+    {
+        "timestamp": "2026-05-06T12:48:23.858849",
+        "input": "scan",
+        "intent": "unrecognized",
+        "status": "failed"
+    },
+    {
+        "timestamp": "2026-05-06T12:57:29.717583",
+        "input": "scan",
+        "intent": "bulk_scan",
+        "status": "completed"
     }
 ]
