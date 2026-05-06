@@ -1,4 +1,8 @@
 import pandas as pd
+from strategies.arbitrage import ArbitrageStrategy
+from strategies.momentum import MomentumStrategy
+from strategies.breakout import BreakoutStrategy
+from strategies.scalping import ScalpingStrategy
 from trader import Trader
 from .mean_reversion import MeanReversionStrategy
 
@@ -36,12 +40,12 @@ class StrategyManager:
         # Instantiate engines ONCE to save memory, rather than recreating them every scan
         self.engines = {
             "Mean_Reversion": MeanReversionStrategy(),
-            "Momentum": DummyStrategy(),
-            "Breakout": DummyStrategy(),
-            "Scalping": DummyStrategy(),
+            "Momentum": MomentumStrategy(),
+            "Breakout": BreakoutStrategy(),
+            "Scalping": ScalpingStrategy(),
             "News_Trading": DummyStrategy(),
             "Sentiment_Analysis": DummyStrategy(),
-            "Arbitrage": DummyStrategy(),
+            "Arbitrage": ArbitrageStrategy(),
             "Trend_Following": DummyStrategy()
         }
     
