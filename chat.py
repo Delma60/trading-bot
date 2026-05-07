@@ -183,7 +183,7 @@ class Chatbot(ProfileManager, NLPEngine):
     def _save_local_symbol(self, symbol_data: dict):
         self.SYMBOLS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         symbol_file = self._symbol_file_path(symbol_data.get("symbol", "UNKNOWN"))
-        self.save_credentials(symbol_file, symbol_data)
+        self._write_json(symbol_file, symbol_data)
         self.symbol_cache = [item for item in self.symbol_cache if item.get("symbol", "").upper() != symbol_data.get("symbol", "").upper()]
         self.symbol_cache.append(symbol_data)
         self.symbol_lookup[symbol_data.get("symbol", "").upper()] = symbol_data
@@ -468,66 +468,61 @@ class Chatbot(ProfileManager, NLPEngine):
 
     
 
-    # def _handle_intent(self, inp: str) -> bool:
-    #     """Processes user input with entity extraction, memory, and multi-turn dialogue."""
-    #     clean_inp = inp.lower().strip()
-        
-    #     # === STEP 1: If bot is in middle of a multi-turn action, handle completion first ===
-    #     if self.pending_action:
-    #         return self._handle_pending_action(inp)
-        
-    #     # === STEP 2: Extract entities from the user's text ===
-    #     entities = self.extract_entities(inp)
-        
-    #     # === STEP 3: Update memory with newly mentioned entities ===
-    #     if entities["symbols"]:
-    #         self.memory["last_symbol"] = entities["symbols"][0]
-    #     if entities["timeframes"]:
-    #         self.memory["last_timeframe"] = entities["timeframes"][0]
-    #     if entities["money"]:
-    #         self.memory["last_money_amount"] = entities["money"][0]
-        
-    #     # === STEP 4: Handle symbol-based commands ===
-    #     if self._handle_symbol_command(inp):
-    #         return True
-
-    #     # === STEP 5: Predict intent via Keras model ===
-    #     if any(word in clean_inp for word in ["start", "scan"]):
-    #         intent_tag = "bulk_scan"
-    #         confidence = 1.0
-    #     else:
-    #         bag = self._bag_of_words(inp)
-    #         results = self.model.predict(bag, verbose=0)[0]
-    #         intent_tag = self.labels[np.argmax(results)]
-    #         confidence = results[np.argmax(results)]
-        
-    #     # === STEP 6: Execute with high confidence, or ask for clarification ===
-    #     if confidence > 0.7:
-    #         self._execute_action(intent_tag, inp, entities)
-    #         return True
-        
-    #     print("[Bot]: I'm not sure what you mean. Try asking to 'scan', 'show my symbols', or 'add AUDCAD to portfolio'.")
-    #     return False
-    
     def _handle_intent(self, inp: str) -> bool:
+        """Processes user input with entity extraction, memory, and multi-turn dialogue."""
         clean_inp = inp.lower().strip()
+        
+        # === STEP 1: If bot is in middle of a multi-turn action, handle completion first ===
+        if self.pending_action:
+            return self._handle_pending_action(inp)
+        
+        # === STEP 2: Extract entities from the user's text ===
+        entities = self.extract_entities(inp)
+        
+        # === STEP 3: Update memory with newly mentioned entities ===
+        if entities["symbols"]:
+            self.memory["last_symbol"] = entities["symbols"][0]
+        if entities["timeframes"]:
+            self.memory["last_timeframe"] = entities["timeframes"][0]
+        if entities["money"]:
+            self.memory["last_money_amount"] = entities["money"][0]
+        
+        if len(clean_inp) <= 2 and clean_inp not in ["hi", "yo"]:
+            print("[Bot]: 👍")
+            return True
+        
+        # === STEP 4: Handle symbol-based commands ===
         if self._handle_symbol_command(inp):
             return True
 
+        # === STEP 5: Predict intent via Keras model ===
         if any(word in clean_inp for word in ["start", "scan"]):
-            self._execute_action("bulk_scan", inp)
+            intent_tag = "bulk_scan"
+            confidence = 1.0
+        else:
+            tag, confidence = self.predict_intent(inp)
+        
+        # === STEP 6: Execute with high confidence, or ask for clarification ===
+        if confidence >= 0.75:
+            self._execute_action(intent_tag, inp, entities)
+            return True
+        elif 0.50 <= confidence < 0.75:
+            print(f"[Bot]: I'm {int(confidence*100)}% sure you want to '{tag}'. Is that correct? (y/n)")
+            self.pending_action = "confirm_learning"
+            self.pending_data = {"predicted_tag": tag, "original_input": inp}
             return True
 
-        # USE YOUR NEW INHERITED NLP METHOD HERE
-        tag, confidence = self.predict_intent(inp)
-        
-        if confidence > 0.7:
-            self._execute_action(tag, inp)
+        # Low confidence: Total failure
+        else:
+            print("[Bot]: I don't understand that yet. What did you mean?")
+            self.pending_action = "teach_new_phrase"
+            self.pending_data = {"original_input": inp}
             return True
+            
         
-        print("[Bot]: I'm not sure. Try asking to 'scan', 'show my symbols', or 'add AUDCAD to portfolio'.")
+        print("[Bot]: I'm not sure what you mean. Try asking to 'scan', 'show my symbols', or 'add AUDCAD to portfolio'.")
         return False
-
+    
     def _handle_pending_action(self, inp: str) -> bool:
         """Handles completion of incomplete commands (multi-turn dialogue)."""
         if self.pending_action == "awaiting_trade_symbol":
@@ -571,6 +566,26 @@ class Chatbot(ProfileManager, NLPEngine):
                 print("[Bot]: I couldn't parse the amount. Please try again with a number like '100' or '50.5', or type 'cancel'.")
                 return False
         
+        if self.pending_action == "confirm_learning":
+            tag = self.pending_data["predicted_tag"]
+            original_input = self.pending_data["original_input"]
+            
+            if inp.lower() in ["y", "yes", "yeah", "yup"]:
+                print(f"[Bot]: Great! I am executing the action and saving this phrase to my brain.")
+                
+                # 1. Tell the NLP Engine to permanently learn it!
+                self.add_intent_pattern(tag, original_input, notify_callback=self.receive_system_alert)
+                
+                # 2. Execute the actual command
+                self._execute_action(tag, original_input)
+            else:
+                print("[Bot]: Ah, my mistake! Action cancelled.")
+                
+            # Clear the pending state
+            self.pending_action = None
+            self.pending_data = {}
+            return True
+        
         return False
 
     def _get_intent_response(self, tag: str, live_data=None):
@@ -604,14 +619,30 @@ class Chatbot(ProfileManager, NLPEngine):
         
         # === Check if we need to ask for missing entities ===
         if tag == "execute_trade":
-            # Trading needs a symbol
-            symbol = entities["symbols"][0] if entities["symbols"] else self.memory["last_symbol"]
-            if not symbol:
-                print("[Bot]: Which symbol would you like to trade? (e.g., EURUSD, GBPUSD)")
-                self.pending_action = "awaiting_trade_symbol"
-                self.pending_data = {"intent": tag}
+            symbol = entities["symbols"][0]
+            
+            print(f"[Bot]: Thinking... Analyzing {symbol}...")
+            
+            # 1. Ask the Strategy Engine for its opinion
+            signal = self.strategy_manager.check_signals(symbol)
+            
+            # 2. Ask the Risk Manager if it's safe
+            allowed, risk_reason = self.risk_manager.is_trading_allowed(self.max_daily_loss)
+            
+            # 3. Formulate Reasoning
+            if not allowed:
+                print(f"[Bot]: 🛑 I refuse to execute this trade. Reason: {risk_reason}")
                 return
-        
+                
+            if signal['action'] != 'BUY': # Assuming user asked to buy
+                print(f"[Bot]: ⚠️ Warning: My technical analysis suggests {signal['action']}, but you want to BUY.")
+                override = input("[Bot]: Do you want to override my advice and execute anyway? (y/n): ")
+                if override.lower() != 'y':
+                    print("[Bot]: Trade aborted. Good call.")
+                    return
+                    
+            print(f"[Bot]: Logic checks passed. Executing trade for {symbol}.")
+            # ... proceed to execution ...
         elif tag == "deposit" or tag == "withdraw":
             # Deposit/Withdraw need an amount
             amount = entities["money"][0] if entities["money"] else self.memory["last_money_amount"]

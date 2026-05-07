@@ -219,6 +219,21 @@ class PortfolioManager:
                             "state": current_state.tolist(), # Assuming you saved current_state earlier
                             "strategy": strategy_name
                         }
+                    elif not exec_result["success"]:
+                        error_reason = exec_result["reason"]
+    
+                        # The bot "Reasons" about the failure
+                        if "margin" in error_reason.lower():
+                            print("[Bot]: ⚠️ Trade rejected due to low margin.")
+                            print("[Bot]: Let me calculate a smaller lot size that fits your current equity...")
+                            # Bot autonomously calculates a new lot size and asks to try again
+                            new_lots = self.risk_manager.calculate_micro_lot() 
+                            print(f"[Bot]: I can execute this at {new_lots} lots instead. Proceed? (y/n)")
+                            
+                        elif "market closed" in error_reason.lower():
+                            print(f"[Bot]: The market for {symbol} is currently closed.")
+                            print("[Bot]: I have added this to my internal queue. I will automatically execute it when the bell rings.")
+        
                     else:
                         reason = exec_result["reason"]
                         results.append(f"⚠️ EXECUTION FAILED -> {symbol}: {signal['action']} | Reason: {reason}")

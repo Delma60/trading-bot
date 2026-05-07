@@ -1,6 +1,43 @@
 {
     "intents": [
         {
+            "tag": "acknowledgment",
+            "patterns": [
+                "Okay, got it.",
+                "Understood.",
+                "Thanks for the info.",
+                "I see, thanks!",
+                "Alright, noted.",
+                "Got it, thanks!",
+                "Okay, thanks for letting me know.",
+                "Understood, I will keep that in mind.",
+                "Thanks for the update!",
+                "I appreciate the information.",
+                "Okay, I understand now.",
+                "Thanks for clarifying!",
+                "Got it, I'll remember that.",
+                "Understood, I'll take that into account.",
+                "Thanks for sharing that with me!",
+                "I see what you mean now, thanks!",
+                "Alright, I will consider that in my analysis.",
+                "Got it, I will use that information moving forward.",
+                "Thanks for providing that context!",
+                "Understood, I will factor that into my decisions."
+            ],
+            "responses": [
+                "Thanks for the information! Let me know if you have any other details to share.",
+                "I appreciate the update! If there's anything else I should know, just tell me.",
+                "Got it, thanks for letting me know! I'm here to help with your trading.",
+                "Understood, I will keep that in mind as we continue. Let me know if you have more info!",
+                "Thanks for sharing that! If you have any other insights or details, feel free to tell me.",
+                "I see, thanks for the info! I'm here to assist you with your trading needs.",
+                "Okay, got it! If there's anything else you want to share or ask about, just let me know.",
+                "Understood, I will remember that. If you have any other questions or details to provide, I'm here to listen!",
+                "Thanks for the update! If there's anything else you'd like to share or ask about, just say the word.",
+                "I appreciate the information! If you have any other insights or questions, feel free to share them with me."
+            ]
+        },
+        {
             "tag": "gratitude",
             "patterns": [
                 "Thanks for the help!",
@@ -152,7 +189,7 @@
                 "Waiting on the latest market update for that instrument.",
                 "Let me confirm the live value from the price feed.",
                 "Obtaining the latest ask and bid for your requested pair.",
-                "I’m retrieving the current quote from the trading terminal."
+                "I\u00e2\u20ac\u2122m retrieving the current quote from the trading terminal."
             ]
         },
         {
@@ -227,7 +264,7 @@
                 "WARNING: Attempting to close all open positions immediately...",
                 "Executing mass closure of all active trades.",
                 "Sending close commands for every open order.",
-                "I’m closing every position in your account now.",
+                "I\u00e2\u20ac\u2122m closing every position in your account now.",
                 "All active trades are being terminated.",
                 "Performing a full account flatten operation.",
                 "Canceling exposure and closing all market positions.",
@@ -275,15 +312,16 @@
                 "What was yesterday's result?",
                 "Review my trading history",
                 "How did my account perform?",
-                "Show closed orders"
+                "Show closed orders",
+                "so whats the update"
             ],
             "responses": [
                 "Calculating your Profit and Loss (PnL)...",
                 "Fetching your closed trade history from the server.",
                 "Reviewing your historical trade results now.",
-                "Pulling yesterday’s and today’s performance numbers.",
+                "Pulling yesterday\u00e2\u20ac\u2122s and today\u00e2\u20ac\u2122s performance numbers.",
                 "Let me summarize your recent trading history.",
-                "I’m loading past orders and outcomes for analysis.",
+                "I\u00e2\u20ac\u2122m loading past orders and outcomes for analysis.",
                 "Your closed trades are being retrieved for review.",
                 "Computing performance metrics from recent history.",
                 "Displaying your historical trading results shortly.",
@@ -311,7 +349,7 @@
                 "Getting the latest AI forecast for the selected instrument.",
                 "The model is reviewing price action and momentum.",
                 "Let me compute the AI trading bias for that symbol.",
-                "I’m checking whether the conditions favor buy or sell.",
+                "I\u00e2\u20ac\u2122m checking whether the conditions favor buy or sell.",
                 "The prediction engine is synthesizing market data.",
                 "Fetching the AI-driven entry and exit guidance.",
                 "One moment while I determine the signal direction."
@@ -338,7 +376,7 @@
                 "Your bot is paused and monitoring is suspended.",
                 "No new orders will be placed while paused.",
                 "Trading automation is disabled until resumed.",
-                "I’ve halted the bot and will await your next command.",
+                "I\u00e2\u20ac\u2122ve halted the bot and will await your next command.",
                 "The system is in pause mode and not executing trades.",
                 "Stopping trade execution and keeping current positions.",
                 "The bot is on hold; you can resume at any time."
@@ -363,9 +401,9 @@
                 "System activated. I will execute trades based on the strategy.",
                 "Your bot is back online and monitoring opportunities.",
                 "Resuming automation and looking for trade signals.",
-                "Trading is re-enabled; I’m ready to place new orders.",
+                "Trading is re-enabled; I\u00e2\u20ac\u2122m ready to place new orders.",
                 "The AI engine is now active again.",
-                "I’ve restarted the bot and resumed market scanning.",
+                "I\u00e2\u20ac\u2122ve restarted the bot and resumed market scanning.",
                 "The trading system is live and processing the strategy.",
                 "You are back in automated trading mode.",
                 "Resumed execution; the bot will trade according to your settings."
@@ -388,14 +426,14 @@
             "responses": [
                 "Reviewing your current risk exposure and leverage.",
                 "Fetching your account risk metrics now.",
-                "I’m calculating drawdown, exposure, and risk ratios.",
+                "I\u00e2\u20ac\u2122m calculating drawdown, exposure, and risk ratios.",
                 "Your risk level is being analyzed against open positions.",
                 "Checking whether your account is within safe risk limits.",
                 "Obtaining margin usage and risk details from MT5.",
                 "Analyzing current exposure and potential risk factors.",
                 "Your risk report is being generated.",
                 "One moment while I verify your account safety levels.",
-                "I’m validating your current risk before any new trade."
+                "I\u00e2\u20ac\u2122m validating your current risk before any new trade."
             ]
         },
         {
@@ -415,12 +453,12 @@
             "responses": [
                 "Checking the economic calendar and market news now.",
                 "Fetching the latest headlines relevant to your trades.",
-                "I’m reviewing current news that may impact the market.",
+                "I\u00e2\u20ac\u2122m reviewing current news that may impact the market.",
                 "There are no major announcements at the moment.",
-                "I’ve found recent events that could move the pairs.",
+                "I\u00e2\u20ac\u2122ve found recent events that could move the pairs.",
                 "Let me summarize the key economic releases for you.",
                 "News risk is being assessed for your current positions.",
-                "I’m pulling the latest updates from the market feed.",
+                "I\u00e2\u20ac\u2122m pulling the latest updates from the market feed.",
                 "Reviewing scheduled events that may affect prices.",
                 "Here are the top market news items for your instruments."
             ]
@@ -442,13 +480,13 @@
             "responses": [
                 "Reviewing the automated strategy and its current settings.",
                 "The bot uses defined entry and exit rules for market timing.",
-                "I’m summarizing the strategy logic for you now.",
+                "I\u00e2\u20ac\u2122m summarizing the strategy logic for you now.",
                 "This system evaluates trend, momentum, and risk parameters.",
                 "Let me describe the active trading method step by step.",
                 "The strategy is built around signal confirmation and money management.",
-                "I’m checking which rules are active in the current session.",
+                "I\u00e2\u20ac\u2122m checking which rules are active in the current session.",
                 "The bot follows your configured strategy settings and risk controls.",
-                "I’ll explain the conditions used for entering and exiting trades.",
+                "I\u00e2\u20ac\u2122ll explain the conditions used for entering and exiting trades.",
                 "Here is the current strategy profile and its signal rules."
             ]
         },

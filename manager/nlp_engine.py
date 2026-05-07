@@ -1,6 +1,7 @@
 import json
 import pickle
 import re
+import threading
 import numpy as np
 import nltk
 from nltk.stem.lancaster import LancasterStemmer
@@ -35,6 +36,48 @@ class NLPEngine:
         results = self.model.predict(bag, verbose=0)[0]
         best_index = np.argmax(results)
         return self.labels[best_index], results[best_index]
+    
+    
+    
+    # manager/nlp_engine.py
+    
+    def add_intent_pattern(self, tag: str, new_pattern: str, notify_callback=print):
+        """Adds a new phrase to the intents JSON and retrains the model."""
+        intent_found = False
+        
+        # 1. Update the in-memory JSON data
+        for intent in self.intents_data.get('intents', []):
+            if intent['tag'] == tag:
+                if new_pattern not in intent['patterns']:
+                    intent['patterns'].append(new_pattern)
+                intent_found = True
+                break
+                
+        if not intent_found:
+            notify_callback(f"⚠️ Could not find intent '{tag}' in intents.json", priority="normal")
+            return False
+            
+        # 2. Write the updated data back to intents.json
+        try:
+            with open(self.intents_file, "w") as f:
+                json.dump(self.intents_data, f, indent=4)
+        except Exception as e:
+            notify_callback(f"⚠️ Failed to save to intents.json: {e}", priority="normal")
+            return False
+            
+        # 3. Retrain the model in the background so the chat doesn't freeze
+        notify_callback(f"🧠 I am learning! Retraining my neural network in the background...", priority="normal")
+        
+        def background_training():
+            try:
+                self._process_data()
+                self._build_model()
+                notify_callback(f"✅ Learning complete! I will now remember that phrase.", priority="normal")
+            except Exception as e:
+                notify_callback(f"⚠️ Error during retraining: {e}", priority="normal")
+                
+        threading.Thread(target=background_training, daemon=True).start()
+        return True
 
     def get_response_template(self, tag: str) -> str:
         """Fetches a random response string for a given intent tag."""
