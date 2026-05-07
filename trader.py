@@ -96,6 +96,14 @@ class Trader:
         if 'time' in df.columns:
             df = df.set_index(pd.to_datetime(df['time'], unit='s'))
             df.drop(columns=['time'], inplace=True)
+
+        # MT5 returns volume as tick_volume or real_volume depending on broker settings.
+        if 'volume' not in df.columns:
+            if 'tick_volume' in df.columns:
+                df['volume'] = df['tick_volume']
+            elif 'real_volume' in df.columns:
+                df['volume'] = df['real_volume']
+
         return df
         
     def get_symbol_info(self, symbol: str):

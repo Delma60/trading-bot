@@ -74,6 +74,15 @@ class FeatureEngineer:
         f["bb_width"] = (bb_upper - bb_lower) / (bb_mid + 1e-9)          # squeeze
         f["bb_pos"]   = (f["close"] - bb_lower) / (bb_upper - bb_lower + 1e-9)  # 0=bottom 1=top
 
+        # Ensure we have a volume series available for feature engineering
+        if 'volume' not in f.columns:
+            if 'tick_volume' in f.columns:
+                f['volume'] = f['tick_volume']
+            elif 'real_volume' in f.columns:
+                f['volume'] = f['real_volume']
+            else:
+                raise KeyError("OHLCV data must include 'volume', 'tick_volume', or 'real_volume'.")
+
         # ── Volume Features ──────────────────────────────────────────────────
         f["volume_sma_20"] = f["volume"].rolling(20).mean()
         f["volume_ratio"]  = f["volume"] / (f["volume_sma_20"] + 1e-9)   # >1 = above-avg
