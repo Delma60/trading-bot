@@ -25,13 +25,12 @@ ohclv.dropna(inplace=True)
 percentiles = [15, 20,  50, 80, 85]
 ratios = ohclv['ratios']
 percentile_values = np.percentile(ratios, percentiles)
-print(percentile_values)
+# [Debug] Percentile values computed (silent)
 sell = percentiles[-1]
 buy = percentiles[0]
 # positions
 
 ohclv['position'] = np.where(ohclv['ratios'] > sell, -1, np.where(ohclv['ratios'] < buy, 1, 0))
 
-print(ohclv[['close', 'sma', 'ratios', 'simple_returns', 'cumulative_returns', 'log_returns', 'position']].tail())
-# print(ohclv[['close', 'sma', 'ratios']].tail(20))
-# print(ohclv['ratios'].describe())
+# [Debug] Test output (silent - uncomment for debugging)
+# print(ohclv[['close', 'sma', 'ratios', 'simple_returns', 'cumulative_returns', 'log_returns', 'position']].tail())

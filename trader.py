@@ -23,53 +23,29 @@ class Trader:
         return False
         
     def connect(self, login, password, server="MetaQuotes-Demo"):
-        
         self.login = login
         self.password = password
         self.server = server
         
-        # Check if MT5 is running
         if not self.is_mt5_running():
-            self.notify("MetaTrader 5 terminal is not running!")
-            self.notify("Please start MT5 terminal and try again.")
-            self.notify("You can find it in: C:/Program Files/MetaTrader 5/terminal64.exe")
+            self.notify("❌ MT5 terminal is not running! Start C:/Program Files/MetaTrader 5/terminal64.exe")
             return False
         
-        # Try to initialize MT5 with different approaches
-        self.notify("Attempting to connect to MetaTrader 5...")
-        
-        # First try: with explicit path and longer timeout
-        try:
-            mt5_path = "C:/Program Files/MetaTrader 5/terminal64.exe"
-            if os.path.exists(mt5_path):
-                if not mt5.initialize(path=mt5_path, timeout=120000):
-                    self.notify("Failed with explicit path, trying without path...")
-                    # Second try: let MT5 find the terminal automatically
-                    if not mt5.initialize(timeout=120000):
-                        self.notify(f"initialize() failed, error code = {mt5.last_error()}")
-                        self.notify("Please ensure:")
-                        self.notify("1. MetaTrader 5 terminal is running")
-                        self.notify("2. MT5 is installed in the default location")
-                        self.notify("3. No firewall/antivirus is blocking the connection")
-                        return False
-            else:
-                self.notify(f"MT5 not found at {mt5_path}, trying automatic detection...")
-                if not mt5.initialize(timeout=120000):
-                    self.notify(f"initialize() failed, error code = {mt5.last_error()}")
-                    return False
-                    
-        except Exception as e:
-            self.notify(f"Exception during initialization: {e}")
+        # Try explicit path first, then automatic fallback silently
+        mt5_path = "C:/Program Files/MetaTrader 5/terminal64.exe"
+        init_success = mt5.initialize(path=mt5_path, timeout=60000) if os.path.exists(mt5_path) else mt5.initialize(timeout=60000)
+
+        if not init_success:
+            self.notify(f"❌ MT5 Init failed. Code: {mt5.last_error()}")
             return False
             
-        self.notify("MT5 initialized successfully, attempting login...")
         authorized = mt5.login(self.login, password=self.password, server=self.server)
         if not authorized:
-            self.notify(f"Login failed, error code = {mt5.last_error()}")
+            self.notify(f"❌ Login failed. Code: {mt5.last_error()}")
             return False
         
         self.connected = True
-        self.notify("Successfully connected to MetaTrader 5")
+        self.notify(f"✅ MT5 Connected: {self.login} on {self.server}")
         return True
     
     def getSymbols(self):
@@ -299,25 +275,121 @@ class Trader:
     def close_all_positions(self):
         """Close all open positions."""
         if not self.connected:
+            self.notify("Cannot close positions: Not connected to MT5.")
             return
+            
         positions = mt5.positions_get()
-        if positions is None:
+        if positions is None or len(positions) == 0:
+            self.notify("No open positions to close.")
             return
+            
+        self.notify(f"Attempting to close {len(positions)} open positions...")
+        
         for position in positions:
+            symbol = position.symbol
+            symbol_info = mt5.symbol_info(symbol)
+            
+            if symbol_info is None:
+                self.notify(f"❌ Failed to get symbol info for {symbol}")
+                continue
+                
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                self.notify(f"❌ Could not get live tick price for {symbol}, skipping...")
+                continue
+                
+            # To close a BUY, we must SELL at the BID price. To close a SELL, we must BUY at the ASK price.
+            if position.type == mt5.POSITION_TYPE_BUY:
+                order_type = mt5.ORDER_TYPE_SELL
+                price = tick.bid
+            else:
+                order_type = mt5.ORDER_TYPE_BUY
+                price = tick.ask
+            
+            # Determine correct filling mode based on broker limits
+            filling_mode = symbol_info.filling_mode
+            if filling_mode & 1:
+                type_filling = mt5.ORDER_FILLING_FOK
+            elif filling_mode & 2:
+                type_filling = mt5.ORDER_FILLING_IOC
+            else:
+                type_filling = mt5.ORDER_FILLING_RETURN
+
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": position.symbol,
+                "symbol": symbol,
                 "volume": position.volume,
-                "type": mt5.ORDER_TYPE_SELL if position.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY,
+                "type": order_type,
                 "position": position.ticket,
-                "price": mt5.symbol_info_tick(position.symbol).bid if position.type == mt5.POSITION_TYPE_BUY else mt5.symbol_info_tick(position.symbol).ask,
+                "price": price,
                 "deviation": 20,
                 "magic": 234000,
-                "comment": "Close all positions",
+                "comment": "Bot manual close",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_FOK,
+                "type_filling": type_filling,
             }
-            mt5.order_send(request)
-        else:
-            self.notify(f"Failed to get account info, error code = {mt5.last_error()}")
-            return None
+            
+            result = mt5.order_send(request)
+            
+            # Check if MT5 actually closed it
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                self.notify(f"❌ Failed to close {symbol} (Ticket #{position.ticket}). MT5 Code: {result.retcode}, {result.comment}")
+            else:
+                self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
+
+    def close_position(self, symbol: str):
+        """Close open position for a specific symbol."""
+        if not self.connected:
+            self.notify("Cannot close position: Not connected to MT5.")
+            return False
+
+        # Only get positions for this specific symbol
+        positions = mt5.positions_get(symbol=symbol)
+        if positions is None or len(positions) == 0:
+            self.notify(f"❌ No open positions found for {symbol}.")
+            return False
+
+        self.notify(f"Attempting to close {len(positions)} position(s) for {symbol}...")
+        
+        success = True
+        for position in positions:
+            symbol_info = mt5.symbol_info(symbol)
+            tick = mt5.symbol_info_tick(symbol)
+            
+            if position.type == mt5.POSITION_TYPE_BUY:
+                order_type = mt5.ORDER_TYPE_SELL
+                price = tick.bid
+            else:
+                order_type = mt5.ORDER_TYPE_BUY
+                price = tick.ask
+            
+            filling_mode = symbol_info.filling_mode
+            if filling_mode & 1:
+                type_filling = mt5.ORDER_FILLING_FOK
+            elif filling_mode & 2:
+                type_filling = mt5.ORDER_FILLING_IOC
+            else:
+                type_filling = mt5.ORDER_FILLING_RETURN
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": position.volume,
+                "type": order_type,
+                "position": position.ticket,
+                "price": price,
+                "deviation": 20,
+                "magic": 234000,
+                "comment": "Bot manual close",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": type_filling,
+            }
+            
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                self.notify(f"❌ Failed to close {symbol} (Ticket #{position.ticket}). MT5 Code: {result.retcode}")
+                success = False
+            else:
+                self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
+        
+        return success

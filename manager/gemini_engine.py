@@ -45,12 +45,11 @@ class GeminiEngine:
         try:
             response = self.gemini_model.generate_content(prompt)
             gemini_intent = response.text.strip()
-            print(f"[Gemini Engine]: Rerouted intent: '{local_guess}' => '{gemini_intent}'")
-            
+            # [Silent] Intent routing via API
             return gemini_intent
                 
         except Exception as e:
-            print(f"[Gemini Engine]: API Error during routing - {e}")
+            # [Debug] API error during routing
             return "UNKNOWN"
             
     def ask_general_question(self, question: str) -> str:

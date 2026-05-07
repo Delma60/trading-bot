@@ -582,6 +582,19 @@
                 "Let's change your trading configuration.",
                 "I'll assist you in updating your settings."
             ]
+        },
+        {
+            "tag": "close_position",
+            "patterns": [
+                "Close EURUSD",
+                "Close my trade on BTCUSD",
+                "Exit my GBPUSD position",
+                "Close trade",
+                "Close position"
+            ],
+            "responses": [
+                "Initiating closure for {symbol}..."
+            ]
         }
     ]
 }

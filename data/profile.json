@@ -10,7 +10,9 @@
         "USDCHF",
         "AUDUSD",
         "NZDUSD",
-        "USDRUB"
+        "USDRUB",
+        "USDCAD",
+        "USDSEK"
     ],
     "target_profit": 10.0,
     "stop_loss": 5.0,

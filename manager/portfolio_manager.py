@@ -57,11 +57,11 @@ class PortfolioManager:
             
         history = self._load_json(self.TRAINING_DATA_PATH, fallback=[])
         if len(history) >= 50:
-            self.notify("[Portfolio AI]: I have enough data. Initiating first training sequence...")
+            # [Silent] Model training initiated from historical data
             self.retrain_model()
             return True
             
-        self.notify(f"[Portfolio AI]: Only {len(history)}/50 trades logged. Using config defaults until I have enough data to learn.")
+        # [Silent] Waiting for sufficient historical data before training
         return False
 
     def _load_or_build_model(self):
@@ -209,7 +209,7 @@ class PortfolioManager:
             # Get the state to feed the AI (and to log it if we take a trade!)
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
-            self.notify(f"[Portfolio Manager]: {symbol} assigned to strategy '{strategy_name}' by AI.")
+            # Removed spammy strategy assignment notification
             signal = self.strategy_manager.check_signals(symbol, strategy=strategy_name)
             
             if signal and signal.get('action') != 'WAIT':
@@ -265,7 +265,7 @@ class PortfolioManager:
                                 results.append(f"❌ RECOVERY FAILED -> {symbol}: {retry_exec['reason']}")
                                 
                         elif "market closed" in error_reason.lower():
-                            self.notify(f"⏳ [Scanner]: Market for {symbol} is closed. Bypassing signal.")
+                            # self.notify(f"⏳ [Scanner]: Market for {symbol} is closed. Bypassing signal.")
                             results.append(f"⏳ MARKET CLOSED -> {symbol}")
         
                         else:
@@ -322,10 +322,9 @@ class PortfolioManager:
         X = np.array([item["state"][0] for item in history])
         y = np.array([item["label"] for item in history])
         
-        self.notify(f"[Portfolio AI]: Retraining on {len(X)} historical trades...")
+        # [Silent] Model retraining on historical data
         # Use lock to prevent race conditions during training
         with self._model_lock:
-            self.model.fit(X, y, epochs=50, batch_size=8, verbose=1)
+            self.model.fit(X, y, epochs=50, batch_size=8, verbose=0)  # Changed verbose=1 to verbose=0
             self.model.save(str(self.MODEL_PATH))
-        self.notify("[Portfolio AI]: Retraining complete.")
         

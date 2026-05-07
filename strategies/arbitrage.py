@@ -34,7 +34,7 @@ class ArbitrageStrategy:
         if symbol in self.dynamic_pairs:
             return self.dynamic_pairs[symbol]
             
-        print(f"[Arbitrage Engine]: 🧠 Dynamically searching for a correlated pair for {symbol}...")
+        # [Silent] Searching for correlated pair
         
         # Fetch long-term baseline data (Daily timeframe) for the primary symbol
         primary_df = broker.get_historical_rates(symbol, timeframe="D1", count=100)
@@ -65,11 +65,10 @@ class ArbitrageStrategy:
                 best_pair = candidate
 
         if best_pair:
-            print(f"[Arbitrage Engine]: ✅ Paired {symbol} with {best_pair} (Correlation: {highest_correlation*100:.1f}%)")
+            # [Silent] Correlation found and cached
             self.dynamic_pairs[symbol] = best_pair
         else:
-            print(f"[Arbitrage Engine]: ⚠️ No highly correlated pairs found for {symbol}.")
-            # Cache a 'None' state so we don't spam the broker trying to find one every minute
+            # [Silent] No correlation found; cache None to avoid repeated searches
             self.dynamic_pairs[symbol] = None 
             
         return best_pair

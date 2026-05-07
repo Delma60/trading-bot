@@ -83,6 +83,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             "update_config": lambda _: self.setup_trading_config(),
             "bulk_scan": lambda _: self._run_autonomous_scan(),
             "check_notifications": lambda _: self._read_inbox(),
+            "close_all": lambda _: self.broker.close_all_positions(), # <-- ADD THIS LINE
         }
 
         
@@ -663,6 +664,24 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             self.pending_data = {}
             return True
         
+        elif self.pending_action == "awaiting_close_symbol":
+            entities = self.extract_entities(inp)
+            if entities["symbols"]:
+                symbol = entities["symbols"][0]
+                self.memory["last_symbol"] = symbol
+                self.broker.close_position(symbol)
+                self.pending_action = None
+                self.pending_data = {}
+                return True
+            elif inp.lower().strip() == "cancel":
+                print("[Bot]: Action cancelled.")
+                self.pending_action = None
+                self.pending_data = {}
+                return True
+            else:
+                print("[Bot]: I didn't catch the symbol. Please reply with something like 'EURUSD' or type 'cancel'.")
+                return False
+        
         return False
 
     def _get_intent_response(self, tag: str, live_data=None):
@@ -780,6 +799,19 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
                 else:
                     print("[Bot]: 💡 Reasoning: I cannot autonomously resolve this error. Please check MT5.")
              
+        
+        elif tag == "close_position":
+            # Find the symbol from the user's text, or remember the last one we talked about
+            symbol = entities["symbols"][0] if entities["symbols"] else self.memory.get("last_symbol")
+            
+            if not symbol:
+                print("[Bot]: Which symbol would you like to close? (e.g., EURUSD)")
+                self.pending_action = "awaiting_close_symbol"
+                self.pending_data = {"intent": tag}
+                return
+            
+            self.broker.close_position(symbol)
+            return
         
         elif tag == "deposit" or tag == "withdraw":
             # Deposit/Withdraw need an amount

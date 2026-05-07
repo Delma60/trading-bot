@@ -189,7 +189,7 @@ class RiskManager:
         """
         symbol_info = mt5.symbol_info(symbol)
         if symbol_info is None:
-            print(f"[Risk Manager] Failed to get symbol info for {symbol}")
+            # [Debug] Failed to get symbol info
             return 0.0
 
         # 1. Fetch dynamic tick data from the broker
@@ -197,7 +197,7 @@ class RiskManager:
         tick_size = symbol_info.trade_tick_size
 
         if tick_value == 0 or tick_size == 0:
-            print(f"[Risk Manager] Tick value/size is 0 for {symbol}. Cannot calculate risk.")
+            # [Debug] Tick value/size is 0; cannot calculate risk
             return 0.0
 
         # 2. Calculate the monetary risk for 1 standard lot
@@ -218,12 +218,11 @@ class RiskManager:
 
         # 5. Clamp limits to prevent broker rejection errors
         if clean_lot_size < min_lot:
-            print(f"[Risk Manager] Risk too small. Calculated {clean_lot_size}, but broker min is {min_lot}")
-            # Return 0.0 to abort the trade, or return min_lot if you accept the higher risk
+            # [Silent] Risk too small; rejecting trade
             return 0.0 
             
         if clean_lot_size > max_lot:
-            print(f"[Risk Manager] Warning: Clamping lot size to broker max ({max_lot})")
+            # [Silent] Clamping to maximum allowed
             return max_lot
 
         # Return rounded to 2 decimal places to avoid MT5 floating point rejection errors

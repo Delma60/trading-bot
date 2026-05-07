@@ -78,8 +78,7 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
                 portfolio_manager.broker.close_all_positions()
                 # Continue to next scan
             
-            # 5. Wake up and scan
-            notify("Waking up to scan markets... 🔎")
+            # 5. Scan portfolio for opportunities (silent operation)
             results = portfolio_manager.evaluate_portfolio_opportunities(
                 risk_pct=risk_pct,
                 stop_loss=stop_loss,
