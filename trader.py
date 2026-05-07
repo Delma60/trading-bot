@@ -169,17 +169,45 @@ class Trader:
         pip_multiplier = self._get_pip_multiplier(symbol)
 
         # 3. Calculate Stop Loss and Take Profit prices
-        # Use dynamic pip multiplier based on asset class
+        # Use dynamic pip multiplier based on asset class and broker limits
         sl_price = 0.0
         tp_price = 0.0
-        
+
+        digits = symbol_info.digits
+        min_stop_level = symbol_info.trade_stops_level or 0
+
+        # Convert desired pips to points; MT5 stop levels are in points
+        sl_points = int(stop_loss_pips * pip_multiplier) if stop_loss_pips > 0 else 0
+        tp_points = int(take_profit_pips * pip_multiplier) if take_profit_pips > 0 else 0
+
+        if sl_points > 0:
+            sl_points = max(sl_points, min_stop_level)
+        if tp_points > 0:
+            tp_points = max(tp_points, min_stop_level)
+
         if order_type == mt5.ORDER_TYPE_BUY:
-            if stop_loss_pips > 0: sl_price = price - (stop_loss_pips * pip_multiplier * point)
-            if take_profit_pips > 0: tp_price = price + (take_profit_pips * pip_multiplier * point)
+            if sl_points > 0:
+                sl_price = price - (sl_points * point)
+            if tp_points > 0:
+                tp_price = price + (tp_points * point)
         elif order_type == mt5.ORDER_TYPE_SELL:
-            if stop_loss_pips > 0: sl_price = price + (stop_loss_pips * pip_multiplier * point)
-            if take_profit_pips > 0: tp_price = price - (take_profit_pips * pip_multiplier * point)
-        
+            if sl_points > 0:
+                sl_price = price + (sl_points * point)
+            if tp_points > 0:
+                tp_price = price - (tp_points * point)
+
+        # Round to the broker's supported digit precision
+        if sl_price:
+            sl_price = round(sl_price, digits)
+        if tp_price:
+            tp_price = round(tp_price, digits)
+
+        # Sanity check: ensure stop levels are on the correct side of the price
+        if sl_price and ((order_type == mt5.ORDER_TYPE_BUY and sl_price >= price) or (order_type == mt5.ORDER_TYPE_SELL and sl_price <= price)):
+            return {"success": False, "reason": "Invalid Stop Loss level after normalization."}
+        if tp_price and ((order_type == mt5.ORDER_TYPE_BUY and tp_price <= price) or (order_type == mt5.ORDER_TYPE_SELL and tp_price >= price)):
+            return {"success": False, "reason": "Invalid Take Profit level after normalization."}
+
         filling_mode = symbol_info.filling_mode
         
         # Check supported modes using bitwise AND operator (1 = FOK, 2 = IOC)
