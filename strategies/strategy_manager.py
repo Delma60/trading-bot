@@ -7,9 +7,9 @@ from strategies.scalping import ScalpingStrategy
 from strategies.trend_following import TrendFollowingStrategy
 from trader import Trader
 from .mean_reversion import MeanReversionStrategy
-from features.feature_engineer import FeatureEngineer
-from models.lstm_predictor import LSTMPredictor
-from models.meta_scorer import MetaScorer
+from strategies.features.feature_engineer import FeatureEngineer
+from strategies.models.lstm_predictor import LSTMPredictor
+from strategies.models.meta_scorer import MetaScorer
 
 
 class DummyStrategy:

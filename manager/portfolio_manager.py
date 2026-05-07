@@ -210,7 +210,7 @@ class PortfolioManager:
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
             # Removed spammy strategy assignment notification
-            signal = self.strategy_manager.dynamic_signal_check(symbol)
+            signal = self.strategy_manager.check_signals(symbol, use_ensemble=True)
             
             if signal and signal.get('action') != 'WAIT':
                 trade_plan = self.risk_manager.calculate_safe_trade(
