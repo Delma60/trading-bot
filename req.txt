@@ -10,3 +10,4 @@ requests
 psutil
 prompt_toolkit
 rich
+python-dotenv

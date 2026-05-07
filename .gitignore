@@ -9,3 +9,4 @@ data/symbols/
 **/__pycache__/chat.cpython-313.pyc
 **/chat.cpython-313.pyc
 **/__pycache__/**
+.env

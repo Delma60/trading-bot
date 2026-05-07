@@ -1,11 +1,13 @@
 import os
 import google.generativeai as genai
+from dotenv import load_dotenv
 
+load_dotenv()
 class GeminiEngine:
     """Handles all interactions with the Google Gemini API for smart fallback and reasoning."""
     
     def __init__(self, model_name: str = 'gemini-2.5-flash'):
-        self.api_key = "AIzaSyCgk6s83dhCje7ysmaS6L8eX_QKBE6_OVU"  # //os.environ.get("GEMINI_API_KEY")
+        self.api_key = os.environ.get("GEMINI_API_KEY")
         self.is_ready = False
         
         if not self.api_key:

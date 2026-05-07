@@ -3,6 +3,7 @@
     "password": "@oIt7uPp",
     "server": "MetaQuotes-Demo",
     "trading_symbols": [
+        "AUDUSD",
         "EURUSD",
         "USDJPY"
     ],

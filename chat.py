@@ -858,7 +858,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
                 # Use patch_stdout to keep the prompt safe from background prints
                 with patch_stdout():
                     try:
-                        inp = self.session.prompt("You: ").strip()
+                        inp = self.session.prompt("[You]: ").strip()
                         follow_up_match = re.search(r"(?:no,?\s*)?(?:make|change|set) it (?:to\s*)?([0-9.]+)", inp, re.IGNORECASE)
                         match = re.search(r"change (?:my )?(.*?)\s+to\s+([0-9.]+)", inp, re.IGNORECASE)
 
