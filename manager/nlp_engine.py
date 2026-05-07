@@ -108,12 +108,20 @@ class NLPEngine:
         
         # Find percentages (e.g., "1.5%", "5 percent")
         percentages = re.findall(r'(\d+(?:\.\d+)?)\s*(?:%|PERCENT)', text_upper)
-
+        
+        
+        # Extract trade direction
+        direction_match = re.search(r'\b(BUY|LONG|SELL|SHORT)\b', text_upper)
+        direction = direction_match.group(1) if direction_match else None
+        if direction == 'LONG': direction = 'BUY'
+        if direction == 'SHORT': direction = 'SELL'
+        
         return {
             "symbols": list(dict.fromkeys(symbols)) if symbols else [],  # Remove duplicates
             "timeframes": list(dict.fromkeys(timeframes)) if timeframes else [],
             "money": [float(m) for m in money_matches] if money_matches else [],
-            "percentages": [float(p) for p in percentages] if percentages else []
+            "percentages": [float(p) for p in percentages] if percentages else [],
+            "direction": direction
         }
 
 

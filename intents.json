@@ -288,7 +288,8 @@
                 "What orders are open?",
                 "List my open positions",
                 "Show me current exposure",
-                "trade USDJPY"
+                "trade USDJPY",
+                "whats the trading progress"
             ],
             "responses": [
                 "You have {position_count} open position(s). {positions}",

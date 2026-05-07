@@ -1,3 +1,4 @@
+import json 
 import time
 import threading
 import signal
@@ -7,6 +8,7 @@ from strategies.strategy_manager import StrategyManager
 from manager.risk_manager import RiskManager
 from manager.portfolio_manager import PortfolioManager
 from chat import Chatbot
+from pathlib import Path
 
 # Global shutdown flag for graceful termination
 shutdown_event = threading.Event()
@@ -40,9 +42,7 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
     notify(f"🟢 Background Scanner started. Waking up every {scan_interval_minutes} minutes.")
     
     # Define your global risk rules here (or load them from a config file)
-    BASE_RISK_PCT = 1.0
-    STOP_LOSS_PIPS = 20.0
-    MAX_DAILY_LOSS = 50.0
+    profile_path = Path("data/profile.json")
 
     while not shutdown_event.is_set():
         try:
@@ -51,12 +51,21 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
                 notify("🛑 Shutdown signal received. Scanner stopping gracefully...")
                 break
             
+            config = {}
+            if profile_path.exists():
+                with open(profile_path, "r") as f:
+                    config = json.load(f)
+                    
+            risk_pct = config.get("risk_percentage", 1.0)
+            stop_loss = config.get("stop_loss", 20.0)
+            max_daily_loss = config.get("max_daily_loss", 50.0)
+            
             # 2. Wake up and scan!
             notify("Waking up to scan markets... 🔎")
             results = portfolio_manager.evaluate_portfolio_opportunities(
-                risk_pct=BASE_RISK_PCT,
-                stop_loss=STOP_LOSS_PIPS,
-                max_daily_loss=MAX_DAILY_LOSS
+                risk_pct=risk_pct,
+                stop_loss=stop_loss,
+                max_daily_loss=max_daily_loss
             )
             
             # 3. Send the results through the agent

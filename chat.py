@@ -667,11 +667,25 @@ class Chatbot(ProfileManager, NLPEngine):
             # 2. Ask the Risk Manager if it's safe
             allowed, risk_reason = self.risk_manager.is_trading_allowed(self.max_daily_loss)
             
+            user_direction = entities.get("direction")
+            strategy_direction = signal.get('action', 'BUY')
+            
+            # 1. Determine direction
+            order_type = user_direction if user_direction else strategy_direction
+            
+            
             # 3. Formulate Reasoning
             if not allowed:
                 print(f"[Bot]: 🛑 I refuse to execute this trade. Reason: {risk_reason}")
                 return
-                
+            
+            if user_direction and strategy_direction != user_direction:
+                print(f"[Bot]: ⚠️ Warning: My technical analysis suggests {strategy_direction}, but you want to {user_direction}.")
+                override = input(f"[Bot]: Do you want to override my advice and execute a {user_direction} anyway? (y/n): ")
+                if override.lower() not in ['y', 'yes']:
+                    print("[Bot]: Trade aborted. Good call.")
+                    return
+            
             if signal['action'] != 'BUY': # Assuming user asked to buy
                 print(f"[Bot]: ⚠️ Warning: My technical analysis suggests {signal['action']}, but you want to BUY.")
                 override = input("[Bot]: Do you want to override my advice and execute anyway? (y/n): ")
@@ -722,7 +736,7 @@ class Chatbot(ProfileManager, NLPEngine):
                     print("[Bot]: I cannot execute this now. Please try again during active market hours.")
                 else:
                     print("[Bot]: 💡 Reasoning: I cannot autonomously resolve this error. Please check MT5.")
-            return 
+             
         
         elif tag == "deposit" or tag == "withdraw":
             # Deposit/Withdraw need an amount
