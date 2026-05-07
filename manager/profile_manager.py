@@ -13,6 +13,7 @@ class ProfileManager:
         
         # State
         self.config = {}
+        self.load_config()
 
     def _read_json(self, filepath: Path, default: Any = None) -> Any:
         if not filepath.exists(): return default if default is not None else {}
@@ -37,7 +38,12 @@ class ProfileManager:
         })
         self._write_json(self.profile_file, self.config)
 
+    def save_credentials(self, login, password, server):
+        self.config.update({"login": login, "password": password, "server": server})
+        self._write_json(self.profile_file, self.config)
+
     def log_interaction(self, user_input: str, intent: str, status: str = "completed"):
+        
         from datetime import datetime
         entry = {
             "timestamp": datetime.now().isoformat(),

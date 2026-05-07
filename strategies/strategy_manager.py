@@ -27,20 +27,6 @@ class StrategyManager:
     def __init__(self, broker: Trader, notify_callback=print):
         self.broker = broker
         self.notify = notify_callback
-    
-    # Keep descriptions separate from the actual strategy engines
-    descriptions = {
-        "Mean_Reversion": "Mean Reversion: Buys oversold dips, sells overbought rips.",
-        "Momentum": "Momentum: Buys when price is trending upward, sells when trending downward.",
-        "Breakout": "Breakout: Buys when price breaks above resistance, sells when breaks below support.",
-        "Scalping": "Scalping: Makes small profits from frequent, short-term trades.",
-        "News_Trading": "News Trading: Trades based on economic news and events.",
-        "Sentiment_Analysis": "Sentiment Analysis: Trades based on market sentiment.",
-        "Arbitrage": "Arbitrage: Exploits price differences between markets."
-    }
-    
-    def __init__(self, broker: Trader):
-        self.broker = broker
         
         # Instantiate engines ONCE to save memory, rather than recreating them every scan
         self.engines = {
@@ -53,6 +39,17 @@ class StrategyManager:
             "Arbitrage": ArbitrageStrategy(),
             "Trend_Following": TrendFollowingStrategy()
         }
+    
+    # Keep descriptions separate from the actual strategy engines
+    descriptions = {
+        "Mean_Reversion": "Mean Reversion: Buys oversold dips, sells overbought rips.",
+        "Momentum": "Momentum: Buys when price is trending upward, sells when trending downward.",
+        "Breakout": "Breakout: Buys when price breaks above resistance, sells when breaks below support.",
+        "Scalping": "Scalping: Makes small profits from frequent, short-term trades.",
+        "News_Trading": "News Trading: Trades based on economic news and events.",
+        "Sentiment_Analysis": "Sentiment Analysis: Trades based on market sentiment.",
+        "Arbitrage": "Arbitrage: Exploits price differences between markets."
+    }
     
     def get_strategy_description(self, strategy_name: str) -> str:
         return self.descriptions.get(strategy_name, "Unknown strategy description.")

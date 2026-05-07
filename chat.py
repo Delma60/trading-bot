@@ -17,6 +17,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Callable, Any, Optional
 
+from rich.console import Console
+from prompt_toolkit import PromptSession
 from manager.nlp_engine import NLPEngine
 from manager.portfolio_manager import PortfolioManager
 from manager.risk_manager import RiskManager
@@ -37,7 +39,8 @@ class Chatbot(ProfileManager, NLPEngine):
     SYMBOLS_CACHE_DIR = DATA_DIR / "symbols"
 
     def __init__(self, intents_filepath: str, broker: Trader, strategy_manager: StrategyManager, portfolio_manager: PortfolioManager):
-        super().__init__(intents_filepath=intents_filepath)
+        ProfileManager.__init__(self, data_dir=str(self.DATA_DIR))
+        NLPEngine.__init__(self, intents_filepath=intents_filepath, data_dir=str(self.DATA_DIR))
         self.stemmer = LancasterStemmer()
         self.intents_filepath = Path(intents_filepath)
         self.broker = broker  
@@ -60,6 +63,17 @@ class Chatbot(ProfileManager, NLPEngine):
         self.symbol_cache = []
         self.symbol_lookup = {}
 
+        # === CONTEXTUAL MEMORY: Remember trading context across turns ===
+        self.memory = {
+            "last_symbol": None,
+            "last_timeframe": "H1",
+            "last_money_amount": None
+        }
+
+        # === MULTI-TURN DIALOGUE: Track incomplete command state ===
+        self.pending_action = None  # e.g., "awaiting_trade_symbol", "awaiting_amount"
+        self.pending_data = {}      # Store data collected so far in the incomplete command
+
         # Action mappings
         self.action_mappings = {
             "active_positions": lambda _: self._format_positions_data(),
@@ -71,11 +85,10 @@ class Chatbot(ProfileManager, NLPEngine):
             "check_notifications": lambda _: self._read_inbox()
         }
 
-        self.words, self.labels, self.training, self.output = [], [], [], []
-        self.model = None
-        self.data = None
+        
+        self.console = Console()
+        self.session = PromptSession()
 
-        self._initialize_nlp()
         self._load_local_symbols()
 
     # --- IO Helpers ---
@@ -100,13 +113,20 @@ class Chatbot(ProfileManager, NLPEngine):
         """
         Background engines call this to store notifications.
         Priority values: normal, trade_executed, critical.
+        Uses patch_stdout to ensure clean output above the input prompt.
         """
         with self.inbox_lock:
             self.notification_inbox.append({"msg": msg, "priority": priority})
 
         if priority in ["critical", "trade_executed"]:
-            print(f"\n🔔 [BOT ALERT]: {msg}")
-            print("You: ", end="", flush=True)
+            from prompt_toolkit.patch_stdout import patch_stdout
+            color = "red" if priority == "critical" else "green"
+            with patch_stdout():
+                if priority == "critical":
+                    self.console.print(f"\n[bold red]🚨 CRITICAL: {msg}[/]")
+                else:
+                    self.console.print(f"\n[bold green]✅ TRADE: {msg}[/]")
+            
 
     def _read_inbox(self):
         with self.inbox_lock:
@@ -163,7 +183,7 @@ class Chatbot(ProfileManager, NLPEngine):
     def _save_local_symbol(self, symbol_data: dict):
         self.SYMBOLS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         symbol_file = self._symbol_file_path(symbol_data.get("symbol", "UNKNOWN"))
-        self._write_json(symbol_file, symbol_data)
+        self.save_credentials(symbol_file, symbol_data)
         self.symbol_cache = [item for item in self.symbol_cache if item.get("symbol", "").upper() != symbol_data.get("symbol", "").upper()]
         self.symbol_cache.append(symbol_data)
         self.symbol_lookup[symbol_data.get("symbol", "").upper()] = symbol_data
@@ -179,6 +199,12 @@ class Chatbot(ProfileManager, NLPEngine):
             if not symbol_name:
                 continue
             
+            symbol_record = {
+                "symbol": symbol_name,
+                "description": getattr(symbol, 'description', ''),
+                "bid": getattr(symbol, 'bid', 0),
+                "ask": getattr(symbol, 'ask', 0)
+            }
             symbol_data.append(symbol_record)
 
         self.symbol_cache = symbol_data
@@ -442,8 +468,48 @@ class Chatbot(ProfileManager, NLPEngine):
 
     
 
+    # def _handle_intent(self, inp: str) -> bool:
+    #     """Processes user input with entity extraction, memory, and multi-turn dialogue."""
+    #     clean_inp = inp.lower().strip()
+        
+    #     # === STEP 1: If bot is in middle of a multi-turn action, handle completion first ===
+    #     if self.pending_action:
+    #         return self._handle_pending_action(inp)
+        
+    #     # === STEP 2: Extract entities from the user's text ===
+    #     entities = self.extract_entities(inp)
+        
+    #     # === STEP 3: Update memory with newly mentioned entities ===
+    #     if entities["symbols"]:
+    #         self.memory["last_symbol"] = entities["symbols"][0]
+    #     if entities["timeframes"]:
+    #         self.memory["last_timeframe"] = entities["timeframes"][0]
+    #     if entities["money"]:
+    #         self.memory["last_money_amount"] = entities["money"][0]
+        
+    #     # === STEP 4: Handle symbol-based commands ===
+    #     if self._handle_symbol_command(inp):
+    #         return True
+
+    #     # === STEP 5: Predict intent via Keras model ===
+    #     if any(word in clean_inp for word in ["start", "scan"]):
+    #         intent_tag = "bulk_scan"
+    #         confidence = 1.0
+    #     else:
+    #         bag = self._bag_of_words(inp)
+    #         results = self.model.predict(bag, verbose=0)[0]
+    #         intent_tag = self.labels[np.argmax(results)]
+    #         confidence = results[np.argmax(results)]
+        
+    #     # === STEP 6: Execute with high confidence, or ask for clarification ===
+    #     if confidence > 0.7:
+    #         self._execute_action(intent_tag, inp, entities)
+    #         return True
+        
+    #     print("[Bot]: I'm not sure what you mean. Try asking to 'scan', 'show my symbols', or 'add AUDCAD to portfolio'.")
+    #     return False
+    
     def _handle_intent(self, inp: str) -> bool:
-        """Processes user input and routes to managers[cite: 6]."""
         clean_inp = inp.lower().strip()
         if self._handle_symbol_command(inp):
             return True
@@ -452,10 +518,8 @@ class Chatbot(ProfileManager, NLPEngine):
             self._execute_action("bulk_scan", inp)
             return True
 
-        bag = self._bag_of_words(inp)
-        results = self.model.predict(bag, verbose=0)[0]
-        tag = self.labels[np.argmax(results)]
-        confidence = results[np.argmax(results)]
+        # USE YOUR NEW INHERITED NLP METHOD HERE
+        tag, confidence = self.predict_intent(inp)
         
         if confidence > 0.7:
             self._execute_action(tag, inp)
@@ -464,8 +528,53 @@ class Chatbot(ProfileManager, NLPEngine):
         print("[Bot]: I'm not sure. Try asking to 'scan', 'show my symbols', or 'add AUDCAD to portfolio'.")
         return False
 
+    def _handle_pending_action(self, inp: str) -> bool:
+        """Handles completion of incomplete commands (multi-turn dialogue)."""
+        if self.pending_action == "awaiting_trade_symbol":
+            entities = self.extract_entities(inp)
+            if entities["symbols"]:
+                symbol = entities["symbols"][0]
+                self.memory["last_symbol"] = symbol
+                print(f"[Bot]: ✅ Executing trade for {symbol}...")
+                # Execute the pending trade with the provided symbol
+                self.pending_data["symbol"] = symbol
+                self._execute_action(self.pending_data["intent"], f"trade {symbol}", entities)
+                self.pending_action = None
+                self.pending_data = {}
+                return True
+            elif inp.lower().strip() == "cancel":
+                print("[Bot]: Trade cancelled.")
+                self.pending_action = None
+                self.pending_data = {}
+                return True
+            else:
+                print("[Bot]: I still didn't catch the symbol. Please reply with something like 'EURUSD', 'GBPUSD', or type 'cancel'.")
+                return False
+        
+        elif self.pending_action == "awaiting_amount":
+            entities = self.extract_entities(inp)
+            if entities["money"]:
+                amount = entities["money"][0]
+                self.memory["last_money_amount"] = amount
+                print(f"[Bot]: ✅ Setting amount to ${amount}...")
+                self.pending_data["amount"] = amount
+                self._execute_action(self.pending_data["intent"], inp, entities)
+                self.pending_action = None
+                self.pending_data = {}
+                return True
+            elif inp.lower().strip() == "cancel":
+                print("[Bot]: Action cancelled.")
+                self.pending_action = None
+                self.pending_data = {}
+                return True
+            else:
+                print("[Bot]: I couldn't parse the amount. Please try again with a number like '100' or '50.5', or type 'cancel'.")
+                return False
+        
+        return False
+
     def _get_intent_response(self, tag: str, live_data=None):
-        intent_data = next((item for item in self.data.get("intents", []) if item['tag'] == tag), None)
+        intent_data = next((item for item in self.intents_data.get("intents", []) if item['tag'] == tag), None)
         response_template = random.choice(intent_data['responses']) if intent_data and intent_data.get('responses') else None
 
         if isinstance(live_data, dict):
@@ -488,7 +597,31 @@ class Chatbot(ProfileManager, NLPEngine):
         elif live_data is not None:
             print("[Bot]:", live_data)
 
-    def _execute_action(self, tag: str, inp: str):
+    def _execute_action(self, tag: str, inp: str, entities: dict = None):
+        """Executes the action for a given intent, with multi-turn dialogue support."""
+        if entities is None:
+            entities = self.extract_entities(inp)
+        
+        # === Check if we need to ask for missing entities ===
+        if tag == "execute_trade":
+            # Trading needs a symbol
+            symbol = entities["symbols"][0] if entities["symbols"] else self.memory["last_symbol"]
+            if not symbol:
+                print("[Bot]: Which symbol would you like to trade? (e.g., EURUSD, GBPUSD)")
+                self.pending_action = "awaiting_trade_symbol"
+                self.pending_data = {"intent": tag}
+                return
+        
+        elif tag == "deposit" or tag == "withdraw":
+            # Deposit/Withdraw need an amount
+            amount = entities["money"][0] if entities["money"] else self.memory["last_money_amount"]
+            if not amount:
+                print("[Bot]: How much would you like to transfer? (e.g., 100, 500.50)")
+                self.pending_action = "awaiting_amount"
+                self.pending_data = {"intent": tag}
+                return
+        
+        # === Execute the action ===
         live_data = None
         if tag in self.action_mappings:
             live_data = self.action_mappings[tag](inp)
@@ -572,7 +705,16 @@ class Chatbot(ProfileManager, NLPEngine):
         print("\n[Bot]: System ready! Type 'scan' to hunt for trades. Type 'quit' to exit.")
         try:
             while True:
-                inp = input("You: ").strip()
+                # Use patch_stdout to keep the prompt safe from background prints
+                from prompt_toolkit.patch_stdout import patch_stdout
+                with patch_stdout():
+                    try:
+                        inp = self.session.prompt("You: ").strip()
+                    except EOFError:
+                        # Handle Ctrl+D (EOF)
+                        print("\n[Bot]: Initiating graceful shutdown...")
+                        break
+                
                 if not inp:
                     continue
                 if inp.lower() == "quit":

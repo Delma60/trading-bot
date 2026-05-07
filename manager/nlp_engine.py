@@ -1,5 +1,6 @@
 import json
 import pickle
+import re
 import numpy as np
 import nltk
 from nltk.stem.lancaster import LancasterStemmer
@@ -43,6 +44,30 @@ class NLPEngine:
             return random.choice(intent_data['responses'])
         return ""
 
+    def extract_entities(self, text: str) -> dict:
+        """Parses the text for trading-specific variables (entities)."""
+        text_upper = text.upper()
+        
+        # Find 6-letter trading symbols (EURUSD, GBPUSD, BTCUSD, etc.)
+        symbols = re.findall(r'\b[A-Z]{6}\b', text_upper)
+        
+        # Find timeframes (M1, M5, M15, M30, H1, H4, D1, W1, MN)
+        timeframes = re.findall(r'\b(M1|M5|M15|M30|H1|H4|D1|W1|MN)\b', text_upper)
+        
+        # Find dollar amounts (e.g., "$50", "50 bucks", "100 dollars")
+        money_matches = re.findall(r'\$?(\d+(?:\.\d+)?)\s*(?:DOLLARS|BUCKS)?', text_upper)
+        
+        # Find percentages (e.g., "1.5%", "5 percent")
+        percentages = re.findall(r'(\d+(?:\.\d+)?)\s*(?:%|PERCENT)', text_upper)
+
+        return {
+            "symbols": list(dict.fromkeys(symbols)) if symbols else [],  # Remove duplicates
+            "timeframes": list(dict.fromkeys(timeframes)) if timeframes else [],
+            "money": [float(m) for m in money_matches] if money_matches else [],
+            "percentages": [float(p) for p in percentages] if percentages else []
+        }
+
+
     # ... Move _bag_of_words, _process_data, and _build_model from old chat.py into here ...
     # (Omitted for brevity, but you just copy-paste them from your original code)
     def _bag_of_words(self, s: str) -> np.ndarray:
@@ -57,8 +82,8 @@ class NLPEngine:
         return np.array([bag])
     
     def _build_model(self):
-        if self.MODEL_FILE.exists():
-            self.model = load_model(str(self.MODEL_FILE))
+        if self.model_file.exists():
+            self.model = load_model(str(self.model_file))
         else:
             self.model = Sequential([
                 Dense(8, input_shape=(len(self.training[0]),), activation='relu'),
@@ -67,18 +92,18 @@ class NLPEngine:
             ])
             self.model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
             self.model.fit(self.training, self.output, epochs=200, batch_size=8, verbose=1)
-            self.model.save(str(self.MODEL_FILE))
+            self.model.save(str(self.model_file))
 
     
     def _process_data(self):
-        if self.DATA_PICKLE.exists():
-            with self.DATA_PICKLE.open("rb") as f:
+        if self.pickle_file.exists():
+            with self.pickle_file.open("rb") as f:
                 self.words, self.labels, self.training, self.output = pickle.load(f)
         else:
             docs_x = []
             docs_y = []
 
-            for intent in self.data['intents']:
+            for intent in self.intents_data['intents']:
                 for pattern in intent['patterns']:
                     wrds = nltk.word_tokenize(pattern)
                     self.words.extend(wrds)
@@ -108,7 +133,7 @@ class NLPEngine:
             self.training = np.array(self.training)
             self.output = np.array(self.output)
 
-            with self.DATA_PICKLE.open("wb") as f:
+            with self.pickle_file.open("wb") as f:
                 pickle.dump((self.words, self.labels, self.training, self.output), f)
 
     

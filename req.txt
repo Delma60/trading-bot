@@ -8,3 +8,5 @@ nltk
 tensorflow
 requests
 psutil
+prompt_toolkit
+rich
