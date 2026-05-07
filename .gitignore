@@ -6,6 +6,6 @@ data/profile.json
 data/stats.json
 data/portfolio_config.json
 data/symbols/
-**/__pycache__/**
 **/__pycache__/chat.cpython-313.pyc
 **/chat.cpython-313.pyc
+**/__pycache__/**

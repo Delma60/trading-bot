@@ -696,10 +696,7 @@ class Chatbot(ProfileManager, NLPEngine):
                     
             print(f"[Bot]: Logic checks passed. Executing trade for {symbol}.")
             
-            # === TRUE AGENTIC EXECUTION & SELF-CORRECTION ===
-            
-            # 1. Determine direction (Assume user agrees with Strategy Engine if they didn't specify)
-            order_type = signal.get('action', 'BUY')
+          
             
             # 2. Start with a standard lot size (you can link this to Risk Manager later)
             proposed_lots = 0.10 

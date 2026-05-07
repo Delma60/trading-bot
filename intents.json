@@ -536,7 +536,8 @@
                 "What is my risk management setup?",
                 "status report",
                 "trading status",
-                "account summary"
+                "account summary",
+                "status"
             ],
             "responses": [
                 "Trading Config - Symbols: {symbols} | Target: {target_profit} | Stop Loss: {stop_loss} | Risk: {risk_percentage}% | Max Daily Loss: {max_daily_loss} | Timeframes: {timeframes}",

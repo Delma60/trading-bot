@@ -107,11 +107,20 @@ class RiskManager:
         max_risk_usd = account.balance * (actual_risk_pct / 100)
         
         # 4. Calculate Position Size (Lots)
-        estimated_pip_value_per_lot = 10.0 
         safe_sl_pips = stop_loss_pips if stop_loss_pips > 0 else 20.0 
         
-        optimal_lots = max_risk_usd / (safe_sl_pips * estimated_pip_value_per_lot)
-        optimal_lots = max(0.01, round(optimal_lots, 2)) # Enforce MT5 minimums
+        # Convert Pips to Points (1 Standard Forex Pip = 10 MT5 Points)
+        safe_sl_points = int(safe_sl_pips * 10)
+        
+        # Call the new function directly! It handles all the MT5 tick math and min/max limits.
+        optimal_lots = self.calculate_position_size(symbol, max_risk_usd, safe_sl_points)
+        
+        # If the risk is too small to meet the broker's minimum lot size, abort the trade.
+        if optimal_lots == 0.0:
+             return {
+                "approved": False,
+                "reason": f"Target risk (${max_risk_usd:.2f}) is too small to meet the minimum lot size for {symbol}.",
+            }
 
         return {
             "approved": True,
@@ -122,4 +131,57 @@ class RiskManager:
             "applied_risk_pct": actual_risk_pct,
             "stop_loss_pips": safe_sl_pips
         }
+    
+    def calculate_micro_lot(self) -> float:
+        return 0.01 # MT5 standard micro-lot
+
+    def calculate_position_size(self, symbol: str, risk_amount_usd: float, stop_loss_points: int) -> float:
+        """
+        Dynamically calculates the correct lot size based on the specific asset's tick value.
         
+        :param symbol: The ticker (e.g., 'EURUSD', 'XAUUSD')
+        :param risk_amount_usd: The maximum amount of money willing to lose on this trade.
+        :param stop_loss_points: The stop loss distance in POINTS (not pips). 
+                                Points = the smallest price movement (tick_size).
+        """
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            print(f"[Risk Manager] Failed to get symbol info for {symbol}")
+            return 0.0
+
+        # 1. Fetch dynamic tick data from the broker
+        tick_value = symbol_info.trade_tick_value 
+        tick_size = symbol_info.trade_tick_size
+
+        if tick_value == 0 or tick_size == 0:
+            print(f"[Risk Manager] Tick value/size is 0 for {symbol}. Cannot calculate risk.")
+            return 0.0
+
+        # 2. Calculate the monetary risk for 1 standard lot
+        # If 1 lot moves by the stop loss distance, how much money do we lose?
+        risk_per_1_lot = stop_loss_points * tick_value
+
+        # 3. Calculate exact required lot size to match our target risk
+        raw_lot_size = risk_amount_usd / risk_per_1_lot
+
+        # 4. Normalize the lot size to broker rules (min, max, and step)
+        min_lot = symbol_info.volume_min
+        max_lot = symbol_info.volume_max
+        step_lot = symbol_info.volume_step
+
+        # Round down to the nearest allowed step (e.g., 0.01 micro lots)
+        # Using round() with division and multiplication ensures precision
+        clean_lot_size = (int(raw_lot_size / step_lot)) * step_lot
+
+        # 5. Clamp limits to prevent broker rejection errors
+        if clean_lot_size < min_lot:
+            print(f"[Risk Manager] Risk too small. Calculated {clean_lot_size}, but broker min is {min_lot}")
+            # Return 0.0 to abort the trade, or return min_lot if you accept the higher risk
+            return 0.0 
+            
+        if clean_lot_size > max_lot:
+            print(f"[Risk Manager] Warning: Clamping lot size to broker max ({max_lot})")
+            return max_lot
+
+        # Return rounded to 2 decimal places to avoid MT5 floating point rejection errors
+        return round(clean_lot_size, 2)
