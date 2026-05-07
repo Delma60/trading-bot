@@ -118,13 +118,14 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         with self.inbox_lock:
             self.notification_inbox.append({"msg": msg, "priority": priority})
 
-        if priority in ["critical", "trade_executed"]:
-            from prompt_toolkit.patch_stdout import patch_stdout
-            with patch_stdout():
-                if priority == "critical":
-                    print(f"\n🚨 CRITICAL: {msg}")
-                else:
-                    print(f"\n✅ TRADE: {msg}")
+        from prompt_toolkit.patch_stdout import patch_stdout
+        with patch_stdout():
+            if priority == "critical":
+                print(f"\n🚨 CRITICAL: {msg}")
+            elif priority == "trade_executed":
+                print(f"\n✅ TRADE: {msg}")
+            else:
+                print(f"\nℹ️ {msg}")
             
 
     def _read_inbox(self):
