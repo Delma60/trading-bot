@@ -50,12 +50,23 @@ class ProfileManager:
         account = self.broker.getAccountInfo()
         if not account:
             return "⚠️ Failed to retrieve account information from broker."
+        
+        high_mark = getattr(self.risk_manager, 'daily_high_watermark', account.equity)
+        low_mark = getattr(self.risk_manager, 'daily_low_watermark', account.equity)
+        
+        # If low watermark is infinity (no ticks yet), format it cleanly
+        if low_mark == float('inf'):
+            low_mark = account.equity
             
         return {
             "Balance": f"${account.balance:,.2f}",
             "Equity": f"${account.equity:,.2f}",
             "Floating PnL": f"${account.profit:,.2f}",
-            "Margin Level": f"{account.margin_level:.2f}%" if account.margin_level else "N/A"
+            "Margin Level": f"{account.margin_level:.2f}%" if account.margin_level else "N/A",
+            "Daily High Watermark": f"${high_mark:,.2f}",
+            "Daily Low Watermark": f"${low_mark:,.2f}",
+            "Daily Drawdown": f"${(high_mark - low_mark):,.2f}"
+            
         }
 
     def _format_positions_data(self):

@@ -93,12 +93,16 @@ class RiskManager:
         current_equity = account.equity
         trailing_drawdown = self.daily_high_watermark - current_equity
         actual_risk_pct = base_risk_pct
+        bounce_from_low = (current_equity - self.daily_low_watermark) / self.daily_low_watermark if self.daily_low_watermark > 0 else 0.0
 
         # 2. Dynamic Risk Scaling (If down 60% from the peak, cut risk in half to survive)
         if max_daily_loss > 0 and trailing_drawdown > (max_daily_loss * 0.6):
             actual_risk_pct = base_risk_pct / 2.0
             self.notify(f"[Risk Manager]: ⚠️ Drawdown from peak is ${trailing_drawdown:.2f}. Scaling risk down to {actual_risk_pct}%.")
-            
+        elif bounce_from_low > 0 and bounce_from_low < (max_daily_loss * 0.3):
+            actual_risk_pct = base_risk_pct / 1.5
+            self.notify(f"[Risk Manager]: 📈 Bouncing from daily low. Adjusting risk to {actual_risk_pct}%.")
+
         # 3. Calculate Risk in Dollars
         max_risk_usd = account.balance * (actual_risk_pct / 100)
         
@@ -119,40 +123,3 @@ class RiskManager:
             "stop_loss_pips": safe_sl_pips
         }
         
-        """Calculates exact lot size and dynamically scales risk if taking losses."""
-        
-        # 1. First, check if we are even allowed to trade
-        allowed, reason = self.is_trading_allowed(max_daily_loss)
-        if not allowed:
-            return {"approved": False, "reason": reason}
-
-        account = self.broker.getAccountInfo()
-        floating_loss = account.balance - account.equity
-        realized_loss = self._get_realized_daily_loss()
-        current_daily_loss = floating_loss + realized_loss
-        actual_risk_pct = base_risk_pct
-
-        # 2. Dynamic Risk Scaling (If down 60% of daily limit, cut risk in half)
-        if max_daily_loss > 0 and current_daily_loss > (max_daily_loss * 0.6):
-            actual_risk_pct = base_risk_pct / 2.0
-            self.notify(f"[Risk Manager]: ⚠️ Approaching daily loss limit. Risk scaled down to {actual_risk_pct}%.")
-        # 3. Calculate Risk in Dollars
-        max_risk_usd = account.balance * (actual_risk_pct / 100)
-        
-        # 4. Calculate Position Size (Lots)
-        # Using a standard fallback: $10 per pip for 1 standard lot
-        estimated_pip_value_per_lot = 10.0 
-        safe_sl_pips = stop_loss_pips if stop_loss_pips > 0 else 20.0 
-        
-        optimal_lots = max_risk_usd / (safe_sl_pips * estimated_pip_value_per_lot)
-        optimal_lots = max(0.01, round(optimal_lots, 2)) # Enforce MT5 minimums
-
-        return {
-            "approved": True,
-            "reason": "Clearance granted.",
-            "symbol": symbol,
-            "lots": optimal_lots,
-            "risk_usd": max_risk_usd,
-            "applied_risk_pct": actual_risk_pct,
-            "stop_loss_pips": safe_sl_pips
-        }
