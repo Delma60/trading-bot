@@ -224,16 +224,30 @@ class PortfolioManager:
     
                         # The bot "Reasons" about the failure
                         if "margin" in error_reason.lower():
-                            print("[Bot]: ⚠️ Trade rejected due to low margin.")
-                            print("[Bot]: Let me calculate a smaller lot size that fits your current equity...")
-                            # Bot autonomously calculates a new lot size and asks to try again
                             new_lots = self.risk_manager.calculate_micro_lot() 
-                            print(f"[Bot]: I can execute this at {new_lots} lots instead. Proceed? (y/n)")
+                            self.notify(f"⚠️ [Scanner]: Margin rejection for {symbol}. Attempting recovery execution at {new_lots} micro-lots.")
                             
+                            # Try one more time with the smallest possible size
+                            retry_exec = self.broker.execute_trade(
+                                symbol=symbol,
+                                action=signal['action'],
+                                lots=new_lots,
+                                stop_loss_pips=sl_pips,
+                                take_profit_pips=sl_pips * 2.0
+                            )
+                            
+                            if retry_exec["success"]:
+                                ticket = retry_exec["ticket"]
+                                results.append(f"🟢 RECOVERY EXECUTED -> {symbol}: {signal['action']} | Size: {new_lots} | Ticket: #{ticket}")
+                            else:
+                                results.append(f"❌ RECOVERY FAILED -> {symbol}: {retry_exec['reason']}")
+                                
                         elif "market closed" in error_reason.lower():
-                            print(f"[Bot]: The market for {symbol} is currently closed.")
-                            print("[Bot]: I have added this to my internal queue. I will automatically execute it when the bell rings.")
+                            self.notify(f"⏳ [Scanner]: Market for {symbol} is closed. Bypassing signal.")
+                            results.append(f"⏳ MARKET CLOSED -> {symbol}")
         
+                        else:
+                            results.append(f"⚠️ EXECUTION FAILED -> {symbol}: {signal['action']} | Reason: {error_reason}")
                     else:
                         reason = exec_result["reason"]
                         results.append(f"⚠️ EXECUTION FAILED -> {symbol}: {signal['action']} | Reason: {reason}")

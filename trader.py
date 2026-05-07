@@ -149,7 +149,20 @@ class Trader:
         elif order_type == mt5.ORDER_TYPE_SELL:
             if stop_loss_pips > 0: sl_price = price + (stop_loss_pips * pip_multiplier * point)
             if take_profit_pips > 0: tp_price = price - (take_profit_pips * pip_multiplier * point)
-
+        
+        filling_mode = symbol_info.filling_mode
+        
+        # Check supported modes using bitwise AND operator
+        if filling_mode & mt5.SYMBOL_FILLING_FOK:
+            # FOK (Fill Or Kill) - Complete volume must be filled, or the order is canceled.
+            # This is the standard requirement for most strict Forex/ECN brokers.
+            type_filling = mt5.ORDER_FILLING_FOK
+        elif filling_mode & mt5.SYMBOL_FILLING_IOC:
+            # IOC (Immediate Or Cancel) - Fill what you can immediately, cancel the rest.
+            type_filling = mt5.ORDER_FILLING_IOC
+        else:
+            # RETURN - Standard market execution, allowed to be partially filled and remain on the book.
+            type_filling = mt5.ORDER_FILLING_RETURN
         # 4. Build the MT5 Request Dictionary
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -163,7 +176,7 @@ class Trader:
             "magic": 234000,          # Unique Bot ID (helps you identify bot trades vs manual)
             "comment": "AI Bot Trade",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC, # Immediate or Cancel
+            "type_filling": type_filling, # Immediate or Cancel
         }
 
         # 5. Send the order!

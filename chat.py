@@ -1,22 +1,18 @@
 
-import os
 import json
-import pickle
 import random
 import re
 import getpass
 import threading
-import numpy as np
 import pandas as pd
-import nltk
 from nltk.stem.lancaster import LancasterStemmer
 import tensorflow as tf
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Dense
 from pathlib import Path
 from datetime import datetime
 from typing import Callable, Any, Optional
 from prompt_toolkit.patch_stdout import patch_stdout
+
+from manager.gemini_engine import GeminiEngine
 
 from rich.console import Console
 from prompt_toolkit import PromptSession
@@ -27,7 +23,7 @@ from manager.profile_manager import ProfileManager
 from strategies.strategy_manager import StrategyManager
 from trader import Trader
 
-class Chatbot(ProfileManager, NLPEngine):
+class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
     """Handles NLP, Model Training, and the conversational trading interface."""
     
     # Centralized file paths
@@ -42,6 +38,7 @@ class Chatbot(ProfileManager, NLPEngine):
     def __init__(self, intents_filepath: str, broker: Trader, strategy_manager: StrategyManager, portfolio_manager: PortfolioManager, risk_manager: RiskManager):
         ProfileManager.__init__(self, data_dir=str(self.DATA_DIR))
         NLPEngine.__init__(self, intents_filepath=intents_filepath, data_dir=str(self.DATA_DIR))
+        GeminiEngine.__init__(self)
         self.stemmer = LancasterStemmer()
         self.intents_filepath = Path(intents_filepath)
         self.broker = broker  
@@ -508,11 +505,27 @@ class Chatbot(ProfileManager, NLPEngine):
         if confidence >= 0.75:
             self._execute_action(intent_tag, inp, entities)
             return True
-        elif 0.50 <= confidence < 0.75:
-            print(f"[Bot]: I'm {int(confidence*100)}% sure you want to '{intent_tag}'. Is that correct? (y/n)")
-            self.pending_action = "confirm_learning"
-            self.pending_data = {"predicted_tag": intent_tag, "original_input": inp}
-            return True
+        elif 0.30 <= confidence < 0.75:
+            print("[Bot]: I'm a bit unsure. Asking my Gemini brain to confirm...")
+            
+            # 1. Load valid intents from your JSON
+            with open(self.INTENTS_FILE, 'r') as f:
+                valid_intents = [i['tag'] for i in json.load(f)['intents']]
+            
+            gemini_intent = self.route_intent(inp, valid_intents, intent_tag)
+            
+            # 3. Execute the result
+            if gemini_intent != "UNKNOWN":
+                print(f"[Bot]: Gemini mapped this to '{gemini_intent}'. Executing!")
+                self._execute_action(gemini_intent, inp, entities)
+                return True
+            else:
+                # Fallback to the old manual confirmation if Gemini fails or is offline
+                print(f"[Bot]: Even my Gemini brain couldn't figure that out.")
+                print(f"[Bot]: I'm {int(confidence*100)}% sure you want to '{intent_tag}'. Is that correct? (y/n)")
+                self.pending_action = "confirm_learning"
+                self.pending_data = {"predicted_tag": intent_tag, "original_input": inp}
+                return True
 
         # Low confidence: Total failure
         else:
