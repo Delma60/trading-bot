@@ -64,11 +64,15 @@ class RiskManager:
         # Reset watermark at midnight, or initialize on first run
         if self.watermark_date != today:
             self.daily_high_watermark = max(account.balance, current_equity)
+            self.daily_low_watermark = min(account.balance, current_equity)
             self.watermark_date = today
         elif current_equity > self.daily_high_watermark:
             # Update the high watermark as the portfolio grows!
             self.daily_high_watermark = current_equity
-            
+        elif current_equity < self.daily_low_watermark:
+            # Update the low watermark as the portfolio shrinks!
+            self.daily_low_watermark = current_equity
+
         # Calculate the drawdown from the PEAK, not the starting balance
         trailing_drawdown = self.daily_high_watermark - current_equity
         
