@@ -42,6 +42,48 @@ class ProfileManager:
         self.config.update({"login": login, "password": password, "server": server})
         self._write_json(self.profile_file, self.config)
 
+    def _format_account_data(self):
+        """Fetches and formats live MT5 account data."""
+        if not self.broker.connected:
+            return "⚠️ Cannot fetch account data. MT5 is not connected."
+            
+        account = self.broker.getAccountInfo()
+        if not account:
+            return "⚠️ Failed to retrieve account information from broker."
+            
+        return {
+            "Balance": f"${account.balance:,.2f}",
+            "Equity": f"${account.equity:,.2f}",
+            "Floating PnL": f"${account.profit:,.2f}",
+            "Margin Level": f"{account.margin_level:.2f}%" if account.margin_level else "N/A"
+        }
+
+    def _format_positions_data(self):
+        """Fetches and formats open MT5 trades."""
+        if not self.broker.connected:
+            return "⚠️ Cannot fetch positions. MT5 is not connected."
+            
+        positions = self.broker.getPositions()
+        if not positions:
+            return "You currently have no active trades."
+            
+        pos_strings = []
+        for p in positions:
+            # MT5 position types: 0 = BUY, 1 = SELL
+            action = "BUY" if p.type == 0 else "SELL"
+            pos_strings.append(f"• {p.symbol}: {action} {p.volume} lots | Open: {p.price_open} | Profit: ${p.profit:,.2f}")
+            
+        return "\n".join(pos_strings)
+
+    def _format_settings_data(self):
+        """Displays the current risk and portfolio configuration."""
+        return {
+            "Watchlist": ", ".join(self.trading_symbols) if self.trading_symbols else "Empty",
+            "Risk Per Trade": f"{self.risk_percentage}%",
+            "Target Profit": f"${self.target_profit}",
+            "Max Daily Loss Limit": f"${self.max_daily_loss}"
+        }
+
     def log_interaction(self, user_input: str, intent: str, status: str = "completed"):
         
         from datetime import datetime

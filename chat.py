@@ -500,16 +500,16 @@ class Chatbot(ProfileManager, NLPEngine):
             intent_tag = "bulk_scan"
             confidence = 1.0
         else:
-            tag, confidence = self.predict_intent(inp)
+            intent_tag, confidence = self.predict_intent(inp)
         
         # === STEP 6: Execute with high confidence, or ask for clarification ===
         if confidence >= 0.75:
             self._execute_action(intent_tag, inp, entities)
             return True
         elif 0.50 <= confidence < 0.75:
-            print(f"[Bot]: I'm {int(confidence*100)}% sure you want to '{tag}'. Is that correct? (y/n)")
+            print(f"[Bot]: I'm {int(confidence*100)}% sure you want to '{intent_tag}'. Is that correct? (y/n)")
             self.pending_action = "confirm_learning"
-            self.pending_data = {"predicted_tag": tag, "original_input": inp}
+            self.pending_data = {"predicted_tag": intent_tag, "original_input": inp}
             return True
 
         # Low confidence: Total failure
@@ -566,7 +566,7 @@ class Chatbot(ProfileManager, NLPEngine):
                 print("[Bot]: I couldn't parse the amount. Please try again with a number like '100' or '50.5', or type 'cancel'.")
                 return False
         
-        if self.pending_action == "confirm_learning":
+        elif self.pending_action == "confirm_learning":
             tag = self.pending_data["predicted_tag"]
             original_input = self.pending_data["original_input"]
             
@@ -582,6 +582,13 @@ class Chatbot(ProfileManager, NLPEngine):
                 print("[Bot]: Ah, my mistake! Action cancelled.")
                 
             # Clear the pending state
+            self.pending_action = None
+            self.pending_data = {}
+            return True
+        
+        elif self.pending_action == "teach_new_phrase":
+            # For now, we just reset. (In the future, you can build a menu here to pick the right intent).
+            print("[Bot]: Let's start over. What would you like to do?")
             self.pending_action = None
             self.pending_data = {}
             return True
@@ -619,7 +626,13 @@ class Chatbot(ProfileManager, NLPEngine):
         
         # === Check if we need to ask for missing entities ===
         if tag == "execute_trade":
-            symbol = entities["symbols"][0]
+            symbol = entities["symbols"][0] if entities["symbols"] else self.memory.get("last_symbol")
+            
+            if not symbol:
+                print("[Bot]: Which symbol would you like to trade? (e.g., EURUSD)")
+                self.pending_action = "awaiting_trade_symbol"
+                self.pending_data = {"intent": tag}
+                return
             
             print(f"[Bot]: Thinking... Analyzing {symbol}...")
             

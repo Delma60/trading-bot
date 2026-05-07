@@ -22,7 +22,8 @@
                 "Alright, I will consider that in my analysis.",
                 "Got it, I will use that information moving forward.",
                 "Thanks for providing that context!",
-                "Understood, I will factor that into my decisions."
+                "Understood, I will factor that into my decisions.",
+                "okay"
             ],
             "responses": [
                 "Thanks for the information! Let me know if you have any other details to share.",
@@ -150,7 +151,8 @@
                 "What is my used margin?",
                 "How many lots am I trading?",
                 "Show balance and equity",
-                "What is my margin level?"
+                "What is my margin level?",
+                "check balance"
             ],
             "responses": [
                 "Your balance is {balance} with equity at {equity}. Free margin available: {free_margin}.",
@@ -285,7 +287,8 @@
                 "Show active trades",
                 "What orders are open?",
                 "List my open positions",
-                "Show me current exposure"
+                "Show me current exposure",
+                "trade USDJPY"
             ],
             "responses": [
                 "You have {position_count} open position(s). {positions}",

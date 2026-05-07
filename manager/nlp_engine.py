@@ -68,17 +68,23 @@ class NLPEngine:
         # 3. Retrain the model in the background so the chat doesn't freeze
         notify_callback(f"🧠 I am learning! Retraining my neural network in the background...", priority="normal")
         
-        def background_training():
-            try:
-                self._process_data()
-                self._build_model()
-                notify_callback(f"✅ Learning complete! I will now remember that phrase.", priority="normal")
-            except Exception as e:
-                notify_callback(f"⚠️ Error during retraining: {e}", priority="normal")
+    def background_training(self):
+        try:
+            # 1. Force delete the old memory caches so it doesn't just reload them!
+            if self.pickle_file.exists():
+                self.pickle_file.unlink()
+            if self.model_file.exists():
+                self.model_file.unlink()
+            
+            # 2. Rebuild the brain from the freshly updated intents.json
+            self._process_data()
+            self._build_model()
+            
+            # notify_callback(f"✅ Learning complete! I am now fully updated.", priority="normal")
+        except Exception as e:
+            pass
+            # notify_callback(f"⚠️ Error during retraining: {e}", priority="normal")
                 
-        threading.Thread(target=background_training, daemon=True).start()
-        return True
-
     def get_response_template(self, tag: str) -> str:
         """Fetches a random response string for a given intent tag."""
         import random
