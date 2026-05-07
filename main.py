@@ -34,12 +34,12 @@ def agent_notify(msg: str, priority: str = "normal"):
     else:
         _default_agent_notify(msg, priority)
 
-def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minutes: int = 15, notify=agent_notify):
+def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_seconds: int = 3, notify=agent_notify):
     """
     This runs in the background forever. It wakes up, scans the market, 
     executes trades if it finds any, and goes back to sleep.
     """
-    notify(f"🟢 Background Scanner started. First scan will run immediately, then every {scan_interval_minutes} minutes.")
+    notify(f"🟢 Real-time Market Watch started. Scanning every {scan_interval_seconds} seconds.")
     
     # Define your global risk rules here (or load them from a config file)
     profile_path = Path("data/profile.json")
@@ -54,8 +54,31 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
             risk_pct = config.get("risk_percentage", 1.0)
             stop_loss = config.get("stop_loss", 20.0)
             max_daily_loss = config.get("max_daily_loss", 50.0)
+            daily_target = config.get("daily_goal", 10.0)
+            session_target = config.get("target_profit", 1.0) * len(config.get("trading_symbols", []))
             
-            # 1. Wake up and scan immediately
+            # 1. Check total realized profit for today
+            today_profit = portfolio_manager.broker.get_daily_realized_profit()
+            
+            # 2. Check floating profit of open trades (the current session)
+            floating_profit = portfolio_manager.broker.get_total_floating_profit()
+            
+            # 3. Have we hit the daily goal?
+            if today_profit + floating_profit >= daily_target:
+                notify(f"🎉 Daily Goal of ${daily_target} reached! Closing all trades and sleeping until tomorrow.")
+                portfolio_manager.broker.close_all_positions()
+                # Sleep until tomorrow
+                import time
+                time.sleep(86400)  # 24 hours
+                continue
+            
+            # 4. Have we hit the session goal?
+            if floating_profit >= session_target:
+                notify(f"✅ Session Goal of ${session_target} reached! Closing basket and starting a new cycle.")
+                portfolio_manager.broker.close_all_positions()
+                # Continue to next scan
+            
+            # 5. Wake up and scan
             notify("Waking up to scan markets... 🔎")
             results = portfolio_manager.evaluate_portfolio_opportunities(
                 risk_pct=risk_pct,
@@ -63,13 +86,19 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
                 max_daily_loss=max_daily_loss
             )
             
-            # 2. Send the results through the agent
+            # 6. Send the results through the agent
             for result in results:
                 priority = "trade_executed" if "EXECUTED" in result else "critical" if "🛑" in result or "FATAL" in result else "normal"
                 notify(result, priority=priority)
 
-            # 3. Wait for the next scan interval, unless shutdown was requested
-            if shutdown_event.wait(scan_interval_minutes * 60):
+            # 7. Brief pause to prevent CPU overload before the next real-time scan
+            # Wait in small increments to allow quick shutdown response
+            wait_time = 0
+            while wait_time < scan_interval_seconds and not shutdown_event.is_set():
+                time.sleep(0.1)  # Check every 100ms
+                wait_time += 0.1
+            
+            if shutdown_event.is_set():
                 notify("🛑 Shutdown signal received. Scanner stopping gracefully...")
                 break
                 
@@ -105,7 +134,7 @@ if __name__ == "__main__":
     # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
         target=autonomous_scanner,
-        args=(portfolio_manager, 1, agent_notify)
+        args=(portfolio_manager, 3, agent_notify)
     )
     scanner_thread.daemon = False
     scanner_thread.start()

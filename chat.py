@@ -54,6 +54,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
 
         # Trading configuration state
         self.trading_symbols = []
+        self.daily_goal = 0.0
         self.target_profit = 0.0
         self.stop_loss = 0.0
         self.risk_percentage = 0.0
@@ -407,9 +408,17 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         self.risk_percentage = parsed["risk"]
         
         if parsed["daily_profit"] > 0:
-            trades = self._get_validated_input("[Bot]: Expected trades per day? ", int, lambda x: x > 0, "Enter a number > 0.")
-            self.target_profit = round(parsed["daily_profit"] / trades, 2)
-            print(f"[Bot]: Target per trade set to ${self.target_profit}.")
+            self.daily_goal = parsed["daily_profit"]
+            
+            # Example: We want to make 10% of our daily goal per session
+            session_goal = self.daily_goal / 10.0 
+            
+            # Spread the session goal across your active symbols
+            active_symbols_count = len(self.trading_symbols) if self.trading_symbols else 1
+            self.target_profit = round(session_goal / active_symbols_count, 2)
+            
+            print(f"[Bot]: Daily Goal set to ${self.daily_goal}.")
+            print(f"[Bot]: Session target is ${session_goal}. With {active_symbols_count} symbols, target per trade is ${self.target_profit}.")
 
         # Fill remaining gaps[cite: 6]
         if not self.trading_symbols:
@@ -427,6 +436,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         config = self._read_json(self.PROFILE_FILE)
         config.update({
             "trading_symbols": self.trading_symbols,
+            "daily_goal": self.daily_goal,
             "target_profit": self.target_profit,
             "stop_loss": self.stop_loss,
             "risk_percentage": self.risk_percentage,
@@ -450,6 +460,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         config = self._read_json(self.PROFILE_FILE)
         if "trading_symbols" in config:
             self.trading_symbols = config.get("trading_symbols", [])
+            self.daily_goal = config.get("daily_goal", 0.0)
             self.target_profit = config.get("target_profit", 0.0)
             self.stop_loss = config.get("stop_loss", 0.0)
             self.risk_percentage = config.get("risk_percentage", 0.0)
@@ -698,7 +709,8 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             signal = self.strategy_manager.check_signals(symbol)
             
             # 2. Ask the Risk Manager if it's safe
-            allowed, risk_reason = self.risk_manager.is_trading_allowed(self.max_daily_loss)
+            portfolio_size = len(self.trading_symbols) if self.trading_symbols else 1
+            allowed, risk_reason = self.risk_manager.is_trading_allowed(symbol, self.max_daily_loss, portfolio_size)
             
             user_direction = entities.get("direction")
             strategy_direction = signal.get('action', 'BUY')

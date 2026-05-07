@@ -179,12 +179,33 @@ class PortfolioManager:
         return self.available_strategies[best_strategy_index]
 
     def evaluate_portfolio_opportunities(self, risk_pct: float, stop_loss: float, max_daily_loss: float) -> list:
-        allowed, reason = self.risk_manager.is_trading_allowed(max_daily_loss)
-        if not allowed:
-            return [f"🛑 Portfolio Halt: {reason}"]
-
         results = []
-        for symbol in self.master_watchlist:
+        portfolio_size = len(self.master_watchlist)
+        
+        # Count open positions for each symbol
+        positions = self.broker.getPositions() or []
+        symbol_counts = {symbol: 0 for symbol in self.master_watchlist}
+        for p in positions:
+            if p.symbol in symbol_counts:
+                symbol_counts[p.symbol] += 1
+                
+        # Sort symbols by number of open positions (Ascending)
+        # Symbols with 0 open positions get priority!
+        prioritized_symbols = sorted(self.master_watchlist, key=lambda s: symbol_counts[s])
+
+        for symbol in prioritized_symbols:
+            # 1. Ask Risk Manager if this specific symbol is allowed to trade right now
+            allowed, reason = self.risk_manager.is_trading_allowed(
+                symbol=symbol, 
+                max_daily_loss=max_daily_loss,
+                portfolio_size=portfolio_size
+            )
+            
+            if not allowed:
+                # Skip this symbol and move to the next one in the queue
+                results.append(f"⚠️ {symbol}: Skipped. {reason}")
+                continue
+                
             # Get the state to feed the AI (and to log it if we take a trade!)
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
@@ -193,11 +214,12 @@ class PortfolioManager:
             
             if signal and signal.get('action') != 'WAIT':
                 trade_plan = self.risk_manager.calculate_safe_trade(
-                    symbol=symbol, base_risk_pct=risk_pct, stop_loss_pips=stop_loss, max_daily_loss=max_daily_loss
+                    symbol=symbol, base_risk_pct=risk_pct, stop_loss_pips=stop_loss, max_daily_loss=max_daily_loss, portfolio_size=portfolio_size
                 )
                 
                 if trade_plan["approved"]:
-                    lots = trade_plan["lots"]
+                    # For session-based trading, use micro-lots to prevent large position blowups
+                    lots = self.risk_manager.calculate_micro_lot()  # Returns 0.01
                     sl_pips = trade_plan["stop_loss_pips"]
                     
                     exec_result = self.broker.execute_trade(

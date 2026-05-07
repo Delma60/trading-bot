@@ -6,7 +6,9 @@
             "USDJPY",
             "AUDUSD",
             "USDCHF",
-            "AUDCAD"
+            "AUDCAD",
+            "NZDUSD",
+            "USDRUB"
         ]
     },
     "allocation_limits": {

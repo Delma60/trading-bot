@@ -5,13 +5,19 @@
     "trading_symbols": [
         "USDCNH",
         "AUDCAD",
-        "EURUSD"
+        "EURUSD",
+        "GBPUSD",
+        "USDCHF",
+        "AUDUSD",
+        "NZDUSD",
+        "USDRUB"
     ],
     "target_profit": 10.0,
     "stop_loss": 5.0,
     "risk_percentage": 1.0,
-    "max_daily_loss": 100000.0,
+    "max_daily_loss": 500.0,
     "preferred_timeframes": [
         "H1"
-    ]
+    ],
+    "daily_goal": 0.0
 }

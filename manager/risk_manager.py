@@ -1,5 +1,5 @@
 # risk_manager.py
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import MetaTrader5 as mt5
 from datetime import datetime
 import math
@@ -42,19 +42,35 @@ class RiskManager:
             self.notify(f"[Risk Manager]: Warning - could not fetch realized losses: {e}")
             return 0.0
 
-    def is_trading_allowed(self, max_daily_loss: float) -> tuple[bool, str]:
-        """A hard check to see if the system is allowed to take ANY trades right now."""
+    def is_trading_allowed(self, symbol: str, max_daily_loss: float, portfolio_size: int) -> tuple[bool, str]:
+        """A detailed check verifying global exposure, symbol exposure, and profitability."""
         account = self.broker.getAccountInfo()
         if not account:
             return False, "Could not fetch account data from broker."
 
-        # 1. Check Max Open Trades
         positions = self.broker.getPositions()
+        
+        # 1. Global Exposure Limit (Max trades = Number of symbols in portfolio)
         current_open_trades = len(positions) if positions else 0
-        if current_open_trades >= self.max_open_trades:
-            return False, f"Max exposure reached ({current_open_trades}/{self.max_open_trades} trades)."
+        if current_open_trades >= portfolio_size:
+            return False, f"Global exposure reached ({current_open_trades}/{portfolio_size} trades)."
 
-        # 2. Check Margin Level
+        # 2. Check Specific Symbol Limits
+        if positions:
+            symbol_positions = [p for p in positions if p.symbol == symbol]
+            symbol_trade_count = len(symbol_positions)
+
+            # Rule A: Max 3 trades per symbol
+            if symbol_trade_count >= 3:
+                return False, f"Max symbol exposure reached for {symbol} ({symbol_trade_count}/3 trades)."
+
+            # Rule B: Are any of the current positions for this symbol losing money?
+            # If so, do not enter again (No averaging down)
+            for pos in symbol_positions:
+                if pos.profit < 0:
+                    return False, f"{symbol} currently has a losing position (${pos.profit}). No new entries allowed."
+
+        # 3. Check Margin Level
         if account.margin_level and account.margin_level < self.min_margin_level:
             return False, f"Margin level too low ({account.margin_level:.1f}%). Minimum is {self.min_margin_level}%."
 
@@ -82,11 +98,11 @@ class RiskManager:
 
         return True, "System healthy."
     
-    def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float) -> Dict[str, Any]:
+    def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float, portfolio_size: int) -> Dict[str, Any]:
         """Calculates exact lot size and dynamically scales risk if taking losses."""
         
         # 1. First, check if we are even allowed to trade
-        allowed, reason = self.is_trading_allowed(max_daily_loss)
+        allowed, reason = self.is_trading_allowed(symbol, max_daily_loss, portfolio_size)
         if not allowed:
             return {"approved": False, "reason": reason}
 
@@ -110,8 +126,27 @@ class RiskManager:
         # 4. Calculate Position Size (Lots)
         safe_sl_pips = stop_loss_pips if stop_loss_pips > 0 else 20.0 
         
-        # Convert Pips to Points (1 Standard Forex Pip = 10 MT5 Points)
-        safe_sl_points = int(safe_sl_pips * 10)
+        # Dynamically convert Pips to Points based on the symbol's actual precision
+        symbol_info = mt5.symbol_info(symbol)
+        if not symbol_info:
+            return {"approved": False, "reason": f"Could not fetch symbol info for {symbol}"}
+
+        # Determine pip multiplier based on symbol type
+        if "JPY" in symbol:
+            # For JPY pairs, 1 pip = 0.01, 1 point = 0.001 (Multiplier is 10, same as standard forex)
+            pip_multiplier = 10.0
+        elif "XAU" in symbol or "XAG" in symbol:
+            # Gold/Silver usually 1 pip = 10 points
+            pip_multiplier = 10.0
+        elif "BTC" in symbol or "ETH" in symbol:
+            # Crypto pip multipliers vary, but usually 1:1 for the calculation logic
+            pip_multiplier = 1.0 
+        else:
+            # Standard Forex (EURUSD, GBPUSD, etc.)
+            pip_multiplier = 10.0
+
+        # Calculate exact points
+        safe_sl_points = int(safe_sl_pips * pip_multiplier)
         
         # Call the new function directly! It handles all the MT5 tick math and min/max limits.
         optimal_lots = self.calculate_position_size(symbol, max_risk_usd, safe_sl_points)
@@ -133,8 +168,14 @@ class RiskManager:
             "stop_loss_pips": safe_sl_pips
         }
     
-    def calculate_micro_lot(self) -> float:
-        return 0.01 # MT5 standard micro-lot
+    def calculate_micro_lot(self, symbol: Optional[str] = None) -> float:
+        """Return the smallest tradable volume for the symbol, falling back to 0.01 if unknown."""
+        if symbol:
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is not None and symbol_info.volume_min and symbol_info.volume_min > 0:
+                return round(symbol_info.volume_min, 2)
+
+        return 0.01  # Default micro-lot for MT5 if symbol-specific data is unavailable
 
     def calculate_position_size(self, symbol: str, risk_amount_usd: float, stop_loss_points: int) -> float:
         """

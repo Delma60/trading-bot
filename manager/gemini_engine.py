@@ -14,7 +14,6 @@ class GeminiEngine:
             print("⚠️ [Gemini Engine]: GEMINI_API_KEY environment variable not set. Smart routing disabled.")
         else:
             try:
-                print(f"this is my API key: {self.api_key}")
                 genai.configure(api_key=self.api_key)
                 self.gemini_model = genai.GenerativeModel(model_name)
                 self.is_ready = True

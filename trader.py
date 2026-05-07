@@ -247,6 +247,49 @@ class Trader:
         account_info = mt5.account_info()
         if account_info is not None:
             return account_info.balance
+    
+    def get_daily_realized_profit(self):
+        """Get total realized profit/loss for today."""
+        if not self.connected:
+            return 0.0
+        from datetime import datetime
+        today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        deals = mt5.history_deals_get(today_start, mt5.TIME_CURRENT)
+        if deals is None:
+            return 0.0
+        return sum(deal.profit for deal in deals if deal.profit is not None)
+    
+    def get_total_floating_profit(self):
+        """Get total floating profit from open positions."""
+        if not self.connected:
+            return 0.0
+        positions = mt5.positions_get()
+        if positions is None:
+            return 0.0
+        return sum(position.profit for position in positions if position.profit is not None)
+    
+    def close_all_positions(self):
+        """Close all open positions."""
+        if not self.connected:
+            return
+        positions = mt5.positions_get()
+        if positions is None:
+            return
+        for position in positions:
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": position.symbol,
+                "volume": position.volume,
+                "type": mt5.ORDER_TYPE_SELL if position.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY,
+                "position": position.ticket,
+                "price": mt5.symbol_info_tick(position.symbol).bid if position.type == mt5.POSITION_TYPE_BUY else mt5.symbol_info_tick(position.symbol).ask,
+                "deviation": 20,
+                "magic": 234000,
+                "comment": "Close all positions",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_FOK,
+            }
+            mt5.order_send(request)
         else:
             self.notify(f"Failed to get account info, error code = {mt5.last_error()}")
             return None
