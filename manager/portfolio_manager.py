@@ -7,6 +7,7 @@ import pandas_ta as ta
 import json
 from datetime import datetime
 from pathlib import Path
+import threading
 from .risk_manager import RiskManager
 from typing import Dict
 
@@ -17,10 +18,11 @@ class PortfolioManager:
     TRAINING_DATA_PATH = Path("data/trade_history.json")
     CONFIG_PATH = Path("data/portfolio_config.json")
     
-    def __init__(self, broker, strategy_manager, risk_manager: RiskManager):
+    def __init__(self, broker, strategy_manager, risk_manager: RiskManager, notify_callback=print):
         self.broker = broker
         self.strategy_manager = strategy_manager
         self.risk_manager = risk_manager
+        self.notify = notify_callback  # Store the centralized notification callback
         
         # Load the fallback config
         self.config = self._load_json(self.CONFIG_PATH, fallback={})
@@ -31,7 +33,10 @@ class PortfolioManager:
         for symbols in self.asset_classes.values():
             self.master_watchlist.extend(symbols)
             
-        self.available_strategies = self.strategy_manager.engines.keys()
+        self.available_strategies = list(self.strategy_manager.engines.keys())
+        
+        # Thread-safe lock for model predictions (prevents race conditions between main and background threads)
+        self._model_lock = threading.Lock()
         
         # AI Initialization
         self.model = self._load_or_build_model()
@@ -52,11 +57,11 @@ class PortfolioManager:
             
         history = self._load_json(self.TRAINING_DATA_PATH, fallback=[])
         if len(history) >= 50:
-            print("[Portfolio AI]: I have enough data. Initiating first training sequence...")
+            self.notify("[Portfolio AI]: I have enough data. Initiating first training sequence...")
             self.retrain_model()
             return True
             
-        print(f"[Portfolio AI]: Only {len(history)}/50 trades logged. Using config defaults until I have enough data to learn.")
+        self.notify(f"[Portfolio AI]: Only {len(history)}/50 trades logged. Using config defaults until I have enough data to learn.")
         return False
 
     def _load_or_build_model(self):
@@ -77,7 +82,7 @@ class PortfolioManager:
             with self.CONFIG_PATH.open("w") as f:
                 json.dump(self.config, f, indent=4)
         except Exception as e:
-            print(f"[Portfolio Manager]: Failed to save config: {e}")
+            self.notify(f"[Portfolio Manager]: Failed to save config: {e}")
 
     def add_symbol(self, symbol: str, asset_class: str = None) -> bool:
         symbol = symbol.upper()
@@ -147,7 +152,7 @@ class PortfolioManager:
             return np.expand_dims(state, axis=0)
         
         except Exception as e:
-            print(f"[Portfolio Manager]: Error getting market state for {symbol}: {e}")
+            self.notify(f"[Portfolio Manager]: Error getting market state for {symbol}: {e}")
             return np.zeros((1, 4))
 
     def _assign_strategy_fallback(self, symbol: str) -> str:
@@ -158,13 +163,18 @@ class PortfolioManager:
         class_defaults = self.strategy_mapping.get("asset_class_defaults", {})
         if asset_class in class_defaults: return class_defaults[asset_class]
         return self.strategy_mapping.get("default", "Mean_Reversion")
+    
+    def _predict_strategy_safe(self, current_state: np.ndarray) -> np.ndarray:
+        """Thread-safe wrapper for model.predict() to prevent race conditions."""
+        with self._model_lock:
+            return self.model.predict(current_state, verbose=0)
 
     def _assign_strategy(self, symbol: str, current_state: np.ndarray) -> str:
         """Decides which strategy to use (AI if ready, Config if not)."""
         if not self.is_ai_ready:
             return self._assign_strategy_fallback(symbol)
             
-        predictions = self.model.predict(current_state, verbose=0)[0]
+        predictions = self._predict_strategy_safe(current_state)[0]
         best_strategy_index = np.argmax(predictions)
         return self.available_strategies[best_strategy_index]
 
@@ -178,7 +188,7 @@ class PortfolioManager:
             # Get the state to feed the AI (and to log it if we take a trade!)
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
-            print(f"[Portfolio Manager]: {symbol} assigned to strategy '{strategy_name}' by AI.")
+            self.notify(f"[Portfolio Manager]: {symbol} assigned to strategy '{strategy_name}' by AI.")
             signal = self.strategy_manager.check_signals(symbol, strategy=strategy_name)
             
             if signal and signal.get('action') != 'WAIT':
@@ -218,7 +228,7 @@ class PortfolioManager:
 
     def log_trade_for_learning(self, symbol: str, profit: float):
         """Call this when a trade CLOSES to log the result."""
-        trade_data = getattr(self, '_temporary_trade_states', {}).get(symbol)
+        trade_data = getattr(self, '_temporary_trade_states', {}).pop(symbol, None)
         if not trade_data:
             return # We don't have the starting state for this trade
             
@@ -233,7 +243,7 @@ class PortfolioManager:
             
             with open(self.TRAINING_DATA_PATH, "w") as f:
                 json.dump(history, f)
-            print(f"[Portfolio AI]: Logged winning trade for {symbol} to memory.")
+            self.notify(f"[Portfolio AI]: Logged winning trade for {symbol} to memory.")
             
             # Check if we should wake up the AI
             if not self.is_ai_ready and len(history) >= 50:
@@ -261,8 +271,10 @@ class PortfolioManager:
         X = np.array([item["state"][0] for item in history])
         y = np.array([item["label"] for item in history])
         
-        print(f"[Portfolio AI]: Retraining on {len(X)} historical trades...")
-        self.model.fit(X, y, epochs=50, batch_size=8, verbose=1)
-        self.model.save(str(self.MODEL_PATH))
-        print("[Portfolio AI]: Retraining complete.")
+        self.notify(f"[Portfolio AI]: Retraining on {len(X)} historical trades...")
+        # Use lock to prevent race conditions during training
+        with self._model_lock:
+            self.model.fit(X, y, epochs=50, batch_size=8, verbose=1)
+            self.model.save(str(self.MODEL_PATH))
+        self.notify("[Portfolio AI]: Retraining complete.")
         

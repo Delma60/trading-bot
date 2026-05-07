@@ -11,12 +11,24 @@ from chat import Chatbot
 # Global shutdown flag for graceful termination
 shutdown_event = threading.Event()
 
-def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minutes: int = 15):
+def agent_notify(msg: str):
+    """
+    Centralized communication channel for the trading agent.
+    This is the single point of truth for all system messages.
+    Later, you can swap this print statement with a Telegram API call,
+    a WebSocket push, or an MCP server log.
+    """
+    print(f"\n[Agent]: {msg}")
+
+def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minutes: int = 15, notify=None):
     """
     This runs in the background forever. It wakes up, scans the market, 
     executes trades if it finds any, and goes back to sleep.
     """
-    print(f"\n[System]: 🟢 Background Scanner started. Waking up every {scan_interval_minutes} minutes.")
+    if notify is None:
+        notify = print
+    
+    notify(f"🟢 Background Scanner started. Waking up every {scan_interval_minutes} minutes.")
     
     # Define your global risk rules here (or load them from a config file)
     BASE_RISK_PCT = 1.0
@@ -27,54 +39,54 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
         try:
             # 1. Wait for the interval (convert minutes to seconds) but check shutdown flag
             if shutdown_event.wait(scan_interval_minutes * 60):
-                print("\n[Scanner]: 🛑 Shutdown signal received. Scanner stopping gracefully...")
+                notify("🛑 Shutdown signal received. Scanner stopping gracefully...")
                 break
             
             # 2. Wake up and scan!
-            print("\n[Scanner]: Waking up to scan markets... 🔎")
+            notify("Waking up to scan markets... 🔎")
             results = portfolio_manager.evaluate_portfolio_opportunities(
                 risk_pct=BASE_RISK_PCT,
                 stop_loss=STOP_LOSS_PIPS,
                 max_daily_loss=MAX_DAILY_LOSS
             )
             
-            # 3. Print the results to the terminal so the user sees it
+            # 3. Print the results through the agent's centralized channel
             for result in results:
-                print(f"[Scanner]: {result}")
+                notify(result)
                 
         except Exception as e:
-            print(f"\n[Scanner]: ⚠️ Error during autonomous scan: {e}")
+            notify(f"⚠️ Error during autonomous scan: {e}")
             # Sleep for a minute before retrying to prevent error spam
             if shutdown_event.wait(60):
                 break
     
-    print("[System]: ✅ Background Scanner stopped.")
+    notify("✅ Background Scanner stopped.")
 
 def signal_handler(signum, frame):
     """
     Handle Ctrl+C (SIGINT) and termination signals gracefully.
     """
-    print("\n[System]: 🛑 Shutdown signal received (Ctrl+C or termination).")
+    agent_notify("🛑 Shutdown signal received (Ctrl+C or termination).")
     shutdown_event.set()
 
 if __name__ == "__main__":
-    print("Initializing Quantitative Trading System...")
+    agent_notify("Initializing Quantitative Trading System...")
 
     # 1. Initialize the core API connection
-    broker = Trader()
+    broker = Trader(notify_callback=agent_notify)
 
     # 2. Initialize the Engines
     strategy_manager = StrategyManager(broker)
-    risk_manager = RiskManager(broker, max_open_trades=3, min_margin_level=150.0)
+    risk_manager = RiskManager(broker, max_open_trades=3, min_margin_level=150.0, notify_callback=agent_notify)
 
     # 3. Initialize the Portfolio Manager
-    portfolio_manager = PortfolioManager(broker, strategy_manager, risk_manager)
+    portfolio_manager = PortfolioManager(broker, strategy_manager, risk_manager, notify_callback=agent_notify)
 
     # 4. Start the Background Scanner Thread
     # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
         target=autonomous_scanner,
-        args=(portfolio_manager, 10)
+        args=(portfolio_manager, 10, agent_notify)
     )
     scanner_thread.daemon = False
     scanner_thread.start()
@@ -88,40 +100,41 @@ if __name__ == "__main__":
         intents_filepath="intents.json", 
         broker=broker, 
         strategy_manager=strategy_manager,
-        portfolio_manager=portfolio_manager
+        portfolio_manager=portfolio_manager,
+        notify_callback=agent_notify
     )
 
     # 7. Run chatbot with proper exception handling and cleanup
     try:
         bot.start_chat()
     except KeyboardInterrupt:
-        print("\n[System]: Keyboard interrupt detected.")
+        agent_notify("Keyboard interrupt detected.")
         shutdown_event.set()
     except Exception as e:
-        print(f"[System]: ❌ Unexpected error: {e}")
+        agent_notify(f"❌ Unexpected error: {e}")
         shutdown_event.set()
     finally:
         # === GRACEFUL SHUTDOWN SEQUENCE ===
-        print("\n[System]: Initiating graceful shutdown sequence...")
+        agent_notify("Initiating graceful shutdown sequence...")
         
         # 1. Signal scanner thread to stop
         shutdown_event.set()
         
         # 2. Wait for scanner thread to finish (with timeout)
-        print("[System]: Waiting for background scanner to stop...")
+        agent_notify("Waiting for background scanner to stop...")
         scanner_thread.join(timeout=5)
         if scanner_thread.is_alive():
-            print("[System]: ⚠️ Scanner thread did not stop within timeout.")
+            agent_notify("⚠️ Scanner thread did not stop within timeout.")
         
         # 3. Disconnect from broker
         if broker.connected:
-            print("[System]: Disconnecting from MetaTrader 5...")
+            agent_notify("Disconnecting from MetaTrader 5...")
             try:
                 broker.disconnect()
-                print("[System]: ✅ Broker disconnected successfully.")
+                agent_notify("✅ Broker disconnected successfully.")
             except Exception as e:
-                print(f"[System]: ⚠️ Error disconnecting broker: {e}")
+                agent_notify(f"⚠️ Error disconnecting broker: {e}")
         
         # 4. Final goodbye message
-        print("[System]: 👋 Trading bot shutdown complete. Goodbye!\n")
+        agent_notify("👋 Trading bot shutdown complete. Goodbye!")
         sys.exit(0)

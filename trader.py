@@ -5,11 +5,12 @@ import pandas as pd
 
 class Trader:
     
-    def __init__(self, login="", password="", server="MetaQuotes-Demo"):
+    def __init__(self, login="", password="", server="MetaQuotes-Demo", notify_callback=print):
         self.login = login
         self.password = password
         self.server = server
         self.connected = False
+        self.notify = notify_callback  # Store the centralized notification callback
         
     def is_mt5_running(self):
         """Check if MetaTrader 5 terminal is running"""
@@ -29,46 +30,46 @@ class Trader:
         
         # Check if MT5 is running
         if not self.is_mt5_running():
-            print("MetaTrader 5 terminal is not running!")
-            print("Please start MT5 terminal and try again.")
-            print("You can find it in: C:/Program Files/MetaTrader 5/terminal64.exe")
+            self.notify("MetaTrader 5 terminal is not running!")
+            self.notify("Please start MT5 terminal and try again.")
+            self.notify("You can find it in: C:/Program Files/MetaTrader 5/terminal64.exe")
             return False
         
         # Try to initialize MT5 with different approaches
-        print("Attempting to connect to MetaTrader 5...")
+        self.notify("Attempting to connect to MetaTrader 5...")
         
         # First try: with explicit path and longer timeout
         try:
             mt5_path = "C:/Program Files/MetaTrader 5/terminal64.exe"
             if os.path.exists(mt5_path):
                 if not mt5.initialize(path=mt5_path, timeout=120000):
-                    print("Failed with explicit path, trying without path...")
+                    self.notify("Failed with explicit path, trying without path...")
                     # Second try: let MT5 find the terminal automatically
                     if not mt5.initialize(timeout=120000):
-                        print("initialize() failed, error code =", mt5.last_error())
-                        print("Please ensure:")
-                        print("1. MetaTrader 5 terminal is running")
-                        print("2. MT5 is installed in the default location")
-                        print("3. No firewall/antivirus is blocking the connection")
+                        self.notify("initialize() failed, error code =" + str(mt5.last_error()))
+                        self.notify("Please ensure:")
+                        self.notify("1. MetaTrader 5 terminal is running")
+                        self.notify("2. MT5 is installed in the default location")
+                        self.notify("3. No firewall/antivirus is blocking the connection")
                         return False
             else:
-                print(f"MT5 not found at {mt5_path}, trying automatic detection...")
+                self.notify(f"MT5 not found at {mt5_path}, trying automatic detection...")
                 if not mt5.initialize(timeout=120000):
-                    print("initialize() failed, error code =", mt5.last_error())
+                    self.notify("initialize() failed, error code =" + str(mt5.last_error()))
                     return False
                     
         except Exception as e:
-            print(f"Exception during initialization: {e}")
+            self.notify(f"Exception during initialization: {e}")
             return False
             
-        print("MT5 initialized successfully, attempting login...")
+        self.notify("MT5 initialized successfully, attempting login...")
         authorized = mt5.login(self.login, password=self.password, server=self.server)
         if not authorized:
-            print("Login failed, error code =", mt5.last_error())
+            self.notify("Login failed, error code =" + str(mt5.last_error()))
             return False
         
         self.connected = True
-        print("Successfully connected to MetaTrader 5")
+        self.notify("Successfully connected to MetaTrader 5")
         return True
     
     def getSymbols(self):
@@ -95,6 +96,21 @@ class Trader:
     def disconnect(self):
         mt5.shutdown()
         self.connected = False
+    
+    def _get_pip_multiplier(self, symbol: str) -> float:
+        """
+        Returns the pip-to-point multiplier for a given symbol.
+        Standard Forex (5-digit): 1 pip = 10 points (multiplier = 10)
+        Metals, Indices, Crypto: 1 pip = 1 point (multiplier = 1)
+        """
+        symbol = symbol.upper()
+        if any(symbol.startswith(prefix) for prefix in ["XAU", "XAG", "XPT", "XPD"]):
+            return 1.0  # Metals: 1 pip = 1 point
+        if any(token in symbol for token in ["BTC", "ETH", "LTC", "XBT", "USDT", "DOGE"]):
+            return 1.0  # Crypto: 1 pip = 1 point
+        if "30" in symbol or "500" in symbol:  # Indices like US30, UK100
+            return 1.0  # Indices: 1 pip = 1 point
+        return 10.0  # Default Forex: 1 pip = 10 points
         
     def execute_trade(self, symbol: str, action: str, lots: float, stop_loss_pips: float = 0.0, take_profit_pips: float = 0.0) -> dict:
         """
@@ -120,18 +136,19 @@ class Trader:
             
         price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
         point = symbol_info.point
+        pip_multiplier = self._get_pip_multiplier(symbol)
 
         # 3. Calculate Stop Loss and Take Profit prices
-        # Note: We multiply pips by 10 to convert to points for standard forex pairs.
+        # Use dynamic pip multiplier based on asset class
         sl_price = 0.0
         tp_price = 0.0
         
         if order_type == mt5.ORDER_TYPE_BUY:
-            if stop_loss_pips > 0: sl_price = price - (stop_loss_pips * 10 * point)
-            if take_profit_pips > 0: tp_price = price + (take_profit_pips * 10 * point)
+            if stop_loss_pips > 0: sl_price = price - (stop_loss_pips * pip_multiplier * point)
+            if take_profit_pips > 0: tp_price = price + (take_profit_pips * pip_multiplier * point)
         elif order_type == mt5.ORDER_TYPE_SELL:
-            if stop_loss_pips > 0: sl_price = price + (stop_loss_pips * 10 * point)
-            if take_profit_pips > 0: tp_price = price - (take_profit_pips * 10 * point)
+            if stop_loss_pips > 0: sl_price = price + (stop_loss_pips * pip_multiplier * point)
+            if take_profit_pips > 0: tp_price = price - (take_profit_pips * pip_multiplier * point)
 
         # 4. Build the MT5 Request Dictionary
         request = {
@@ -157,13 +174,6 @@ class Trader:
             return {"success": False, "reason": f"Order rejected. MT5 Code: {result.retcode}, {result.comment}"}
 
         return {"success": True, "ticket": result.order, "price": result.price}
-
-    def getPositions(self):
-        if not self.connected:
-            print("Not connected to MetaTrader 5")
-            return None
-        positions = mt5.positions_get()
-        return positions
     
     def get_historical_rates(self, symbol: str, timeframe: str = "H1", count: int = 50):
         """Fetches historical OHLCV data for a symbol."""
@@ -181,18 +191,20 @@ class Trader:
         
         rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 0, count)
         if rates is None:
-            print(f"[Broker] Failed to fetch rates for {symbol}")
+            self.notify(f"[Broker] Failed to fetch rates for {symbol}")
             return None
             
-        return pd.DataFrame(rates)
+        df = pd.DataFrame(rates)
+        df.to_csv(f"data/symbols/{symbol}_{timeframe}_data.csv", index=False)
+        return df
     
     def getBalance(self):
         if not self.connected:
-            print("Not connected to MetaTrader 5")
+            self.notify("Not connected to MetaTrader 5")
             return None
         account_info = mt5.account_info()
         if account_info is not None:
             return account_info.balance
         else:
-            print("Failed to get account info, error code =", mt5.last_error())
+            self.notify("Failed to get account info, error code =" + str(mt5.last_error()))
             return None
