@@ -16,6 +16,7 @@ from tensorflow.keras.layers import Dense
 from pathlib import Path
 from datetime import datetime
 from typing import Callable, Any, Optional
+from prompt_toolkit.patch_stdout import patch_stdout
 
 from rich.console import Console
 from prompt_toolkit import PromptSession
@@ -83,7 +84,7 @@ class Chatbot(ProfileManager, NLPEngine):
             "trading_settings": lambda _: self._format_settings_data(),
             "update_config": lambda _: self.setup_trading_config(),
             "bulk_scan": lambda _: self._run_autonomous_scan(),
-            "check_notifications": lambda _: self._read_inbox()
+            "check_notifications": lambda _: self._read_inbox(),
         }
 
         
@@ -764,6 +765,7 @@ class Chatbot(ProfileManager, NLPEngine):
         """Establish broker connection and start the main chat loop."""
         # === BROKER CONNECTION PHASE ===
         print("")
+        
         data = self._read_json(self.PROFILE_FILE)
         login = data.get("login")
         password = data.get("password")
@@ -830,10 +832,57 @@ class Chatbot(ProfileManager, NLPEngine):
         try:
             while True:
                 # Use patch_stdout to keep the prompt safe from background prints
-                from prompt_toolkit.patch_stdout import patch_stdout
                 with patch_stdout():
                     try:
                         inp = self.session.prompt("You: ").strip()
+                        follow_up_match = re.search(r"(?:no,?\s*)?(?:make|change|set) it (?:to\s*)?([0-9.]+)", inp, re.IGNORECASE)
+                        match = re.search(r"change (?:my )?(.*?)\s+to\s+([0-9.]+)", inp, re.IGNORECASE)
+
+                        target_key = None
+                        new_value = None
+                        if follow_up_match:
+                            # Check if the bot remembers what we were talking about
+                            if hasattr(self, 'memory') and "last_setting" in self.memory:
+                                target_key = self.memory["last_setting"]
+                                new_value = float(follow_up_match.group(1))
+                        if match:
+                            target_key = match.group(1).strip()
+                            new_value = float(match.group(2))
+                        
+                        if target_key and new_value is not None:
+                            # Extract the key and value
+                            target_key = match.group(1).strip()
+                            new_value = float(match.group(2))
+                            
+                            # Map the spoken {key} to your bot's internal variables
+                            if target_key in ["daily loss", "daily loss limit", "max loss limit"]:
+                                self.max_daily_loss = new_value
+                                display_name = "Max Daily Loss Limit"
+                                
+                            elif target_key in ["risk", "risk percentage", "risk per trade"]:
+                                self.risk_percentage = new_value
+                                display_name = "Risk Per Trade"
+                                
+                            elif target_key in ["target", "target profit", "profit target"]:
+                                self.target_profit = new_value
+                                display_name = "Target Profit"
+                            elif target_key in ['stop loss', 'sl', 'stop-loss', 'stoploss']:
+                                self.stop_loss = new_value
+                                display_name = "Stop Loss"
+                            else:
+                                print(f"[Bot]: I don't recognize the setting key '{target_key}'. Valid keys are: risk, target, daily loss, stop loss.")
+                                continue # Skip the rest of the loop and wait for next input
+
+                            if not hasattr(self, 'memory'):
+                                self.memory = {}
+                            self.memory["last_setting"] = target_key
+                            # Save to profile.json
+                            self._save_trading_config()
+                            print(f"[Bot]: ✅ I have updated your {display_name} to {new_value}.")
+                            
+                            # Skip the neural network since we've already handled the command
+                            continue 
+
                     except EOFError:
                         # Handle Ctrl+D (EOF)
                         print("\n[Bot]: Initiating graceful shutdown...")

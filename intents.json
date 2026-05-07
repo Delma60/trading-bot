@@ -564,7 +564,11 @@
                 "Change my targets",
                 "Update stop loss",
                 "Modify risk management",
-                "Change trading preferences"
+                "Change trading preferences",
+                "update trading settings",
+                "change trading settings",
+                "modify trading settings",
+                "change my {key} to {value}"
             ],
             "responses": [
                 "I'll help you update your trading configuration.",

@@ -7,9 +7,9 @@
         "USDJPY"
     ],
     "target_profit": 10.0,
-    "stop_loss": 2.0,
+    "stop_loss": 5.0,
     "risk_percentage": 1.0,
-    "max_daily_loss": 1.0,
+    "max_daily_loss": 50.0,
     "preferred_timeframes": [
         "H1"
     ]
