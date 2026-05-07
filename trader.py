@@ -182,18 +182,17 @@ class Trader:
         
         filling_mode = symbol_info.filling_mode
         
-        # Check supported modes using bitwise AND operator
-        if filling_mode & mt5.SYMBOL_FILLING_FOK:
+        # Check supported modes using bitwise AND operator (1 = FOK, 2 = IOC)
+        if filling_mode & 1:
             # FOK (Fill Or Kill) - Complete volume must be filled, or the order is canceled.
-            # This is the standard requirement for most strict Forex/ECN brokers.
             type_filling = mt5.ORDER_FILLING_FOK
-        elif filling_mode & mt5.SYMBOL_FILLING_IOC:
+        elif filling_mode & 2:
             # IOC (Immediate Or Cancel) - Fill what you can immediately, cancel the rest.
             type_filling = mt5.ORDER_FILLING_IOC
         else:
             # RETURN - Standard market execution, allowed to be partially filled and remain on the book.
             type_filling = mt5.ORDER_FILLING_RETURN
-        # 4. Build the MT5 Request Dictionary
+        
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,

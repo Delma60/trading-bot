@@ -74,8 +74,8 @@ class StrategyManager:
         engine = self.execute_strategy(strategy)
 
         # 3. Fetch the raw data required to make a decision
-        df = self.broker.get_historical_rates(symbol, timeframe=timeframe, count=100)
-        
+        df = self.broker.ohclv_data(symbol, timeframe="H1", num_bars=1000)
+
         if df is None or df.empty:
             return {"action": "WAIT", "confidence": 0.0, "reason": f"Could not fetch data for {symbol}"}
 

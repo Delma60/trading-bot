@@ -5,7 +5,8 @@
             "GBPUSD",
             "USDJPY",
             "AUDUSD",
-            "USDCHF"
+            "USDCHF",
+            "AUDCAD"
         ]
     },
     "allocation_limits": {

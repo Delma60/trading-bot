@@ -2,6 +2,7 @@
 from typing import Dict, Any
 import MetaTrader5 as mt5
 from datetime import datetime
+import math
 
 class RiskManager:
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
@@ -171,7 +172,7 @@ class RiskManager:
 
         # Round down to the nearest allowed step (e.g., 0.01 micro lots)
         # Using round() with division and multiplication ensures precision
-        clean_lot_size = (int(raw_lot_size / step_lot)) * step_lot
+        clean_lot_size = math.floor(raw_lot_size / step_lot) * step_lot
 
         # 5. Clamp limits to prevent broker rejection errors
         if clean_lot_size < min_lot:

@@ -119,12 +119,11 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
 
         if priority in ["critical", "trade_executed"]:
             from prompt_toolkit.patch_stdout import patch_stdout
-            color = "red" if priority == "critical" else "green"
             with patch_stdout():
                 if priority == "critical":
-                    self.console.print(f"\n[bold red]🚨 CRITICAL: {msg}[/]")
+                    print(f"\n🚨 CRITICAL: {msg}")
                 else:
-                    self.console.print(f"\n[bold green]✅ TRADE: {msg}[/]")
+                    print(f"\n✅ TRADE: {msg}")
             
 
     def _read_inbox(self):
@@ -255,6 +254,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
 
         if added:
             self._save_trading_config()
+            self._update_max_open_trades()
         return added
 
     def _get_portfolio_symbols(self) -> list:
@@ -262,6 +262,11 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             return self.trading_symbols
         self._load_trading_config()
         return self.trading_symbols
+
+    def _update_max_open_trades(self):
+        """Set max exposure equal to the number of tracked trading symbols."""
+        self.risk_manager.max_open_trades = max(1, len(self.trading_symbols))
+        print(f"[Bot]: Exposure limit set to {self.risk_manager.max_open_trades} trades based on your symbol list.")
 
     def _parse_timeframe_from_text(self, text: str) -> str:
         match = re.search(r'\b(M1|M5|M15|M30|H1|H4|D1)\b', text.upper())
@@ -415,6 +420,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             self.max_daily_loss = self._get_validated_input("[Bot]: Max daily loss ($): ", float, lambda x: x > 0, "Enter a positive amount.")
 
         self._save_trading_config()
+        self._update_max_open_trades()
         print("[Bot]: ✅ Configuration saved.")
 
     def _save_trading_config(self):
@@ -449,6 +455,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             self.risk_percentage = config.get("risk_percentage", 0.0)
             self.max_daily_loss = config.get("max_daily_loss", 0.0)
             self.preferred_timeframes = config.get("preferred_timeframes", [])
+            self._update_max_open_trades()
             return True
         return False
 
