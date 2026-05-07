@@ -39,18 +39,13 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
     This runs in the background forever. It wakes up, scans the market, 
     executes trades if it finds any, and goes back to sleep.
     """
-    notify(f"🟢 Background Scanner started. Waking up every {scan_interval_minutes} minutes.")
+    notify(f"🟢 Background Scanner started. First scan will run immediately, then every {scan_interval_minutes} minutes.")
     
     # Define your global risk rules here (or load them from a config file)
     profile_path = Path("data/profile.json")
 
     while not shutdown_event.is_set():
         try:
-            # 1. Wait for the interval (convert minutes to seconds) but check shutdown flag
-            if shutdown_event.wait(scan_interval_minutes * 60):
-                notify("🛑 Shutdown signal received. Scanner stopping gracefully...")
-                break
-            
             config = {}
             if profile_path.exists():
                 with open(profile_path, "r") as f:
@@ -60,7 +55,7 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
             stop_loss = config.get("stop_loss", 20.0)
             max_daily_loss = config.get("max_daily_loss", 50.0)
             
-            # 2. Wake up and scan!
+            # 1. Wake up and scan immediately
             notify("Waking up to scan markets... 🔎")
             results = portfolio_manager.evaluate_portfolio_opportunities(
                 risk_pct=risk_pct,
@@ -68,10 +63,15 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
                 max_daily_loss=max_daily_loss
             )
             
-            # 3. Send the results through the agent
+            # 2. Send the results through the agent
             for result in results:
                 priority = "trade_executed" if "EXECUTED" in result else "critical" if "🛑" in result or "FATAL" in result else "normal"
                 notify(result, priority=priority)
+
+            # 3. Wait for the next scan interval, unless shutdown was requested
+            if shutdown_event.wait(scan_interval_minutes * 60):
+                notify("🛑 Shutdown signal received. Scanner stopping gracefully...")
+                break
                 
         except Exception as e:
             notify(f"⚠️ Error during autonomous scan: {e}")
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
         target=autonomous_scanner,
-        args=(portfolio_manager, 10, agent_notify)
+        args=(portfolio_manager, 1, agent_notify)
     )
     scanner_thread.daemon = False
     scanner_thread.start()

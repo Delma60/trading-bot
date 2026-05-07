@@ -3,9 +3,7 @@
     "password": "@oIt7uPp",
     "server": "MetaQuotes-Demo",
     "trading_symbols": [
-        "AUDUSD",
-        "EURUSD",
-        "USDJPY"
+        "USDCNH"
     ],
     "target_profit": 10.0,
     "stop_loss": 5.0,

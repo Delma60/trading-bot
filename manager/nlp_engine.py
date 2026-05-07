@@ -62,9 +62,10 @@ class NLPEngine:
             notify_callback(f"⚠️ Failed to save new intent: {e}", priority="normal")
             return False
                 
-        # 3. Retrain in the background
+        # 3. Retrain immediately
         notify_callback(f"🧠 I've added '{tag}' to my knowledge base. Retraining...", priority="normal")
-        threading.Thread(target=self.background_training).start()
+        self.background_training()
+        notify_callback(f"✅ Retraining complete! Model updated.", priority="normal")
         return True
     
     def add_intent_pattern(self, tag: str, new_pattern: str, notify_callback=print):
@@ -91,8 +92,10 @@ class NLPEngine:
             notify_callback(f"⚠️ Failed to save to intents.json: {e}", priority="normal")
             return False
             
-        # 3. Retrain the model in the background so the chat doesn't freeze
-        notify_callback(f"🧠 I am learning! Retraining my neural network in the background...", priority="normal")
+        # 3. Retrain the model immediately
+        notify_callback(f"🧠 I am learning! Retraining my neural network...", priority="normal")
+        self.background_training()
+        notify_callback(f"✅ Retraining complete! Model updated.", priority="normal")
         
     def background_training(self):
         try:

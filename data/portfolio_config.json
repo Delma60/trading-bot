@@ -1,6 +1,12 @@
 {
     "asset_classes": {
-        "Forex": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
+        "Forex": [
+            "EURUSD",
+            "GBPUSD",
+            "USDJPY",
+            "AUDUSD",
+            "USDCHF"
+        ]
     },
     "allocation_limits": {
         "Forex": 2,

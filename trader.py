@@ -78,7 +78,37 @@ class Trader:
             return None
         symbols = mt5.symbols_get()
         return symbols
-    
+    def ohclv_data(self, symbol: str, timeframe: str="H1", num_bars: int=1000) -> pd.DataFrame:
+        if not self.connected:
+            self.notify("Not connected to MetaTrader 5")
+            return None
+        rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, f"TIMEFRAME_{timeframe}"), 0, num_bars)
+        # set date as index
+        df = pd.DataFrame(rates)
+        df = df.set_index(pd.to_datetime(df['time'], unit='s'))
+        df.drop(columns=['time'], inplace=True)
+        return df
+        
+    def get_symbol_info(self, symbol: str):
+            if not self.connected:
+                self.notify("Not connected to MetaTrader 5")
+                return None
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is not None:
+                return symbol_info._asdict()
+            else:
+                self.notify(f"Failed to get symbol info, error code = {mt5.last_error()}")
+                return None
+    def get_tick_data(self, symbol: str, num_ticks: int = 10):
+        if not self.connected:
+            self.notify("Not connected to MetaTrader 5")
+            return None
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is not None:
+            return tick._asdict()
+        else:
+            self.notify(f"Failed to get tick data, error code = {mt5.last_error()}")
+            return None
     def getPositions(self):
         """Get all open positions"""
         if not self.connected:
