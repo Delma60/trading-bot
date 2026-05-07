@@ -3,7 +3,8 @@
     "password": "@oIt7uPp",
     "server": "MetaQuotes-Demo",
     "trading_symbols": [
-        "EURUSD"
+        "EURUSD",
+        "USDJPY"
     ],
     "target_profit": 10.0,
     "stop_loss": 2.0,

@@ -592,6 +592,31 @@ class Chatbot(ProfileManager, NLPEngine):
             self.pending_action = None
             self.pending_data = {}
             return True
+        # === SELF-CORRECTION RETRY LOGIC ===
+        elif self.pending_action == "retry_micro_lot":
+            if inp.lower() in ["y", "yes", "yeah", "sure"]:
+                symbol = self.pending_data["symbol"]
+                order_type = self.pending_data["order_type"]
+                
+                print(f"[Bot]: Attempting emergency execution with 0.01 lots for {symbol}...")
+                result = self.broker.execute_trade(
+                    symbol=symbol,
+                    order_type=order_type,
+                    lots=0.01, # The micro-lot override
+                    stop_loss_pips=self.stop_loss,
+                    take_profit_pips=self.target_profit
+                )
+                
+                if result and result.get("success"):
+                    print(f"[Bot]: ✅ Success! Micro-lot trade secured. Ticket #{result.get('ticket')}")
+                else:
+                    print(f"[Bot]: ❌ Failed again. Broker error: {result.get('comment') if result else 'Unknown'}")
+            else:
+                print("[Bot]: Understood. Canceling trade attempt.")
+                
+            self.pending_action = None
+            self.pending_data = {}
+            return True
         
         return False
 
@@ -655,7 +680,50 @@ class Chatbot(ProfileManager, NLPEngine):
                     return
                     
             print(f"[Bot]: Logic checks passed. Executing trade for {symbol}.")
-            # ... proceed to execution ...
+            
+            # === TRUE AGENTIC EXECUTION & SELF-CORRECTION ===
+            
+            # 1. Determine direction (Assume user agrees with Strategy Engine if they didn't specify)
+            order_type = signal.get('action', 'BUY')
+            
+            # 2. Start with a standard lot size (you can link this to Risk Manager later)
+            proposed_lots = 0.10 
+            
+            # 3. Attempt the trade
+            result = self.broker.execute_trade(
+                symbol=symbol,
+                order_type=order_type,
+                lots=proposed_lots,
+                stop_loss_pips=self.stop_loss,
+                take_profit_pips=self.target_profit
+            )
+            
+            if result and result.get("success"):
+                print(f"[Bot]: ✅ Trade placed successfully! Ticket #{result.get('ticket')}")
+            else:
+                error_msg = result.get("comment", "Unknown Broker Error") if result else "Execution Failed"
+                print(f"[Bot]: ❌ MT5 rejected the order. Reason: {error_msg}")
+                
+                # === THE REASONING FACULTY (Self-Correction) ===
+                error_lower = error_msg.lower()
+                
+                if "margin" in error_lower or "money" in error_lower:
+                    print(f"[Bot]: 💡 Reasoning: You don't have enough free margin to trade {proposed_lots} lots.")
+                    print("[Bot]: Would you like me to recalculate using the absolute minimum micro-lot (0.01) and try again? (y/n)")
+                    
+                    self.pending_action = "retry_micro_lot"
+                    self.pending_data = {
+                        "symbol": symbol,
+                        "order_type": order_type
+                    }
+                    
+                elif "market closed" in error_lower or "off quotes" in error_lower:
+                    print(f"[Bot]: 💡 Reasoning: The market for {symbol} is currently closed or illiquid.")
+                    print("[Bot]: I cannot execute this now. Please try again during active market hours.")
+                else:
+                    print("[Bot]: 💡 Reasoning: I cannot autonomously resolve this error. Please check MT5.")
+            return 
+        
         elif tag == "deposit" or tag == "withdraw":
             # Deposit/Withdraw need an amount
             amount = entities["money"][0] if entities["money"] else self.memory["last_money_amount"]
