@@ -11,6 +11,6 @@ data/trading_history.csv
 **/chat.cpython-313.pyc
 **/__pycache__/**
 .env
-
+.gitignore
 # ignore models/weight/**
 models/weights/**
