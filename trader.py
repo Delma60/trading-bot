@@ -168,33 +168,33 @@ class Trader:
         point = symbol_info.point
         pip_multiplier = self._get_pip_multiplier(symbol)
 
-        # 3. Calculate Stop Loss and Take Profit prices
-        # Use dynamic pip multiplier based on asset class and broker limits
+        # 3. Calculate Stop Loss and Take Profit prices securely against Spread
         sl_price = 0.0
         tp_price = 0.0
 
         digits = symbol_info.digits
         min_stop_level = symbol_info.trade_stops_level or 0
+        spread_points = int(round((tick.ask - tick.bid) / point))
 
-        # Convert desired pips to points; MT5 stop levels are in points
         sl_points = int(stop_loss_pips * pip_multiplier) if stop_loss_pips > 0 else 0
         tp_points = int(take_profit_pips * pip_multiplier) if take_profit_pips > 0 else 0
 
+        safe_distance = spread_points + min_stop_level
         if sl_points > 0:
-            sl_points = max(sl_points, min_stop_level)
+            sl_points = max(sl_points, safe_distance)
         if tp_points > 0:
-            tp_points = max(tp_points, min_stop_level)
+            tp_points = max(tp_points, safe_distance)
 
         if order_type == mt5.ORDER_TYPE_BUY:
             if sl_points > 0:
-                sl_price = price - (sl_points * point)
+                sl_price = tick.ask - (sl_points * point)
             if tp_points > 0:
-                tp_price = price + (tp_points * point)
+                tp_price = tick.ask + (tp_points * point)
         elif order_type == mt5.ORDER_TYPE_SELL:
             if sl_points > 0:
-                sl_price = price + (sl_points * point)
+                sl_price = tick.bid + (sl_points * point)
             if tp_points > 0:
-                tp_price = price - (tp_points * point)
+                tp_price = tick.bid - (tp_points * point)
 
         # Round to the broker's supported digit precision
         if sl_price:

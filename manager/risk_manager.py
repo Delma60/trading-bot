@@ -126,28 +126,29 @@ class RiskManager:
         # 4. Calculate Position Size (Lots)
         safe_sl_pips = stop_loss_pips if stop_loss_pips > 0 else 20.0 
         
-        # Dynamically convert Pips to Points based on the symbol's actual precision
         symbol_info = mt5.symbol_info(symbol)
         if not symbol_info:
             return {"approved": False, "reason": f"Could not fetch symbol info for {symbol}"}
 
+        tick = mt5.symbol_info_tick(symbol)
+        if not tick:
+            return {"approved": False, "reason": f"Could not fetch tick data for {symbol}"}
+
+        point = symbol_info.point
+        spread_points = int(round((tick.ask - tick.bid) / point))
+        min_stop_level = symbol_info.trade_stops_level or 0
+
         # Determine pip multiplier based on symbol type
-        if "JPY" in symbol:
-            # For JPY pairs, 1 pip = 0.01, 1 point = 0.001 (Multiplier is 10, same as standard forex)
-            pip_multiplier = 10.0
-        elif "XAU" in symbol or "XAG" in symbol:
-            # Gold/Silver usually 1 pip = 10 points
-            pip_multiplier = 10.0
-        elif "BTC" in symbol or "ETH" in symbol:
-            # Crypto pip multipliers vary, but usually 1:1 for the calculation logic
-            pip_multiplier = 1.0 
+        if "BTC" in symbol or "ETH" in symbol:
+            pip_multiplier = 1.0
         else:
-            # Standard Forex (EURUSD, GBPUSD, etc.)
             pip_multiplier = 10.0
 
-        # Calculate exact points
-        safe_sl_points = int(safe_sl_pips * pip_multiplier)
-        
+        base_sl_points = int(safe_sl_pips * pip_multiplier)
+        safe_distance_points = spread_points + min_stop_level
+        safe_sl_points = max(base_sl_points, safe_distance_points)
+        actual_sl_pips = safe_sl_points / pip_multiplier
+
         # Call the new function directly! It handles all the MT5 tick math and min/max limits.
         optimal_lots = self.calculate_position_size(symbol, max_risk_usd, safe_sl_points)
         
@@ -155,7 +156,7 @@ class RiskManager:
         if optimal_lots == 0.0:
              return {
                 "approved": False,
-                "reason": f"Target risk (${max_risk_usd:.2f}) is too small to meet the minimum lot size for {symbol}.",
+                "reason": f"Spread is too large ({spread_points} points). Target risk (${max_risk_usd:.2f}) drops volume below minimum lot size.",
             }
 
         return {
@@ -165,7 +166,7 @@ class RiskManager:
             "lots": optimal_lots,
             "risk_usd": max_risk_usd,
             "applied_risk_pct": actual_risk_pct,
-            "stop_loss_pips": safe_sl_pips
+            "stop_loss_pips": actual_sl_pips
         }
     
     def calculate_micro_lot(self, symbol: Optional[str] = None) -> float:
