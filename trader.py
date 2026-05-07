@@ -2,6 +2,9 @@ import MetaTrader5 as mt5
 import psutil
 import os
 import pandas as pd
+import csv
+from datetime import datetime
+from pathlib import Path
 
 class Trader:
     
@@ -59,10 +62,14 @@ class Trader:
             self.notify("Not connected to MetaTrader 5")
             return None
         rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, f"TIMEFRAME_{timeframe}"), 0, num_bars)
-        # set date as index
+        # FIX: Check if rates is valid before processing
+        if rates is None or len(rates) == 0:
+            return None
+        # Set date as index
         df = pd.DataFrame(rates)
-        df = df.set_index(pd.to_datetime(df['time'], unit='s'))
-        df.drop(columns=['time'], inplace=True)
+        if 'time' in df.columns:
+            df = df.set_index(pd.to_datetime(df['time'], unit='s'))
+            df.drop(columns=['time'], inplace=True)
         return df
         
     def get_symbol_info(self, symbol: str):

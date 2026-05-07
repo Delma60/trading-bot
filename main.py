@@ -3,6 +3,7 @@ import time
 import threading
 import signal
 import sys
+from datetime import datetime
 from trader import Trader
 from strategies.strategy_manager import StrategyManager
 from manager.risk_manager import RiskManager
@@ -15,14 +16,9 @@ shutdown_event = threading.Event()
 current_agent_listener = None
 
 def _default_agent_notify(msg: str, priority: str = "normal"):
-    prefix = ""
-    if priority == "critical":
-        prefix = "⚠️ "
-    elif priority == "trade_executed":
-        prefix = "🟢 "
-    elif priority == "normal":
-        prefix = ""
-    print(f"\n[Agent]{prefix}: {msg}")
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    # Format directly to your required standard
+    print(f"[{timestamp}] [Bot]: {msg}")
 
 def agent_notify(msg: str, priority: str = "normal"):
     """
@@ -68,7 +64,6 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
                 notify(f"🎉 Daily Goal of ${daily_target} reached! Closing all trades and sleeping until tomorrow.")
                 portfolio_manager.broker.close_all_positions()
                 # Sleep until tomorrow
-                import time
                 time.sleep(86400)  # 24 hours
                 continue
             
