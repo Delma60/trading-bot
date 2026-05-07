@@ -269,7 +269,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
     def _update_max_open_trades(self):
         """Set max exposure equal to the number of tracked trading symbols."""
         self.risk_manager.max_open_trades = max(1, len(self.trading_symbols))
-        print(f"[Bot]: Exposure limit set to {self.risk_manager.max_open_trades} trades based on your symbol list.")
+        # Silenced print to keep startup clean
 
     def _parse_timeframe_from_text(self, text: str) -> str:
         match = re.search(r'\b(M1|M5|M15|M30|H1|H4|D1)\b', text.upper())
@@ -848,10 +848,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         server = data.get("server")
         
         if (login and password and server):
-            print(f"[Bot][SYSTEM]: Found saved profile. Attempting to reconnect to account {login}...")
-            if self.broker.connect(login=login, password=password, server=server):
-                print(f"[Bot]: ✅ Welcome back! Your account is connected.")
-            else:
+            if not self.broker.connect(login=login, password=password, server=server):
                 print("[Bot]: ⚠️ Saved credentials failed. Please log in again.")
                 login = password = server = None
         
@@ -896,15 +893,15 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         if not self._load_trading_config():
             self.setup_trading_config()
         else:
-            print(f"\n[Bot]: Welcome back!")
-            print(f"   📊 Watchlist: {', '.join(self.trading_symbols)}")
-            print(f"   🎯 Risk: {self.risk_percentage}%")
-            update = input("\n[Bot]: Update trading settings? (y/n): ").strip().lower()
-            if update in ['y', 'yes']:
-                self.setup_trading_config()
+            # Clean, non-blocking startup dashboard
+            print("\n" + "="*50)
+            print(f"🤖 SYSTEM ONLINE | Risk: {self.risk_percentage}% | TP: ${self.target_profit} | SL: {self.stop_loss} pips")
+            if self.trading_symbols:
+                print(f"📊 Tracking ({len(self.trading_symbols)}): {', '.join(self.trading_symbols)}")
+            print("="*50)
         
         # === MAIN CHAT LOOP ===
-        print("\n[Bot]: System ready! Type 'scan' to hunt for trades. Type 'quit' to exit.")
+        print("\n[Bot]: System ready! Type 'scan' to hunt, or ask me to change your settings.")
         try:
             while True:
                 # Use patch_stdout to keep the prompt safe from background prints

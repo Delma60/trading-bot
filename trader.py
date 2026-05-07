@@ -256,11 +256,19 @@ class Trader:
         """Get total realized profit/loss for today."""
         if not self.connected:
             return 0.0
+            
         from datetime import datetime
+        
+        # Calculate timestamps for the start of today and right now
         today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-        deals = mt5.history_deals_get(today_start, mt5.TIME_CURRENT)
+        today_end = int(datetime.now().timestamp())
+        
+        # Use today_end instead of the invalid mt5.TIME_CURRENT
+        deals = mt5.history_deals_get(today_start, today_end)
+        
         if deals is None:
             return 0.0
+            
         return sum(deal.profit for deal in deals if deal.profit is not None)
     
     def get_total_floating_profit(self):
