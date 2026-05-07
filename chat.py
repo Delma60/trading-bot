@@ -509,23 +509,46 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             print("[Bot]: I'm a bit unsure. Asking my Gemini brain to confirm...")
             
             # 1. Load valid intents from your JSON
-            with open(self.INTENTS_FILE, 'r') as f:
+            with open(self.intents_filepath, 'r') as f:
                 valid_intents = [i['tag'] for i in json.load(f)['intents']]
             
-            gemini_intent = self.route_intent(inp, valid_intents, intent_tag)
-            
-            # 3. Execute the result
-            if gemini_intent != "UNKNOWN":
-                print(f"[Bot]: Gemini mapped this to '{gemini_intent}'. Executing!")
-                self._execute_action(gemini_intent, inp, entities)
+            # chat.py (around line 515)
+
+            gemini_raw = self.route_intent(inp, valid_intents, intent_tag)
+
+            # Case 1: Gemini matched a fixed intent
+            if gemini_raw in valid_intents:
+                print(f"[Bot]: Gemini mapped this to '{gemini_raw}'. Executing!")
+                self._execute_action(gemini_raw, inp, entities)
                 return True
-            else:
-                # Fallback to the old manual confirmation if Gemini fails or is offline
-                print(f"[Bot]: Even my Gemini brain couldn't figure that out.")
-                print(f"[Bot]: I'm {int(confidence*100)}% sure you want to '{intent_tag}'. Is that correct? (y/n)")
+
+            # Case 2: Gemini provides a direct answer (General Chat)
+            elif gemini_raw.startswith("GENERAL_CHAT:"):
+                response = gemini_raw.replace("GENERAL_CHAT:", "").strip()
+                print(f"[Bot]: {response}")
+                return True
+
+            # Case 3: Gemini suggests a new intent we don't have yet
+            elif gemini_raw.startswith("SUGGEST_NEW:"):
+                suggestion = gemini_raw.replace("SUGGEST_NEW:", "").strip()
+                new_tag, suggested_response = suggestion.split("|")
+                
+                print(f"[Bot]: I don't have a specific command for that, but I think you mean '{new_tag.strip()}'.")
+                print(f"[Bot]: {suggested_response.strip()}")
+                
+                # Ask if the bot should learn this
+                print(f"[Bot]: Should I learn this phrase and add it to my '{new_tag.strip()}' module? (y/n)")
                 self.pending_action = "confirm_learning"
-                self.pending_data = {"predicted_tag": intent_tag, "original_input": inp}
+                self.pending_data = {
+                        "tag": new_tag.strip(),
+                        "pattern": inp,
+                        "response": suggested_response.strip()
+                    }
                 return True
+
+            else:
+                print("[Bot]: I'm still learning. Try asking to 'scan' or 'show portfolio'.")
+                return False
 
         # Low confidence: Total failure
         else:
@@ -534,9 +557,6 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             self.pending_data = {"original_input": inp}
             return True
             
-        
-        print("[Bot]: I'm not sure what you mean. Try asking to 'scan', 'show my symbols', or 'add AUDCAD to portfolio'.")
-        return False
     
     def _handle_pending_action(self, inp: str) -> bool:
         """Handles completion of incomplete commands (multi-turn dialogue)."""
@@ -584,23 +604,14 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         elif self.pending_action == "confirm_learning":
             tag = self.pending_data["predicted_tag"]
             original_input = self.pending_data["original_input"]
+            new_response = self.pending_data.get("response") # The Gemini-generated response
             
-            if inp.lower() in ["y", "yes", "yeah", "yup"]:
-                print(f"[Bot]: Great! I am executing the action and saving this phrase to my brain.")
-                
-                # 1. Tell the NLP Engine to permanently learn it!
+            if inp.lower() in ["y", "yes"]:
+                # Update intents.json with both the pattern and the NEW response
                 self.add_intent_pattern(tag, original_input, notify_callback=self.receive_system_alert)
+                # Note: You may need to add a method to NLPEngine to save responses as well!
+                print(f"[Bot]: ✅ Knowledge updated. I'll know what to do next time!")
                 
-                # 2. Execute the actual command
-                self._execute_action(tag, original_input)
-            else:
-                print("[Bot]: Ah, my mistake! Action cancelled.")
-                
-            # Clear the pending state
-            self.pending_action = None
-            self.pending_data = {}
-            return True
-        
         elif self.pending_action == "teach_new_phrase":
             # For now, we just reset. (In the future, you can build a menu here to pick the right intent).
             print("[Bot]: Let's start over. What would you like to do?")

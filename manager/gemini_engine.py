@@ -4,16 +4,17 @@ import google.generativeai as genai
 class GeminiEngine:
     """Handles all interactions with the Google Gemini API for smart fallback and reasoning."""
     
-    def __init__(self, model_name: str = 'gemini-1.5-flash'):
-        self.api_key = os.environ.get("GEMINI_API_KEY")
+    def __init__(self, model_name: str = 'gemini-2.5-flash'):
+        self.api_key = "AIzaSyCgk6s83dhCje7ysmaS6L8eX_QKBE6_OVU"  # //os.environ.get("GEMINI_API_KEY")
         self.is_ready = False
         
         if not self.api_key:
             print("⚠️ [Gemini Engine]: GEMINI_API_KEY environment variable not set. Smart routing disabled.")
         else:
             try:
+                print(f"this is my API key: {self.api_key}")
                 genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel(model_name)
+                self.gemini_model = genai.GenerativeModel(model_name)
                 self.is_ready = True
             except Exception as e:
                 print(f"⚠️ [Gemini Engine]: Failed to initialize API: {e}")
@@ -27,26 +28,25 @@ class GeminiEngine:
             return "UNKNOWN"
 
         prompt = f"""
-        You are the NLP routing engine for an algorithmic trading bot.
-        The user typed: "{user_input}"
-        
-        My local model guessed the intent is: "{local_guess}"
-        
-        Here is the master list of all valid intents you can choose from:
-        {valid_intents}
-        
-        Which intent does the user's message best match? 
-        Respond ONLY with the exact intent string. If it matches nothing, respond with "UNKNOWN".
-        """
+            You are an adaptive NLP layer for a trading bot. 
+            User input: "{user_input}"
+            Local model guess: "{local_guess}"
+            Known categories: {valid_intents}
+
+            Instructions:
+            1. If it matches a 'Known category', respond with ONLY that tag.
+            2. If it's a general question, respond with: "GENERAL_CHAT: [Your concise answer]"
+            3. If it's a new type of command, respond with: "SUGGEST_NEW: [Short_Tag] | [A response for the bot to give]"
+
+            Respond in one of those three formats ONLY.
+            """
         
         try:
-            response = self.model.generate_content(prompt)
+            response = self.gemini_model.generate_content(prompt)
             gemini_intent = response.text.strip()
+            print(f"[Gemini Engine]: Rerouted intent: '{local_guess}' => '{gemini_intent}'")
             
-            if gemini_intent in valid_intents:
-                return gemini_intent
-            else:
-                return "UNKNOWN"
+            return gemini_intent
                 
         except Exception as e:
             print(f"[Gemini Engine]: API Error during routing - {e}")
@@ -58,7 +58,7 @@ class GeminiEngine:
             return "I am currently offline. Please set my API key to enable general chat."
             
         try:
-            response = self.model.generate_content(f"You are a helpful trading assistant. Answer concisely: {question}")
+            response = self.gemini_model.generate_content(f"You are a helpful trading assistant. Answer concisely: {question}")
             return response.text
         except Exception as e:
             return f"I encountered an error: {e}"
