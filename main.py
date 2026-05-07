@@ -119,7 +119,8 @@ if __name__ == "__main__":
         intents_filepath="intents.json", 
         broker=broker, 
         strategy_manager=strategy_manager,
-        portfolio_manager=portfolio_manager
+        portfolio_manager=portfolio_manager,
+        risk_manager=risk_manager
     )
     current_agent_listener = bot.receive_system_alert
 

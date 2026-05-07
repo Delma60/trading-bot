@@ -38,7 +38,7 @@ class Chatbot(ProfileManager, NLPEngine):
     MODEL_FILE = DATA_DIR / "chatbot_model.keras"
     SYMBOLS_CACHE_DIR = DATA_DIR / "symbols"
 
-    def __init__(self, intents_filepath: str, broker: Trader, strategy_manager: StrategyManager, portfolio_manager: PortfolioManager):
+    def __init__(self, intents_filepath: str, broker: Trader, strategy_manager: StrategyManager, portfolio_manager: PortfolioManager, risk_manager: RiskManager):
         ProfileManager.__init__(self, data_dir=str(self.DATA_DIR))
         NLPEngine.__init__(self, intents_filepath=intents_filepath, data_dir=str(self.DATA_DIR))
         self.stemmer = LancasterStemmer()
@@ -46,6 +46,7 @@ class Chatbot(ProfileManager, NLPEngine):
         self.broker = broker  
         self.strategy_manager = strategy_manager
         self.portfolio_manager = portfolio_manager
+        self.risk_manager = risk_manager
 
         self.notification_inbox = []
         self.inbox_lock = threading.Lock()
