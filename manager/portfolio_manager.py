@@ -210,7 +210,7 @@ class PortfolioManager:
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
             # Removed spammy strategy assignment notification
-            signal = self.strategy_manager.check_signals(symbol, strategy=strategy_name)
+            signal = self.strategy_manager.dynamic_signal_check(symbol)
             
             if signal and signal.get('action') != 'WAIT':
                 trade_plan = self.risk_manager.calculate_safe_trade(
@@ -227,7 +227,8 @@ class PortfolioManager:
                         action=signal['action'],
                         lots=lots,
                         stop_loss_pips=sl_pips,
-                        take_profit_pips=sl_pips * 2.0  # Example: Setting a 1:2 Risk/Reward ratio
+                        take_profit_pips=sl_pips * 2.0,  # Example: Setting a 1:2 Risk/Reward ratio
+                        strategy=signal.get('strategy_used', strategy_name)
                     )
                     
                     if exec_result["success"]:
@@ -255,7 +256,8 @@ class PortfolioManager:
                                 action=signal['action'],
                                 lots=new_lots,
                                 stop_loss_pips=sl_pips,
-                                take_profit_pips=sl_pips * 2.0
+                                take_profit_pips=sl_pips * 2.0,
+                                strategy=signal.get('strategy_used', strategy_name)
                             )
                             
                             if retry_exec["success"]:

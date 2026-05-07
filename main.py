@@ -61,9 +61,14 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
             
             # 3. Have we hit the daily goal?
             if today_profit + floating_profit >= daily_target:
-                notify(f"🎉 Daily Goal of ${daily_target} reached! Closing all trades and sleeping until tomorrow.")
+                notify(f"🎉 Daily Goal of ${daily_target} reached! Closing all trades.")
                 portfolio_manager.broker.close_all_positions()
-                # Sleep until tomorrow
+                
+                # +++ TRIGGER CONTINUOUS LEARNING HERE +++
+                for symbol in config.get("trading_symbols", []):
+                    portfolio_manager.strategy_manager.continuous_learning_routine(symbol)
+                
+                notify("💤 Neural Net optimized. Sleeping until tomorrow.")
                 time.sleep(86400)  # 24 hours
                 continue
             

@@ -51,6 +51,32 @@ class Trader:
         self.notify(f"✅ MT5 Connected: {self.login} on {self.server}")
         return True
     
+    def _log_trade_history(self, action: str, symbol: str, lots: float, price: float, ticket: int, comment: str, strategy: str = "Unknown"):
+        """Logs executed trades to a CSV file for future analytics/ML training."""
+        file_path = Path("data/trade_history.csv")
+        file_exists = file_path.exists()
+        
+        # Ensure the data directory exists
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(file_path, mode='a', newline='') as f:
+            writer = csv.writer(f)
+            # Write headers if the file is new
+            if not file_exists:
+                writer.writerow(["Timestamp", "Ticket", "Action", "Symbol", "Volume", "Execution_Price", "Comment", "Strategy"])
+            
+            # Write the trade data
+            writer.writerow([
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ticket,
+                action,
+                symbol,
+                lots,
+                price,
+                comment,
+                strategy
+            ])
+    
     def getSymbols(self):
         if not self.connected:
             self.notify("Not connected to MetaTrader 5")
@@ -125,7 +151,7 @@ class Trader:
             return 1.0  # Indices: 1 pip = 1 point
         return 10.0  # Default Forex: 1 pip = 10 points
         
-    def execute_trade(self, symbol: str, action: str, lots: float, stop_loss_pips: float = 0.0, take_profit_pips: float = 0.0) -> dict:
+    def execute_trade(self, symbol: str, action: str, lots: float, stop_loss_pips: float = 0.0, take_profit_pips: float = 0.0, strategy: str = "Unknown") -> dict:
         """
         Builds and sends a live order to MetaTrader 5.
         """
@@ -225,6 +251,17 @@ class Trader:
         # 6. Check if it succeeded
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             return {"success": False, "reason": f"Order rejected. MT5 Code: {result.retcode}, {result.comment}"}
+
+        # +++ ADD THIS LINE TO LOG THE TRADE +++
+        self._log_trade_history(
+            action=action.upper(),
+            symbol=symbol,
+            lots=lots,
+            price=result.price,
+            ticket=result.order,
+            comment=request.get("comment", ""),
+            strategy=strategy
+        )
 
         return {"success": True, "ticket": result.order, "price": result.price}
     
@@ -350,6 +387,16 @@ class Trader:
             if result.retcode != mt5.TRADE_RETCODE_DONE:
                 self.notify(f"❌ Failed to close {symbol} (Ticket #{position.ticket}). MT5 Code: {result.retcode}, {result.comment}")
             else:
+                # +++ ADD THIS LINE TO LOG THE CLOSE +++
+                self._log_trade_history(
+                    action="CLOSE",
+                    symbol=symbol,
+                    lots=position.volume,
+                    price=result.price,
+                    ticket=result.order,
+                    comment=f"Profit: {position.profit}",
+                    strategy="Unknown"
+                )
                 self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
 
     def close_position(self, symbol: str):
@@ -405,6 +452,16 @@ class Trader:
                 self.notify(f"❌ Failed to close {symbol} (Ticket #{position.ticket}). MT5 Code: {result.retcode}")
                 success = False
             else:
+                # +++ ADD THIS LINE TO LOG THE CLOSE +++
+                self._log_trade_history(
+                    action="CLOSE",
+                    symbol=symbol,
+                    lots=position.volume,
+                    price=result.price,
+                    ticket=result.order,
+                    comment=f"Profit: {position.profit}",
+                    strategy="Unknown"
+                )
                 self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
         
         return success

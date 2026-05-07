@@ -11,3 +11,5 @@ psutil
 prompt_toolkit
 rich
 python-dotenv
+pandas-ta
+xgboost

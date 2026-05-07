@@ -84,6 +84,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             "bulk_scan": lambda _: self._run_autonomous_scan(),
             "check_notifications": lambda _: self._read_inbox(),
             "close_all": lambda _: self.broker.close_all_positions(), # <-- ADD THIS LINE
+            "retrain_model": lambda _: self._retrain_model(),
         }
 
         
@@ -494,6 +495,15 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         for r in results: self.bot_print(r)
         self.bot_print(self.portfolio_manager.get_portfolio_health())
 
+    def _retrain_model(self):
+        """Manually trigger continuous learning for the last symbol."""
+        symbol = self.memory.get("last_symbol")
+        if not symbol:
+            self.bot_print("No last symbol in memory. Please mention a symbol first.")
+            return
+        self.strategy_manager.continuous_learning_routine(symbol)
+        self.bot_print(f"✅ Retrained model for {symbol}.")
+
     
 
     def _handle_intent(self, inp: str) -> bool:
@@ -521,6 +531,11 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         
         # === STEP 4: Handle symbol-based commands ===
         if self._handle_symbol_command(inp):
+            return True
+
+        # === STEP 4.5: Handle direct commands ===
+        if "retrain" in clean_inp and "model" in clean_inp:
+            self._execute_action("retrain_model", inp, entities)
             return True
 
         # === STEP 5: Predict intent via Keras model ===
