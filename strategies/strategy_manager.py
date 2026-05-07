@@ -24,6 +24,10 @@ class StrategyManager:
         "Arbitrage",
     ]
     
+    def __init__(self, broker: Trader, notify_callback=print):
+        self.broker = broker
+        self.notify = notify_callback
+    
     # Keep descriptions separate from the actual strategy engines
     descriptions = {
         "Mean_Reversion": "Mean Reversion: Buys oversold dips, sells overbought rips.",
@@ -66,7 +70,7 @@ class StrategyManager:
         
         # 1. Ensure the requested strategy actually exists
         if strategy not in self.engines.keys():
-            print(f"[Strategy Manager]: ⚠️ Unknown strategy '{strategy}'. Defaulting to Mean_Reversion.")
+            self.notify(f"[Strategy Manager]: ⚠️ Unknown strategy '{strategy}'. Defaulting to Mean_Reversion.")
             strategy = "Mean_Reversion"
             
         # 2. Get the correct engine object

@@ -10,24 +10,33 @@ from chat import Chatbot
 
 # Global shutdown flag for graceful termination
 shutdown_event = threading.Event()
+current_agent_listener = None
 
-def agent_notify(msg: str):
-    """
-    Centralized communication channel for the trading agent.
-    This is the single point of truth for all system messages.
-    Later, you can swap this print statement with a Telegram API call,
-    a WebSocket push, or an MCP server log.
-    """
-    print(f"\n[Agent]: {msg}")
+def _default_agent_notify(msg: str, priority: str = "normal"):
+    prefix = ""
+    if priority == "critical":
+        prefix = "⚠️ "
+    elif priority == "trade_executed":
+        prefix = "🟢 "
+    elif priority == "normal":
+        prefix = ""
+    print(f"\n[Agent]{prefix}: {msg}")
 
-def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minutes: int = 15, notify=None):
+def agent_notify(msg: str, priority: str = "normal"):
+    """
+    Centralized communication channel for the agent.
+    If a Chatbot listener is registered, route notifications through the bot's inbox.
+    """
+    if current_agent_listener is not None:
+        current_agent_listener(msg, priority)
+    else:
+        _default_agent_notify(msg, priority)
+
+def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minutes: int = 15, notify=agent_notify):
     """
     This runs in the background forever. It wakes up, scans the market, 
     executes trades if it finds any, and goes back to sleep.
     """
-    if notify is None:
-        notify = print
-    
     notify(f"🟢 Background Scanner started. Waking up every {scan_interval_minutes} minutes.")
     
     # Define your global risk rules here (or load them from a config file)
@@ -50,9 +59,10 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_minute
                 max_daily_loss=MAX_DAILY_LOSS
             )
             
-            # 3. Print the results through the agent's centralized channel
+            # 3. Send the results through the agent
             for result in results:
-                notify(result)
+                priority = "trade_executed" if "EXECUTED" in result else "critical" if "🛑" in result or "FATAL" in result else "normal"
+                notify(result, priority=priority)
                 
         except Exception as e:
             notify(f"⚠️ Error during autonomous scan: {e}")
@@ -66,7 +76,7 @@ def signal_handler(signum, frame):
     """
     Handle Ctrl+C (SIGINT) and termination signals gracefully.
     """
-    agent_notify("🛑 Shutdown signal received (Ctrl+C or termination).")
+    agent_notify("🛑 Shutdown signal received (Ctrl+C or termination).", priority="critical")
     shutdown_event.set()
 
 if __name__ == "__main__":
@@ -76,7 +86,7 @@ if __name__ == "__main__":
     broker = Trader(notify_callback=agent_notify)
 
     # 2. Initialize the Engines
-    strategy_manager = StrategyManager(broker)
+    strategy_manager = StrategyManager(broker, notify_callback=agent_notify)
     risk_manager = RiskManager(broker, max_open_trades=3, min_margin_level=150.0, notify_callback=agent_notify)
 
     # 3. Initialize the Portfolio Manager
@@ -100,9 +110,9 @@ if __name__ == "__main__":
         intents_filepath="intents.json", 
         broker=broker, 
         strategy_manager=strategy_manager,
-        portfolio_manager=portfolio_manager,
-        notify_callback=agent_notify
+        portfolio_manager=portfolio_manager
     )
+    current_agent_listener = bot.receive_system_alert
 
     # 7. Run chatbot with proper exception handling and cleanup
     try:
@@ -136,5 +146,5 @@ if __name__ == "__main__":
                 agent_notify(f"⚠️ Error disconnecting broker: {e}")
         
         # 4. Final goodbye message
-        agent_notify("👋 Trading bot shutdown complete. Goodbye!")
+        agent_notify("👋 Trading bot shutdown complete. Goodbye!\n")
         sys.exit(0)

@@ -10,7 +10,7 @@ class Trader:
         self.password = password
         self.server = server
         self.connected = False
-        self.notify = notify_callback  # Store the centralized notification callback
+        self.notify = notify_callback
         
     def is_mt5_running(self):
         """Check if MetaTrader 5 terminal is running"""
@@ -46,7 +46,7 @@ class Trader:
                     self.notify("Failed with explicit path, trying without path...")
                     # Second try: let MT5 find the terminal automatically
                     if not mt5.initialize(timeout=120000):
-                        self.notify("initialize() failed, error code =" + str(mt5.last_error()))
+                        self.notify(f"initialize() failed, error code = {mt5.last_error()}")
                         self.notify("Please ensure:")
                         self.notify("1. MetaTrader 5 terminal is running")
                         self.notify("2. MT5 is installed in the default location")
@@ -55,7 +55,7 @@ class Trader:
             else:
                 self.notify(f"MT5 not found at {mt5_path}, trying automatic detection...")
                 if not mt5.initialize(timeout=120000):
-                    self.notify("initialize() failed, error code =" + str(mt5.last_error()))
+                    self.notify(f"initialize() failed, error code = {mt5.last_error()}")
                     return False
                     
         except Exception as e:
@@ -65,7 +65,7 @@ class Trader:
         self.notify("MT5 initialized successfully, attempting login...")
         authorized = mt5.login(self.login, password=self.password, server=self.server)
         if not authorized:
-            self.notify("Login failed, error code =" + str(mt5.last_error()))
+            self.notify(f"Login failed, error code = {mt5.last_error()}")
             return False
         
         self.connected = True
@@ -74,7 +74,7 @@ class Trader:
     
     def getSymbols(self):
         if not self.connected:
-            print("Not connected to MetaTrader 5")
+            self.notify("Not connected to MetaTrader 5")
             return None
         symbols = mt5.symbols_get()
         return symbols
@@ -206,5 +206,5 @@ class Trader:
         if account_info is not None:
             return account_info.balance
         else:
-            self.notify("Failed to get account info, error code =" + str(mt5.last_error()))
+            self.notify(f"Failed to get account info, error code = {mt5.last_error()}")
             return None

@@ -5,6 +5,7 @@ import pickle
 import random
 import re
 import getpass
+import threading
 import numpy as np
 import pandas as pd
 import nltk
@@ -16,12 +17,14 @@ from pathlib import Path
 from datetime import datetime
 from typing import Callable, Any, Optional
 
+from manager.nlp_engine import NLPEngine
 from manager.portfolio_manager import PortfolioManager
 from manager.risk_manager import RiskManager
+from manager.profile_manager import ProfileManager
 from strategies.strategy_manager import StrategyManager
 from trader import Trader
 
-class Chatbot:
+class Chatbot(ProfileManager, NLPEngine):
     """Handles NLP, Model Training, and the conversational trading interface."""
     
     # Centralized file paths
@@ -33,13 +36,16 @@ class Chatbot:
     MODEL_FILE = DATA_DIR / "chatbot_model.keras"
     SYMBOLS_CACHE_DIR = DATA_DIR / "symbols"
 
-    def __init__(self, intents_filepath: str, broker: Trader, strategy_manager: StrategyManager, portfolio_manager: PortfolioManager, notify_callback=print):
+    def __init__(self, intents_filepath: str, broker: Trader, strategy_manager: StrategyManager, portfolio_manager: PortfolioManager):
+        super().__init__(intents_filepath=intents_filepath)
         self.stemmer = LancasterStemmer()
         self.intents_filepath = Path(intents_filepath)
         self.broker = broker  
         self.strategy_manager = strategy_manager
         self.portfolio_manager = portfolio_manager
-        self.notify = notify_callback  # Store the centralized notification callback
+
+        self.notification_inbox = []
+        self.inbox_lock = threading.Lock()
 
         self.last_intent = None  
         self.active_suggestion = None  
@@ -61,7 +67,8 @@ class Chatbot:
             "trading_symbols": lambda _: self._format_symbols_data(),
             "trading_settings": lambda _: self._format_settings_data(),
             "update_config": lambda _: self.setup_trading_config(),
-            "bulk_scan": lambda _: self._run_autonomous_scan()
+            "bulk_scan": lambda _: self._run_autonomous_scan(),
+            "check_notifications": lambda _: self._read_inbox()
         }
 
         self.words, self.labels, self.training, self.output = [], [], [], []
@@ -88,6 +95,35 @@ class Chatbot:
         try:
             with filepath.open("r") as f: return json.load(f)
         except (json.JSONDecodeError, IOError): return default if default is not None else {}
+
+    def receive_system_alert(self, msg: str, priority: str = "normal"):
+        """
+        Background engines call this to store notifications.
+        Priority values: normal, trade_executed, critical.
+        """
+        with self.inbox_lock:
+            self.notification_inbox.append({"msg": msg, "priority": priority})
+
+        if priority in ["critical", "trade_executed"]:
+            print(f"\n🔔 [BOT ALERT]: {msg}")
+            print("You: ", end="", flush=True)
+
+    def _read_inbox(self):
+        with self.inbox_lock:
+            if not self.notification_inbox:
+                return "Your inbox is empty. The scanner hasn't reported anything new."
+
+            items = list(self.notification_inbox)
+            self.notification_inbox.clear()
+
+        lines = [f"You have {len(items)} unread system events:"]
+        for item in items:
+            prefix = "🟢" if item['priority'] == "trade_executed" else "ℹ️"
+            if item['priority'] == "critical":
+                prefix = "⚠️"
+            lines.append(f"  {prefix} {item['msg']}")
+
+        return "\n".join(lines)
 
     def _write_json(self, filepath: Path, data: Any):
         filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -404,12 +440,7 @@ class Chatbot:
         for r in results: print(f"[Bot]: {r}")
         print(f"[Bot]: {self.portfolio_manager.get_portfolio_health()}")
 
-    # --- NLP & Intent Handling ---
-
-    def _initialize_nlp(self):
-        with self.intents_filepath.open("r") as f: self.data = json.load(f)
-        self._process_data()
-        self._build_model()
+    
 
     def _handle_intent(self, inp: str) -> bool:
         """Processes user input and routes to managers[cite: 6]."""
@@ -552,70 +583,3 @@ class Chatbot:
             print("\n[Bot]: Interrupt detected during chat.")
         except Exception as e:
             print(f"\n[Bot]: ❌ Error during chat: {e}")
-
-    # (Place existing _process_data, _build_model, and data formatters here)[cite: 6]
-    
-    def _build_model(self):
-        if self.MODEL_FILE.exists():
-            self.model = load_model(str(self.MODEL_FILE))
-        else:
-            self.model = Sequential([
-                Dense(8, input_shape=(len(self.training[0]),), activation='relu'),
-                Dense(8, activation='relu'),
-                Dense(len(self.output[0]), activation='softmax')
-            ])
-            self.model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-            self.model.fit(self.training, self.output, epochs=200, batch_size=8, verbose=1)
-            self.model.save(str(self.MODEL_FILE))
-
-    def _bag_of_words(self, s: str) -> np.ndarray:
-        bag = [0 for _ in range(len(self.words))]
-        s_words = [self.stemmer.stem(word.lower()) for word in nltk.word_tokenize(s)]
-        
-        for se in s_words:
-            for i, w in enumerate(self.words):
-                if w == se:
-                    bag[i] = 1
-                    
-        return np.array([bag])
-
-    def _process_data(self):
-        if self.DATA_PICKLE.exists():
-            with self.DATA_PICKLE.open("rb") as f:
-                self.words, self.labels, self.training, self.output = pickle.load(f)
-        else:
-            docs_x = []
-            docs_y = []
-
-            for intent in self.data['intents']:
-                for pattern in intent['patterns']:
-                    wrds = nltk.word_tokenize(pattern)
-                    self.words.extend(wrds)
-                    docs_x.append(wrds) 
-                    docs_y.append(intent['tag'])
-                    
-                if intent['tag'] not in self.labels:
-                    self.labels.append(intent['tag'])
-
-            self.words = sorted(list(set([self.stemmer.stem(w.lower()) for w in self.words if w not in ["?", "!", ".", ","]])))
-            self.labels = sorted(self.labels)
-
-            out_empty = [0 for _ in range(len(self.labels))]
-
-            for x, doc in enumerate(docs_x):
-                bag = []
-                wrds = [self.stemmer.stem(w.lower()) for w in doc]
-                for w in self.words:
-                    bag.append(1 if w in wrds else 0)
-                    
-                output_row = out_empty[:]
-                output_row[self.labels.index(docs_y[x])] = 1
-                
-                self.training.append(bag)
-                self.output.append(output_row)
-
-            self.training = np.array(self.training)
-            self.output = np.array(self.output)
-
-            with self.DATA_PICKLE.open("wb") as f:
-                pickle.dump((self.words, self.labels, self.training, self.output), f)

@@ -10,7 +10,7 @@ class RiskManager:
         self.broker = broker
         self.max_open_trades = max_open_trades
         self.min_margin_level = min_margin_level
-        self.notify = notify_callback  # Store the centralized notification callback
+        self.notify = notify_callback
     
     def _get_realized_daily_loss(self) -> float:
         """

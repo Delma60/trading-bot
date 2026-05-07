@@ -22,7 +22,7 @@ class PortfolioManager:
         self.broker = broker
         self.strategy_manager = strategy_manager
         self.risk_manager = risk_manager
-        self.notify = notify_callback  # Store the centralized notification callback
+        self.notify = notify_callback
         
         # Load the fallback config
         self.config = self._load_json(self.CONFIG_PATH, fallback={})
