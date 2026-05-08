@@ -863,7 +863,10 @@ class AgentCore:
             step.result = self.executor.run(step, plan)
             step.status = "done" if "error" not in (step.result or {}) else "failed"
 
-        # 3. Synthesize
+        risk_step = plan.context.get("dynamic_risk_targets")
+        if risk_step:
+            plan.context["dynamic_targets"] = risk_step
+
         response = self.synthesizer.synthesize(plan)
         plan.final_response = response
         self.last_plan = plan

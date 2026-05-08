@@ -1113,7 +1113,7 @@ from manager.response_engine import ResponseEngine
 from manager.portfolio_manager import PortfolioManager
 from manager.risk_manager import RiskManager
 from manager.profile_manager import ProfileManager
-from manager.agent_core import AgentCore
+from manager.agent_core import (AgentPlan, AgentCore)
 from strategies.strategy_manager import StrategyManager
 from trader import Trader
 
@@ -1142,6 +1142,51 @@ class ActionExecutor:
             return {"risk_percentage": 1.0, "stop_loss": 20.0,
                     "max_daily_loss": 500.0, "trading_symbols": ["EURUSD"],
                     "target_profit": 10.0}
+
+    # Inside ActionExecutor in chat.py
+    
+    def _execute_trade_action(self, plan: AgentPlan):
+        """Executes a live trade using the dynamically calculated risk targets."""
+        symbol = plan.symbol
+        
+        # 1. Determine direction from the suggested action or context
+        direction = plan.context.get("action", "BUY").upper()
+        
+        # 2. Calculate position size (assuming you have a method for this)
+        lot_size = self.rm.calculate_position_size(symbol) 
+        
+        # 3. Extract the Dynamic Targets we built in the reasoning engine
+        dynamic_targets = plan.context.get("dynamic_targets", {})
+        
+        if direction == "BUY":
+            sl_pips = dynamic_targets.get("sl_buy_pips", 50)  # Safe fallback if empty
+            tp_pips = dynamic_targets.get("tp_buy_pips", 100)
+        elif direction == "SELL":
+            sl_pips = dynamic_targets.get("sl_sell_pips", 50)
+            tp_pips = dynamic_targets.get("tp_sell_pips", 100)
+        else:
+            return "Trade execution aborted: Invalid direction."
+
+        # Optional: Print to console so you can physically see the dynamic targets being used
+        print(f"[Execution Layer] Routing {direction} on {symbol} | SL: {sl_pips}p | TP: {tp_pips}p")
+
+        # 4. Send the order to the MT5 Broker
+        try:
+            success = self.broker.open_trade(
+                symbol=symbol,
+                order_type=direction,
+                volume=lot_size,
+                sl_pips=sl_pips,
+                tp_pips=tp_pips
+            )
+            
+            if success:
+                return f"Successfully executed {direction} on {symbol} (SL: {sl_pips}p, TP: {tp_pips}p)."
+            else:
+                return f"Broker rejected the {direction} order for {symbol}."
+                
+        except Exception as e:
+            return f"Execution failed: {str(e)}"
 
     def execute_trade(self, symbol: str, direction: str, lots: Optional[float] = None) -> str:
         """Execute a trade and return a human-readable outcome."""
