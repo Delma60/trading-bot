@@ -16,6 +16,8 @@ class RiskManager:
         self.max_open_trades = max_open_trades
         self.min_margin_level = min_margin_level
         self.notify = notify_callback
+        self.MIN_PROFIT_TO_PYRAMID: float = 2.00   # USD — must be this profitable to pyramid
+        self.SPREAD_TOLERANCE_USD:  float = -0.50  # USD — below this = genuine loser (not just spread noise)
         
         self.daily_high_watermark = 0.0 
         self.daily_low_watermark = 0.0
@@ -68,12 +70,9 @@ class RiskManager:
             if symbol_trade_count >= 3:
                 return False, f"Max symbol exposure reached for {symbol} ({symbol_trade_count}/3 trades)."
 
-            # Rule B: Are any of the current positions for this symbol losing money?
-            # If so, do not enter again (No averaging down)
-            for pos in symbol_positions:
-                if pos.profit < 0:
-                    return False, f"{symbol} currently has a losing position (${pos.profit}). No new entries allowed."
-
+            allowed_b, reason_b = self._check_existing_positions(symbol, symbol_positions)
+            if not allowed_b:
+                return False, reason_b
         # 3. Check Margin Level
         if account.margin_level and account.margin_level < self.min_margin_level:
             return False, f"Margin level too low ({account.margin_level:.1f}%). Minimum is {self.min_margin_level}%."
@@ -560,6 +559,22 @@ class ProfitGuard:
 
         for pos in positions:
             self._evaluate(pos)
+
+    def _check_existing_positions(self, symbol: str, symbol_positions: list) -> tuple[bool, str]:
+        if not symbol_positions:
+            return True, "No existing positions on this symbol."
+        for pos in symbol_positions:
+            if pos.profit < self.SPREAD_TOLERANCE_USD:
+                return False, (
+                    f"{symbol} has a losing position (${pos.profit:.2f}). "
+                    f"No new entries while in the red."
+                )
+            if pos.profit < self.MIN_PROFIT_TO_PYRAMID:
+                return False, (
+                    f"{symbol} not a confirmed winner yet (${pos.profit:.2f} < "
+                    f"${self.MIN_PROFIT_TO_PYRAMID:.2f}). Wait for it to prove itself."
+                )
+        return True, "Existing positions profitable — pyramiding approved."
 
     # ── Per-position evaluation ───────────────────────────────────────────────
 
