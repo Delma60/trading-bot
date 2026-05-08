@@ -182,6 +182,11 @@ class PortfolioManager:
         results = []
         portfolio_size = len(self.master_watchlist)
         
+        # Avoid spamming the scan when the broker is unavailable.
+        account_info = self.broker.getAccountInfo()
+        if account_info is None:
+            return results
+
         # Count open positions for each symbol
         positions = self.broker.getPositions() or []
         symbol_counts = {symbol: 0 for symbol in self.master_watchlist}

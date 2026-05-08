@@ -290,7 +290,8 @@ class DynamicRiskTargeter:
 
 class TrailingStopManager:
     """
-    Background worker that continuously monitors open positions and trails their Stop Losses.
+    Background worker that continuously monitors open positions, 
+    secures breakeven, and locks in 50% of peak profits.
     """
 
     def __init__(self, broker, targeter, trail_atr_multiplier: float = 1.5):
@@ -299,6 +300,7 @@ class TrailingStopManager:
         self.trail_multiplier = trail_atr_multiplier
         self.running = False
         self._thread = None
+        self.peak_prices = {}
 
     def start(self):
         if self.running:
@@ -306,12 +308,32 @@ class TrailingStopManager:
         self.running = True
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
-        print("[System] Trailing Stop Manager online.")
+        print("[System] 🛡️ Advanced Trailing Stop & Profit Locker online.")
 
     def stop(self):
         self.running = False
         if self._thread:
             self._thread.join(timeout=2)
+
+    def _verify_order_levels(self, ticket: int, symbol: str, expected_sl: float, expected_tp: float = None, tolerance: float = 1e-5) -> bool:
+        positions = self.broker.getPositions() or []
+        pos = next((p for p in positions if p.ticket == ticket), None)
+        if pos is None:
+            print(f"[Profit Lock] ❌ Verification failed for {symbol} ticket {ticket}: position not found after order-level update.")
+            return False
+
+        actual_sl = float(pos.sl or 0.0)
+        if abs(actual_sl - expected_sl) > tolerance:
+            print(f"[Profit Lock] ❌ SL enforcement error for {symbol} ticket {ticket}: expected {expected_sl}, got {actual_sl}.")
+            return False
+
+        if expected_tp is not None:
+            actual_tp = float(pos.tp or 0.0)
+            if abs(actual_tp - expected_tp) > tolerance:
+                print(f"[Profit Lock] ❌ TP enforcement error for {symbol} ticket {ticket}: expected {expected_tp}, got {actual_tp}.")
+                return False
+
+        return True
 
     def _monitor_loop(self):
         while self.running:
@@ -323,9 +345,16 @@ class TrailingStopManager:
             if positions:
                 self._process_positions(positions)
 
-            time.sleep(10)
+            time.sleep(5)
 
     def _process_positions(self, positions):
+        # 1. Clean up closed trades from our memory to prevent memory leaks
+        active_tickets = [p.ticket for p in positions]
+        keys_to_remove = [k for k in self.peak_prices.keys() if k not in active_tickets]
+        for k in keys_to_remove:
+            del self.peak_prices[k]
+
+        # 2. Process each active trade
         for pos in positions:
             symbol = pos.symbol
             ticket = pos.ticket
@@ -340,22 +369,69 @@ class TrailingStopManager:
                 continue
 
             pip_multiplier = 100.0 if "JPY" in symbol.upper() else 10000.0
-            trail_distance = atr_pips / pip_multiplier
+            breakeven_trigger_distance = (atr_pips * 0.8) / pip_multiplier
 
-            if order_type == 0:  # BUY
-                activation_level = open_price + trail_distance
-                if current_price > activation_level:
-                    new_sl = current_price - trail_distance
-                    if current_sl == 0.0 or new_sl > current_sl:
-                        new_sl = round(new_sl, 5)
-                        if self.broker.modify_position(ticket, symbol, new_sl):
-                            print(f"[Trailing Stop] Raised SL on {symbol} (BUY) to {new_sl}")
+            if ticket not in self.peak_prices:
+                self.peak_prices[ticket] = current_price
 
-            elif order_type == 1:  # SELL
-                activation_level = open_price - trail_distance
-                if current_price < activation_level:
-                    new_sl = current_price + trail_distance
-                    if current_sl == 0.0 or new_sl < current_sl:
-                        new_sl = round(new_sl, 5)
+            if order_type == 0:
+                if current_price > self.peak_prices[ticket]:
+                    self.peak_prices[ticket] = current_price
+
+                peak = self.peak_prices[ticket]
+                profit_distance = peak - open_price
+
+                if current_price > (open_price + breakeven_trigger_distance):
+                    if current_sl < open_price:
+                        be_price = round(open_price + (2.0 / pip_multiplier), 5)
+                        if self.broker.modify_position(ticket, symbol, be_price):
+                            if self._verify_stop_loss(ticket, symbol, be_price):
+                                print(f"[Profit Lock] 🛡️ {symbol} is now RISK FREE at {be_price}")
+                                current_sl = be_price
+                            else:
+                                print(f"[Profit Lock] ❌ Failed to enforce breakeven SL for {symbol} ticket {ticket}.")
+                        else:
+                            print(f"[Profit Lock] ❌ Broker failed to apply breakeven SL for {symbol} ticket {ticket}.")
+
+                if profit_distance > (breakeven_trigger_distance * 1.5):
+                    seventy_five_percent_mark = peak - (profit_distance * 0.75)
+                    if seventy_five_percent_mark > current_sl:
+                        new_sl = round(seventy_five_percent_mark, 5)
                         if self.broker.modify_position(ticket, symbol, new_sl):
-                            print(f"[Trailing Stop] Lowered SL on {symbol} (SELL) to {new_sl}")
+                            if self._verify_stop_loss(ticket, symbol, new_sl):
+                                print(f"[Profit Lock] 💰 Raised 75% Profit Lock on {symbol} to {new_sl}")
+                            else:
+                                print(f"[Profit Lock] ❌ Failed to verify 75% SL lock for {symbol} ticket {ticket}.")
+                        else:
+                            print(f"[Profit Lock] ❌ Broker failed to apply 75% SL lock for {symbol} ticket {ticket}.")
+
+            elif order_type == 1:
+                if current_price < self.peak_prices[ticket]:
+                    self.peak_prices[ticket] = current_price
+
+                peak = self.peak_prices[ticket]
+                profit_distance = open_price - peak
+
+                if current_price < (open_price - breakeven_trigger_distance):
+                    if current_sl == 0.0 or current_sl > open_price:
+                        be_price = round(open_price - (2.0 / pip_multiplier), 5)
+                        if self.broker.modify_position(ticket, symbol, be_price):
+                            if self._verify_stop_loss(ticket, symbol, be_price):
+                                print(f"[Profit Lock] 🛡️ {symbol} is now RISK FREE at {be_price}")
+                                current_sl = be_price
+                            else:
+                                print(f"[Profit Lock] ❌ Failed to enforce breakeven SL for {symbol} ticket {ticket}.")
+                        else:
+                            print(f"[Profit Lock] ❌ Broker failed to apply breakeven SL for {symbol} ticket {ticket}.")
+
+                if profit_distance > (breakeven_trigger_distance * 1.5):
+                    seventy_five_percent_mark = peak + (profit_distance * 0.75)
+                    if current_sl == 0.0 or seventy_five_percent_mark < current_sl:
+                        new_sl = round(seventy_five_percent_mark, 5)
+                        if self.broker.modify_position(ticket, symbol, new_sl):
+                            if self._verify_stop_loss(ticket, symbol, new_sl):
+                                print(f"[Profit Lock] 💰 Lowered 75% Profit Lock on {symbol} to {new_sl}")
+                            else:
+                                print(f"[Profit Lock] ❌ Failed to verify 75% SL lock for {symbol} ticket {ticket}.")
+                        else:
+                            print(f"[Profit Lock] ❌ Broker failed to apply 75% SL lock for {symbol} ticket {ticket}.")
