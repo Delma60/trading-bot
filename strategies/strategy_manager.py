@@ -68,6 +68,49 @@ class OHLCVCache:
                 self._store.pop(key, None)
  
 
+class MTFConfluenceEngine:
+    """Multi-Timeframe Confluence engine — ensures alignment across HTF before trades (Feature #4)."""
+    TIMEFRAMES = ["M15", "H1", "H4", "D1"]
+    
+    def __init__(self, broker):
+        self.broker = broker
+
+    def get_confluence_score(self, symbol: str) -> dict:
+        """Analyze alignment across timeframes and return a tradeable verdict."""
+        signals = {}
+        for tf in self.TIMEFRAMES:
+            df = self.broker.get_historical_rates(symbol, tf, 50)
+            if df is None or df.empty or len(df) < 25:
+                signals[tf] = "NEUTRAL"
+                continue
+                
+            closes = df['close'].values
+            sma20 = sum(closes[-20:]) / 20
+            sma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else sma20
+            current = closes[-1]
+            
+            if current > sma20 and sma20 > sma50:
+                signals[tf] = "BUY"
+            elif current < sma20 and sma20 < sma50:
+                signals[tf] = "SELL"
+            else:
+                signals[tf] = "NEUTRAL"
+                
+        directions = list(signals.values())
+        dominant = max(set(directions), key=directions.count)
+        
+        # Calculate alignment ignoring NEUTRALs
+        active_tfs = [d for d in directions if d != "NEUTRAL"]
+        alignment = active_tfs.count(dominant) / len(self.TIMEFRAMES) if active_tfs else 0.0
+        
+        return {
+            "direction": dominant,
+            "alignment": alignment,
+            "signals": signals,
+            "tradeable": alignment >= 0.75  # 3 out of 4 must align
+        }
+
+
 class StrategyManager:
     """
     Orchestrates all trading strategies, the LSTM deep-learning predictor,
@@ -253,6 +296,21 @@ class StrategyManager:
                 "confidence": 0.0,
                 "reason": f"Could not fetch OHLCV data for {symbol}.",
             }
+
+        # (NEW) Market Condition Pre-Filter (Feature #2)
+        from manager.risk_manager import MarketConditionFilter
+        mc_filter = MarketConditionFilter(self.broker)
+        is_suitable, mc_reason = mc_filter.is_market_suitable(symbol)
+        if not is_suitable:
+            return {"action": "WAIT", "confidence": 0.0, "reason": mc_reason}
+
+        # (NEW) Multi-Timeframe Confluence Check (Feature #4)
+        mtf_engine = MTFConfluenceEngine(self.broker)
+        mtf_data = mtf_engine.get_confluence_score(symbol)
+        
+        # Force WAIT if macro alignment is poor
+        if not mtf_data["tradeable"]:
+             return {"action": "WAIT", "confidence": 0.0, "reason": f"MTF Confluence too low ({mtf_data['alignment']:.0%}). Macro trend is unclear."}
 
         # 2. Single-strategy fallback ─────────────────────────────────────────
         if not use_ensemble:

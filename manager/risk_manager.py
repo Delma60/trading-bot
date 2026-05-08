@@ -35,6 +35,74 @@ def _pip_value_usd(symbol: str, lots: float) -> float:
         return 0.10
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: MarketConditionFilter (Feature #2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MarketConditionFilter:
+    """Blocks trading during known unfavorable conditions (volatility spikes, dead volume)."""
+    def __init__(self, broker):
+        self.broker = broker
+
+    def is_market_suitable(self, symbol: str) -> tuple:
+        """Check if market conditions are favorable for trading."""
+        df = self.broker.get_historical_rates(symbol, "H1", 50)
+        if df is None or df.empty or len(df) < 50:
+            return True, "Not enough data, skipping filter."
+
+        df = df.copy()
+        df['tr'] = df['high'] - df['low']
+        recent_atr = df['tr'].tail(3).mean()
+        normal_atr = df['tr'].tail(40).mean()
+
+        # 1. Volatility spike (news event)
+        if recent_atr > normal_atr * 2.5:
+            return False, "Volatility spike detected — likely news event. Waiting."
+
+        # 2. Dead volume (market sleeping)
+        if 'tick_volume' in df.columns:
+            recent_vol = df['tick_volume'].tail(3).mean()
+            avg_vol = df['tick_volume'].tail(40).mean()
+            if recent_vol < avg_vol * 0.3:
+                return False, "Volume too low — market is sleeping. No entries."
+
+        return True, "Market conditions suitable."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: SmartReEntrySystem (Feature #9)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SmartReEntrySystem:
+    """Tracks stop-outs to allow re-entry if price sweeps liquidity and recovers."""
+    def __init__(self):
+        self.stopped_out_trades = {}  # {symbol: {"time": datetime, "price": float, "direction": str}}
+
+    def record_stop_out(self, symbol: str, price: float, direction: str):
+        """Record when a position was stopped out."""
+        self.stopped_out_trades[symbol] = {
+            "time": datetime.now(),
+            "price": price,
+            "direction": direction,
+            "re_entered": False
+        }
+
+    def check_reentry_validity(self, symbol: str, current_price: float, new_signal_direction: str) -> bool:
+        """Check if re-entry conditions are met after a stop-out."""
+        record = self.stopped_out_trades.get(symbol)
+        if not record or record["re_entered"]:
+            return False
+            
+        # If signal is same direction and within 4 hours, and price is better or equal
+        time_elapsed = (datetime.now() - record["time"]).total_seconds() / 3600
+        if time_elapsed <= 4.0 and new_signal_direction == record["direction"]:
+            if new_signal_direction == "BUY" and current_price <= record["price"]:
+                return True
+            if new_signal_direction == "SELL" and current_price >= record["price"]:
+                return True
+        return False
+
+
 class RiskManager:
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
     
@@ -46,6 +114,9 @@ class RiskManager:
         self.notify = notify_callback
         self.pyramid_min_pips = pyramid_min_pips
         self.spread_tolerance_pips = spread_tolerance_pips
+        
+        # Atomic Loss Lock (prevents concurrent threads from bypassing daily loss limit)
+        self._loss_lock = threading.Lock()
         
         self.daily_high_watermark = 0.0 
         self.daily_low_watermark = 0.0
@@ -107,7 +178,9 @@ class RiskManager:
         return True, "Existing positions profitable — pyramiding approved."
 
     def is_trading_allowed(self, symbol: str, max_daily_loss: float, portfolio_size: int) -> tuple[bool, str]:
-        """A detailed check verifying global exposure, symbol exposure, and profitability."""
+        """A detailed check verifying global exposure, symbol exposure, and profitability. 
+        Atomic daily loss check (wrapped with _loss_lock) prevents concurrent threads from bypassing limit."""
+        
         account = self.broker.getAccountInfo()
         if not account:
             return False, "Could not fetch account data from broker."
@@ -131,36 +204,39 @@ class RiskManager:
             allowed_b, reason_b = self._check_existing_positions(symbol, symbol_positions)
             if not allowed_b:
                 return False, reason_b
+        
         # 3. Check Margin Level
         if account.margin_level and account.margin_level < self.min_margin_level:
             return False, f"Margin level too low ({account.margin_level:.1f}%). Minimum is {self.min_margin_level}%."
 
-        # === 3. THE TRAILING EQUITY STOP ===
-        current_equity = account.equity
-        today = datetime.now().date()
-        
-        # Reset watermark at midnight, or initialize on first run
-        if self.watermark_date != today:
-            self.daily_high_watermark = max(account.balance, current_equity)
-            self.daily_low_watermark = min(account.balance, current_equity)
-            self.watermark_date = today
-        elif current_equity > self.daily_high_watermark:
-            # Update the high watermark as the portfolio grows!
-            self.daily_high_watermark = current_equity
-        elif current_equity < self.daily_low_watermark:
-            # Update the low watermark as the portfolio shrinks!
-            self.daily_low_watermark = current_equity
+        # === ATOMIC DAILY LOSS CHECK (wrapped with _loss_lock) ===
+        # This is CRITICAL: prevents concurrent threads from both checking and bypassing the limit simultaneously
+        with self._loss_lock:
+            current_equity = account.equity
+            today = datetime.now().date()
+            
+            # Reset watermark at midnight, or initialize on first run
+            if self.watermark_date != today:
+                self.daily_high_watermark = max(account.balance, current_equity)
+                self.daily_low_watermark = min(account.balance, current_equity)
+                self.watermark_date = today
+            elif current_equity > self.daily_high_watermark:
+                # Update the high watermark as the portfolio grows!
+                self.daily_high_watermark = current_equity
+            elif current_equity < self.daily_low_watermark:
+                # Update the low watermark as the portfolio shrinks!
+                self.daily_low_watermark = current_equity
 
-        # Calculate the drawdown from the PEAK, not the starting balance
-        trailing_drawdown = self.daily_high_watermark - current_equity
-        
-        if max_daily_loss > 0 and trailing_drawdown >= max_daily_loss:
-            return False, f"FATAL: Trailing drawdown limit hit! Peak: ${self.daily_high_watermark:,.2f}, Dropped: ${trailing_drawdown:.2f} (Limit: ${max_daily_loss})"
+            # Calculate the drawdown from the PEAK, not the starting balance
+            trailing_drawdown = self.daily_high_watermark - current_equity
+            
+            if max_daily_loss > 0 and trailing_drawdown >= max_daily_loss:
+                return False, f"FATAL: Trailing drawdown limit hit! Peak: ${self.daily_high_watermark:,.2f}, Dropped: ${trailing_drawdown:.2f} (Limit: ${max_daily_loss})"
 
         return True, "System healthy."
     
     def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float, portfolio_size: int) -> Dict[str, Any]:
-        """Calculates exact lot size and dynamically scales risk if taking losses."""
+        """Calculates exact lot size with ATR-adjusted SL and dynamic drawdown recovery scaling (Features #2, #6)."""
         
         # 1. First, check if we are even allowed to trade
         allowed, reason = self.is_trading_allowed(symbol, max_daily_loss, portfolio_size)
@@ -173,52 +249,37 @@ class RiskManager:
         actual_risk_pct = base_risk_pct
         bounce_from_low = (current_equity - self.daily_low_watermark) / self.daily_low_watermark if self.daily_low_watermark > 0 else 0.0
 
-        # 2. Dynamic Risk Scaling (If down 60% from the peak, cut risk in half to survive)
-        if max_daily_loss > 0 and trailing_drawdown > (max_daily_loss * 0.6):
-            actual_risk_pct = base_risk_pct / 2.0
-            self.notify(f"[Risk Manager]: ⚠️ Drawdown from peak is ${trailing_drawdown:.2f}. Scaling risk down to {actual_risk_pct}%.")
-        elif bounce_from_low > 0 and bounce_from_low < (max_daily_loss * 0.3):
-            actual_risk_pct = base_risk_pct / 1.5
-            self.notify(f"[Risk Manager]: 📈 Bouncing from daily low. Adjusting risk to {actual_risk_pct}%.")
+        # --- DRAWDOWN RECOVERY MODE (Feature #2) ---
+        if max_daily_loss > 0:
+            dd_ratio = trailing_drawdown / max_daily_loss
+            if dd_ratio > 0.8:
+                actual_risk_pct = base_risk_pct * 0.25  # Deep DD: Cut size by 75%
+                self.notify(f"⚠️ Critical Drawdown ({dd_ratio:.0%}). Recovery Mode: Risk cut to {actual_risk_pct}%.")
+            elif dd_ratio > 0.5:
+                actual_risk_pct = base_risk_pct * 0.5   # Moderate DD: Cut size by 50%
+                self.notify(f"⚠️ Elevated Drawdown ({dd_ratio:.0%}). Recovery Mode: Risk cut to {actual_risk_pct}%.")
 
-        # 3. Calculate Risk in Dollars
         max_risk_usd = account.balance * (actual_risk_pct / 100)
+
+        # --- VOLATILITY-ADJUSTED POSITION SIZING (Feature #6) ---
+        targeter = DynamicRiskTargeter(self.broker)
+        dynamic_targets = targeter.calculate_targets(symbol)
         
-        # 4. Calculate Position Size (Lots)
-        safe_sl_pips = stop_loss_pips if stop_loss_pips > 0 else 20.0 
+        # Override fixed pip SL with ATR-based SL
+        atr_pips = dynamic_targets.get("atr_pips", stop_loss_pips)
+        safe_sl_pips = atr_pips * 1.5 if atr_pips > 0 else stop_loss_pips
         
         symbol_info = mt5.symbol_info(symbol)
         if not symbol_info:
-            return {"approved": False, "reason": f"Could not fetch symbol info for {symbol}"}
+            return {"approved": False, "reason": "Symbol info missing."}
 
-        tick = mt5.symbol_info_tick(symbol)
-        if not tick:
-            return {"approved": False, "reason": f"Could not fetch tick data for {symbol}"}
-
-        point = symbol_info.point
-        spread_points = int(round((tick.ask - tick.bid) / point))
-        min_stop_level = symbol_info.trade_stops_level or 0
-
-        # Determine pip multiplier based on symbol type
-        if "BTC" in symbol or "ETH" in symbol:
-            pip_multiplier = 1.0
-        else:
-            pip_multiplier = 10.0
-
-        base_sl_points = int(safe_sl_pips * pip_multiplier)
-        safe_distance_points = spread_points + min_stop_level
-        safe_sl_points = max(base_sl_points, safe_distance_points)
-        actual_sl_pips = safe_sl_points / pip_multiplier
-
-        # Call the new function directly! It handles all the MT5 tick math and min/max limits.
+        pip_multiplier = 1.0 if any(x in symbol for x in ["BTC", "ETH"]) else 10.0
+        safe_sl_points = int(safe_sl_pips * pip_multiplier)
+        
         optimal_lots = self.calculate_position_size(symbol, max_risk_usd, safe_sl_points)
         
-        # If the risk is too small to meet the broker's minimum lot size, abort the trade.
         if optimal_lots == 0.0:
-             return {
-                "approved": False,
-                "reason": f"Spread is too large ({spread_points} points). Target risk (${max_risk_usd:.2f}) drops volume below minimum lot size.",
-            }
+             return {"approved": False, "reason": "Volatility/Spread too high for minimum lot size."}
 
         return {
             "approved": True,
@@ -227,7 +288,7 @@ class RiskManager:
             "lots": optimal_lots,
             "risk_usd": max_risk_usd,
             "applied_risk_pct": actual_risk_pct,
-            "stop_loss_pips": actual_sl_pips
+            "stop_loss_pips": safe_sl_pips
         }
     
     def calculate_micro_lot(self, symbol: Optional[str] = None) -> float:

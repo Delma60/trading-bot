@@ -666,38 +666,59 @@ class AgentExecutor:
             return {"trades": [], "pnl": 0.0, "count": 0}
 
     def _performance_analysis(self, plan: AgentPlan) -> dict:
-        hist_r = self._get_step_result(plan, "closed_trades") or {}
-        trades = hist_r.get("trades", [])
-        by_sym: dict[str, float] = {}
-        for t in trades:
-            if t.get("Action") == "CLOSE":
-                sym = t.get("Symbol", "")
-                profit_value = t.get("Profit", "") or t.get("Comment", "")
-                try:
-                    if t.get("Profit"):
-                        val = float(t.get("Profit"))
-                    else:
-                        val = float(profit_value.replace("Profit:", "").strip())
-                    by_sym[sym] = by_sym.get(sym, 0.0) + val
-                except ValueError:
-                    pass
-        winning = [k for k, v in by_sym.items() if v > 0]
-        losing  = [k for k, v in by_sym.items() if v <= 0]
+        try:
+            import pandas as pd
+            if not self.TRADE_HISTORY.exists():
+                return {}
+            
+            df = pd.read_csv(self.TRADE_HISTORY)
+            df = df[df['Action'] == 'CLOSE'].copy()
+            if df.empty:
+                return {}
 
-        # Strategy breakdown
-        strat_counts: dict[str, int] = {}
-        for t in trades:
-            s = t.get("Strategy", "Unknown")
-            strat_counts[s] = strat_counts.get(s, 0) + 1
+            # Clean profit values
+            def extract_profit(val):
+                try: return float(str(val).replace('Profit:', '').strip())
+                except: return 0.0
+            
+            df['CleanProfit'] = df['Profit'].fillna(df['Comment']).apply(extract_profit)
+            
+            total_trades = len(df)
+            wins = len(df[df['CleanProfit'] > 0])
+            win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+            
+            # Group by Strategy
+            strat_group = df.groupby('Strategy')['CleanProfit']
+            strat_stats = strat_group.agg(['count', lambda x: (x>0).mean() * 100]).rename(columns={'<lambda_0>': 'win_rate'})
+            best_strat = strat_stats['win_rate'].idxmax() if not strat_stats.empty else "N/A"
+            worst_strat = strat_stats['win_rate'].idxmin() if not strat_stats.empty else "N/A"
 
-        return {
-            "by_symbol":        by_sym,
-            "winning_symbols":  winning,
-            "losing_symbols":   losing,
-            "best_performer":   max(by_sym, key=by_sym.get) if by_sym else None,
-            "worst_performer":  min(by_sym, key=by_sym.get) if by_sym else None,
-            "strategy_counts":  strat_counts,
-        }
+            # Group by Symbol
+            sym_group = df.groupby('Symbol')['CleanProfit'].sum()
+            best_sym = sym_group.idxmax() if not sym_group.empty else "N/A"
+            worst_sym = sym_group.idxmin() if not sym_group.empty else "N/A"
+
+            # Profit Factor
+            gross_profit = df[df['CleanProfit'] > 0]['CleanProfit'].sum()
+            gross_loss = abs(df[df['CleanProfit'] < 0]['CleanProfit'].sum())
+            pf = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+
+            avg_win = df[df['CleanProfit'] > 0]['CleanProfit'].mean()
+            avg_loss = df[df['CleanProfit'] < 0]['CleanProfit'].mean()
+
+            return {
+                "total_trades": total_trades,
+                "win_rate": round(win_rate, 1),
+                "best_strategy": best_strat,
+                "worst_strategy": worst_strat,
+                "best_symbol": f"{best_sym} (+${sym_group.max():.2f})",
+                "worst_symbol": f"{worst_sym} (${sym_group.min():.2f})",
+                "profit_factor": round(pf, 2),
+                "avg_win": round(avg_win, 2) if not pd.isna(avg_win) else 0,
+                "avg_loss": round(avg_loss, 2) if not pd.isna(avg_loss) else 0
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
     def _risk_per_pos(self) -> dict:
         positions = self.broker.getPositions()
@@ -1013,37 +1034,26 @@ class AgentSynthesizer:
         return " ".join(parts) if parts else "Unable to retrieve risk metrics."
  
     def _history(self, plan, r) -> str:
-        hist = r.get("closed_trades", {})
         perf = r.get("performance_analysis", {})
- 
-        if not hist:
-            return "No trade history data available."
- 
-        count  = hist.get("count", 0)
-        pnl    = hist.get("pnl", 0)
-        buys   = hist.get("buys", 0)
-        sells  = hist.get("sells", 0)
-        closes = hist.get("closes", 0)
- 
-        if count == 0:
-            return "No closed trades recorded today."
- 
+        
+        if not perf or "error" in perf:
+            return "Not enough closed trade history to generate a performance report yet."
+
         lines = [
-            f"{count} trade action(s) today: {buys} buy, {sells} sell, {closes} close.",
-            f"Realised P&L: ${pnl:+,.2f}.",
+            "📊 ARIA Personal Performance Analytics",
+            "──────────────────────────────────────",
+            f"Win Rate:       {perf.get('win_rate')}% ({perf.get('total_trades')} trades)",
+            f"Profit Factor:  {perf.get('profit_factor')}",
+            f"Avg Win/Loss:   +${perf.get('avg_win')} / -${abs(perf.get('avg_loss'))}",
+            "",
+            f"Best Strategy:  {perf.get('best_strategy')} (Highest Win Rate)",
+            f"Worst Strategy: {perf.get('worst_strategy')} (Needs Retraining)",
+            f"Best Symbol:    {perf.get('best_symbol')}",
+            f"Worst Symbol:   {perf.get('worst_symbol')}",
+            "──────────────────────────────────────",
+            "Use this data to disable underperforming strategies or pairs."
         ]
- 
-        best  = perf.get("best_performer")
-        worst = perf.get("worst_performer")
-        by_sym= perf.get("by_symbol", {})
- 
-        if best and by_sym.get(best, 0) > 0:
-            lines.append(f"Best: {best} (+${by_sym[best]:.2f}).")
-        if worst and by_sym.get(worst, 0) < 0:
-            lines.append(f"Worst: {worst} (${by_sym[worst]:.2f}).")
- 
-        return " ".join(lines)
- 
+        return "\n".join(lines)
     def _price(self, plan, r) -> str:
         tick   = r.get("live_price", {})
         regime = r.get("market_regime", {}).get("regime", "Unknown")

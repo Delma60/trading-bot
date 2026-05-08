@@ -9,13 +9,17 @@ from pathlib import Path
 
 class Trader:
     
-    def __init__(self, login="", password="", server="MetaQuotes-Demo", notify_callback=print):
+    def __init__(self, login="", password="", server="MetaQuotes-Demo", notify_callback=print, magic=1000):
         self.login = login
         self.password = password
         self.server = server
         self.connected = False
         self.notify = notify_callback
-        self._order_lock = threading.Lock()
+        self.magic = magic
+        # Centralized Execution Lock (prevents race conditions across all threads)
+        self._execution_lock = threading.Lock()
+        # Legacy lock for compatibility
+        self._order_lock = self._execution_lock
         
     def is_mt5_running(self):
         """Check if MetaTrader 5 terminal is running"""
@@ -51,6 +55,36 @@ class Trader:
         
         self.connected = True
         self.notify(f"✅ MT5 Connected: {self.login} on {self.server}")
+        return True
+    
+    def ensure_connected(self) -> bool:
+        """Safety Net: Validates connection before ANY broker action. Auto-reconnects on failure."""
+        if not self.connected:
+            self.notify("⚠️ Not currently connected to MT5. Connection required.")
+            return False
+        
+        # Check if MT5 terminal is still responsive
+        try:
+            if mt5.terminal_info() is None:
+                self.notify("⚠️ MT5 connection lost — attempting reconnect...")
+                if self.login and self.password and self.server:
+                    success = self.connect(self.login, self.password, self.server)
+                    if success:
+                        self.notify("✅ MT5 reconnected successfully.")
+                    return success
+                return False
+        except Exception as e:
+            self.notify(f"⚠️ MT5 connection check failed: {e}. Attempting reconnect...")
+            if self.login and self.password and self.server:
+                try:
+                    success = self.connect(self.login, self.password, self.server)
+                    if success:
+                        self.notify("✅ MT5 reconnected successfully.")
+                    return success
+                except:
+                    return False
+            return False
+        
         return True
     
     def _log_trade_history(self, action: str, symbol: str, lots: float, price: float, ticket: int, comment: str, strategy: str = "Unknown", profit: float = None):
@@ -149,27 +183,34 @@ class Trader:
     def modify_position(self, ticket: int, symbol: str, new_sl: float, new_tp: float = None) -> bool:
         """
         Modifies an open position's Stop Loss and/or Take Profit in MT5.
+        CRITICAL: Re-verifies ticket exists inside lock to prevent "Invalid Ticket" errors
+        when ProfitGuard and TrailingStopManager race on same position.
         """
-        if not self.connected:
+        # Safety check: ensure connection before ANY broker action
+        if not self.ensure_connected():
             return False
 
-        positions = mt5.positions_get(ticket=ticket)
-        if positions is None or len(positions) == 0:
-            return False
+        with self._execution_lock:
+            # CRITICAL: Re-verify position exists INSIDE lock
+            # This prevents: ProfitGuard and TrailingStopManager both try to modify ticket simultaneously
+            # → Thread A grabs lock, closes trade, Thread B re-verifies position exists INSIDE lock, sees it's gone, returns False silently
+            positions = mt5.positions_get(ticket=ticket)
+            if positions is None or len(positions) == 0:
+                # Position already closed by another thread - return silently (no error)
+                return False
 
-        pos = positions[0]
-        tp_value = float(new_tp) if new_tp is not None else float(pos.tp or 0.0)
+            pos = positions[0]
+            tp_value = float(new_tp) if new_tp is not None else float(pos.tp or 0.0)
 
-        request = {
-            "action": mt5.TRADE_ACTION_SLTP,
-            "position": ticket,
-            "symbol": symbol,
-            "sl": float(new_sl),
-            "tp": tp_value,
-            "magic": 234000,
-        }
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": ticket,
+                "symbol": symbol,
+                "sl": float(new_sl),
+                "tp": tp_value,
+                "magic": self.magic,
+            }
 
-        with self._order_lock:
             result = mt5.order_send(request)
 
         if result and getattr(result, 'retcode', None) == mt5.TRADE_RETCODE_DONE:
@@ -196,10 +237,11 @@ class Trader:
         
     def execute_trade(self, symbol: str, action: str, lots: float, stop_loss_pips: float = 0.0, take_profit_pips: float = 0.0, strategy: str = "Unknown") -> dict:
         """
-        Builds and sends a live order to MetaTrader 5.
+        Builds and sends a live order to MetaTrader 5. All orders serialized via _execution_lock.
         """
-        if not self.connected:
-            return {"success": False, "reason": "Not connected to MT5."}
+        # Safety check: ensure connection before ANY broker action
+        if not self.ensure_connected():
+            return {"success": False, "reason": "Lost connection to MT5. Reconnection failed."}
 
         # 1. Verify the symbol is available and visible
         symbol_info = mt5.symbol_info(symbol)
@@ -282,31 +324,46 @@ class Trader:
             "sl": sl_price,
             "tp": tp_price,
             "deviation": 20,          # Max slippage allowed (in points)
-            "magic": 234000,          # Unique Bot ID (helps you identify bot trades vs manual)
+            "magic": self.magic,      # Unique Bot ID
             "comment": "AI Bot Trade",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": type_filling, # Immediate or Cancel
+            "type_filling": type_filling,
         }
 
-        # 5. Send the order!
-        with self._order_lock:
+        # 5. Send the order - SERIALIZED via execution lock to prevent race conditions
+        with self._execution_lock:
+            # Re-check connection inside lock (in case connection dropped during wait)
+            if not self.connected or mt5.terminal_info() is None:
+                return {"success": False, "reason": "Connection lost while waiting for execution lock."}
+            
             result = mt5.order_send(request)
 
-        # 6. Check if it succeeded
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
+        # 6. Check if it succeeded and handle specific error codes
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
+            self._log_trade_history(
+                action=action.upper(),
+                symbol=symbol,
+                lots=lots,
+                price=result.price,
+                ticket=result.order,
+                comment=request.get("comment", ""),
+                strategy=strategy
+            )
+            return {"success": True, "ticket": result.order, "price": result.price}
+        
+        # Handle specific error conditions
+        elif result.retcode == mt5.TRADE_RETCODE_REQUOTE:
+            self.notify(f"⚠️ REQUOTE on {symbol}: Ask={tick.ask}, Bid={tick.bid}. Price moved too fast. Retry.")
+            return {"success": False, "reason": f"Requote at {tick.ask}/{tick.bid}. Price moved during submission."}
+        
+        elif result.retcode == mt5.TRADE_RETCODE_PRICE_CHANGED:
+            self.notify(f"⚠️ PRICE_CHANGED on {symbol}: Slippage detected. Requested {price}, market moved.")
+            return {"success": False, "reason": f"Price changed before execution. Slippage occurred."}
+        
+        else:
+            self.notify(f"❌ Order rejected. MT5 Code: {result.retcode}, Comment: {result.comment}")
             return {"success": False, "reason": f"Order rejected. MT5 Code: {result.retcode}, {result.comment}"}
 
-        self._log_trade_history(
-            action=action.upper(),
-            symbol=symbol,
-            lots=lots,
-            price=result.price,
-            ticket=result.order,
-            comment=request.get("comment", ""),
-            strategy=strategy
-        )
-
-        return {"success": True, "ticket": result.order, "price": result.price}
     
     def get_historical_rates(self, symbol: str, timeframe: str = "H1", count: int = 50):
         """Fetches historical OHLCV data for a symbol."""
@@ -442,9 +499,10 @@ class Trader:
                     self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
 
     def close_position(self, symbol: str):
-        """Close open position for a specific symbol."""
-        if not self.connected:
-            self.notify("Cannot close position: Not connected to MT5.")
+        """Close open position(s) for a specific symbol. Serialized via _execution_lock."""
+        # Safety check: ensure connection before ANY broker action
+        if not self.ensure_connected():
+            self.notify("Cannot close position: Lost connection to MT5.")
             return False
 
         positions = mt5.positions_get(symbol=symbol)
@@ -455,7 +513,18 @@ class Trader:
         self.notify(f"Attempting to close {len(positions)} position(s) for {symbol}...")
 
         success = True
-        with self._order_lock:
+        with self._execution_lock:
+            # Re-verify connection inside lock
+            if not self.connected or mt5.terminal_info() is None:
+                self.notify("❌ Connection lost while waiting for execution lock.")
+                return False
+            
+            # Re-fetch positions inside lock (in case they changed during wait)
+            positions = mt5.positions_get(symbol=symbol)
+            if positions is None or len(positions) == 0:
+                self.notify(f"❌ No open positions found for {symbol} (may have been closed by another thread).")
+                return False
+            
             for position in positions:
                 symbol_info = mt5.symbol_info(symbol)
                 tick = mt5.symbol_info_tick(symbol)
@@ -488,7 +557,7 @@ class Trader:
                     "position": position.ticket,
                     "price": price,
                     "deviation": 20,
-                    "magic": 234000,
+                    "magic": self.magic,
                     "comment": "Bot manual close",
                     "type_time": mt5.ORDER_TIME_GTC,
                     "type_filling": type_filling,
@@ -590,3 +659,57 @@ class Trader:
                 responses.append(f"✅ Closed profitable {pos_symbol} (Ticket #{position.ticket}) at {result.price} for profit ${position.profit:.2f}")
 
         return responses
+
+    def partial_close_position(self, ticket: int, symbol: str, close_ratio: float = 0.5) -> dict:
+        """Close a fraction of an open position to secure profits."""
+        if not self.connected:
+            return {"success": False, "reason": "Not connected to MT5"}
+
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            return {"success": False, "reason": "Position not found"}
+
+        pos = positions[0]
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            return {"success": False, "reason": "Symbol info not found"}
+
+        close_volume = round(pos.volume * close_ratio, 2)
+        min_lot = info.volume_min
+
+        if close_volume < min_lot:
+            return {"success": False, "reason": f"Volume {close_volume} below minimum {min_lot}"}
+
+        action = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        price = mt5.symbol_info_tick(symbol).bid if action == mt5.ORDER_TYPE_SELL else mt5.symbol_info_tick(symbol).ask
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": close_volume,
+            "type": action,
+            "position": pos.ticket,
+            "price": price,
+            "deviation": 20,
+            "magic": 234000,
+            "comment": f"Partial Close {close_ratio*100}%",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return {"success": False, "reason": f"Retcode {result.retcode}: {result.comment}"}
+
+        self._log_trade_history(
+            action="CLOSE",
+            symbol=symbol,
+            lots=close_volume,
+            price=result.price,
+            ticket=result.order,
+            comment=f"Partial Close {close_ratio*100}%",
+            strategy="Unknown",
+            profit=pos.profit * close_ratio,
+        )
+
+        return {"success": True, "ticket": result.order, "volume_closed": close_volume}
