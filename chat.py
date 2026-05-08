@@ -1270,7 +1270,7 @@ class ARIA:
     # ── Shortcut keyword → intent overrides (before NLP) ─────────────────────
     _KEYWORD_INTENTS: list[tuple[list[str], str]] = [
         (["scan", "start scanning", "run scan", "go"], "bulk_scan"),
-        (["close profitable", "take profits", "take profit", "close winners", "close good positions"], "close_profitable_positions"),
+        (["close all profitable", "close profitable", "take profits", "take profit", "close winners", "close good positions"], "close_profitable_positions"),
         (["positions", "open trades", "what am I in", "good positions", "profitable positions", "winning trades", "winners"], "profitable_positions"),
         (["balance", "account", "equity"], "account_summary"),
         (["risk", "drawdown", "exposure"], "risk_management"),
@@ -1579,7 +1579,33 @@ class ARIA:
                 f"Say 'yes' to confirm or 'cancel'."
             )
 
-        # Close all confirmation
+        # Close profitable positions — MOVED ABOVE close_all to prevent substring match collision
+        if intent == "close_profitable_positions" or any(k in lower for k in ["close all profitable", "close profitable", "take profit", "take profits"]):
+            # Extract symbol if specified (e.g., "close profitable EURUSD")
+            symbols = entities.get("symbols", [])
+            symbol = symbols[0] if symbols else None
+            
+            if symbol:
+                # Close profitable positions for a specific symbol
+                positions = self.broker.getPositions()
+                if not positions:
+                    return f"No open positions for {symbol}."
+                symbol_positions = [p for p in positions if p.symbol.upper() == symbol.upper()]
+                if not symbol_positions:
+                    return f"No open positions for {symbol}."
+                profitable = [p for p in symbol_positions if p.profit > 0]
+                if not profitable:
+                    return f"No profitable positions for {symbol}."
+                result = self.broker.close_profitable_positions(symbol=symbol)
+            else:
+                # Close all profitable positions
+                result = self.broker.close_profitable_positions()
+            
+            if isinstance(result, list):
+                return "\n".join(result)
+            return result
+
+        # Close all confirmation — NOW SAFELY BELOW profitable check
         if intent == "close_all":
             positions = self.broker.getPositions()
             n = len(positions) if positions else 0
@@ -1591,13 +1617,6 @@ class ARIA:
                 f"Close all {n} position(s)? Floating P&L: ${floating:+.2f}. "
                 f"Say 'yes' to confirm."
             )
-
-        # Close profitable positions immediately when explicitly requested
-        if intent == "close_profitable_positions" or "close profitable" in lower or "take profit" in lower or "take profits" in lower:
-            result = self.broker.close_profitable_positions()
-            if isinstance(result, list):
-                return "\n".join(result)
-            return result
 
         # Retrain model
         if intent == "retrain_model":
