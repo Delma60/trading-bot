@@ -103,6 +103,7 @@ class AgentPlanner:
     def _plan_analysis(self, symbol, entities, memory) -> AgentPlan:
         return AgentPlan(intent="analyze_symbol", symbol=symbol, steps=[
             AgentStep("market_regime",    f"Detecting market regime for {symbol}"),
+            AgentStep("htf_trend_check",  f"Higher-timeframe trend — {symbol}"),
             AgentStep("signal_ensemble",  f"Running strategy ensemble on {symbol}"),
             AgentStep("quality_score",    "Scoring signal quality"),
             AgentStep("risk_check",       "Risk gate validation"),
@@ -114,6 +115,7 @@ class AgentPlanner:
     def _plan_trade(self, symbol, entities, memory) -> AgentPlan:
         return AgentPlan(intent="execute_trade", symbol=symbol, steps=[
             AgentStep("market_regime",   f"Market regime check — {symbol}"),
+            AgentStep("htf_trend_check", f"Higher-timeframe trend — {symbol}"),
             AgentStep("signal_ensemble", f"Signal validation — {symbol}"),
             AgentStep("quality_score",   "Signal quality scoring"),
             AgentStep("risk_check",      "Risk gate validation"),
@@ -274,6 +276,7 @@ class AgentExecutor:
             "risk_per_pos":      lambda: self._risk_per_pos(),
             "context_snapshot":  lambda: self._context_snapshot(),
             "live_price":        lambda: self._live_price(sym),
+            "htf_trend_check": lambda: self._htf_trend_check(sym),
         }
         fn = handlers.get(step.name)
         return fn() if fn else {}
@@ -714,108 +717,366 @@ class AgentExecutor:
 
 class AgentSynthesizer:
     """
-    Deterministic Natural Language Generation (NLG) engine.
-    Creates dynamic, non-repetitive English responses from raw trading data
-    without relying on external LLMs.
+    Drop-in replacement for AgentSynthesizer in manager/agent_core.py.
+ 
+    Reads actual step results from plan.steps (via _result()) and builds
+    data-grounded responses for every intent.  No more generic placeholders.
     """
+ 
     def __init__(self, reasoning):
         self.reasoning = reasoning
-        
-        # ── Lexical Dictionary ──
-        self.lexicon = {
-            "greetings": [
-                "System online.", "Ready.", "Awaiting input.", "All systems green."
-            ],
-            "buy_openers": [
-                "I'm seeing bullish confluence on {symbol}.",
-                "The structure on {symbol} is flagging a long entry.",
-                "Buying pressure is building on {symbol}.",
-                "We have a clear upward bias on {symbol}."
-            ],
-            "sell_openers": [
-                "Bearish distribution detected on {symbol}.",
-                "The structure on {symbol} is rolling over short.",
-                "Sell signals are aligning for {symbol}.",
-                "We have a clear downward bias on {symbol}."
-            ],
-            "wait_openers": [
-                "{symbol} is currently a mixed bag.",
-                "I have no clear statistical edge on {symbol} right now.",
-                "Conditions on {symbol} are too choppy to call.",
-                "Staying flat on {symbol}."
-            ],
-            "transitions_add": [
-                "Furthermore,", "Additionally,", "To add to that,", "Also,"
-            ],
-            "transitions_contrast": [
-                "However,", "That said,", "On the flip side,", "Despite this,"
-            ],
-            "grades": {
-                "A": ["This is a premium, high-probability setup.", "Conditions are optimal.", "I highly recommend this trade."],
-                "B": ["It's a solid setup with good alignment.", "There is a viable edge here.", "Favorable risk profile overall."],
-                "C": ["Proceed with caution.", "It's a marginal setup at best.", "You might want to wait for cleaner price action."],
-                "D": ["I strongly advise sitting this one out.", "The math does not support a trade here.", "Too much conflicting data."]
-            }
+ 
+    def synthesize(self, plan) -> str:
+        intent = plan.intent
+        r = {step.name: (step.result or {}) for step in plan.steps}
+ 
+        dispatch = {
+            "analyze_symbol":    self._analysis,
+            "ai_analysis":       self._analysis,
+            "execute_trade":     self._analysis,    # pre-execution analysis view
+            "open_buy":          self._analysis,
+            "open_sell":         self._analysis,
+            "greeting":          self._greeting,
+            "account_summary":   self._account,
+            "active_positions":  self._positions,
+            "profitable_positions": self._positions,
+            "bulk_scan":         self._scan,
+            "risk_management":   self._risk,
+            "trade_history":     self._history,
+            "get_price":         self._price,
+            "close_position":    self._close_confirm,
+            "close_all":         self._close_all_confirm,
+            "news_update":       self._news,
+            "strategy_info":     self._strategy,
+            "portfolio_status":  self._portfolio,
         }
-
-    def synthesize(self, plan: 'AgentPlan') -> str:
-        """Main routing function for synthesis."""
-        if plan.intent in ["analyze_symbol", "ai_analysis"]:
-            return self._synth_dynamic_analysis(plan)
-        elif plan.intent == "greeting":
-            return random.choice(self.lexicon["greetings"])
-        
-        # Fallback for simple actions
-        return f"Action '{plan.intent}' processed successfully."
-
-    def _synth_dynamic_analysis(self, plan: 'AgentPlan') -> str:
-        """Builds a flowing paragraph dynamically from the execution notes."""
-        symbol = plan.symbol or "the asset"
-        r = plan.context  # The dictionary populated by the executor
-        
-        grade = r.get("grade", "D")
-        direction = r.get("action", "WAIT")
-        notes = r.get("notes", [])
-        
-        # 1. Choose an opener based on direction
-        if direction == "BUY":
-            opener = random.choice(self.lexicon["buy_openers"]).format(symbol=symbol)
-        elif direction == "SELL":
-            opener = random.choice(self.lexicon["sell_openers"]).format(symbol=symbol)
+ 
+        fn = dispatch.get(intent, self._general)
+        try:
+            return fn(plan, r)
+        except Exception:
+            return self._general(plan, r)
+ 
+    # ── Intent handlers ───────────────────────────────────────────────────────
+ 
+    def _analysis(self, plan, r) -> str:
+        symbol  = plan.symbol or "the asset"
+        sig     = r.get("signal_ensemble", {})
+        scored  = r.get("quality_score", {})
+        regime  = r.get("market_regime", {}).get("regime", "Unknown")
+        sizing  = r.get("position_sizing", {})
+        htf     = r.get("htf_trend_check", {}).get("trend", "NEUTRAL")
+        anomaly = r.get("anomaly_check", {})
+ 
+        action  = sig.get("action", "WAIT")
+        conf    = sig.get("confidence", 0.0)
+        reason  = sig.get("reason", "")
+        grade   = scored.get("grade", "?")
+        notes   = scored.get("notes", [])
+        lots    = sizing.get("lots")
+        approved= sizing.get("approved", False)
+ 
+        # Direction opener
+        openers = {
+            "BUY":  [f"Bullish confluence on {symbol}.", f"{symbol} is flagging a long entry."],
+            "SELL": [f"Bearish distribution on {symbol}.", f"{symbol} is rolling over short."],
+            "WAIT": [f"No clear edge on {symbol} right now.", f"Staying flat on {symbol}."],
+        }
+        opener = random.choice(openers.get(action, openers["WAIT"]))
+ 
+        # Confidence qualifier
+        conf_word = ("high-conviction" if conf > 0.75
+                     else "moderate" if conf > 0.55
+                     else "tentative" if conf > 0.40
+                     else "weak")
+ 
+        parts = [f"{opener} {conf_word} signal at {conf:.0%}."]
+ 
+        # Regime
+        parts.append(f"Regime: {regime}.")
+ 
+        # HTF alignment
+        if action != "WAIT":
+            if htf == action:
+                parts.append(f"HTF trend aligned ({htf}) — good.")
+            elif htf not in ("NEUTRAL", "WAIT"):
+                parts.append(f"HTF trend is {htf} — counter-trend entry, be cautious.")
+ 
+        # Top scoring note
+        if notes:
+            clean = notes[0].split(" →")[0].strip().rstrip(".")
+            parts.append(f"{clean}.")
+ 
+        # Grade verdict
+        grade_lines = {
+            "A": "Grade A — premium setup.",
+            "B": "Grade B — solid, proceed with standard size.",
+            "C": "Grade C — marginal. Consider waiting.",
+            "D": "Grade D — skip this one.",
+        }
+        parts.append(grade_lines.get(grade, f"Grade {grade}."))
+ 
+        # Anomaly warning
+        if anomaly.get("is_anomaly"):
+            parts.append(f"Anomaly score {anomaly['anomaly_score']:.2f} — unusual conditions, size down.")
+ 
+        # Suggested action for confirm flow (Bug C fix)
+        if action in ("BUY", "SELL") and grade in ("A", "B") and approved and lots:
+            plan.suggested_action = f"{action} {lots} {symbol}"
+ 
+        return " ".join(parts)
+ 
+    def _greeting(self, plan, r) -> str:
+        acct = r.get("account_data", {})
+        pos  = r.get("open_positions", {})
+        reg  = r.get("regime_snapshot", {}).get("regime", "Unknown")
+ 
+        if acct:
+            bal  = acct.get("balance", 0)
+            eq   = acct.get("equity", 0)
+            pnl  = acct.get("profit", 0)
+            n    = pos.get("count", 0)
+            sign = "+" if pnl >= 0 else ""
+            base = (f"Back online. Balance ${bal:,.2f}, equity ${eq:,.2f} "
+                    f"({sign}${pnl:,.2f} floating). {n} open position(s).")
         else:
-            opener = random.choice(self.lexicon["wait_openers"]).format(symbol=symbol)
-
-        # 2. Process the notes (Extracting the English reasoning from the points)
-        # Assuming notes look like: "HTF Trend Aligned (BUY) → +15 pts"
-        clean_notes = []
-        for note in notes:
-            # Strip the points part (e.g., " → +15 pts") to make it conversational
-            clean_text = note.split(" → ")[0]
-            clean_notes.append(clean_text)
-
-        # 3. Build the body paragraph
-        body_sentences = []
-        if clean_notes:
-            body_sentences.append(f"Specifically, {clean_notes[0].lower()}.")
-            
-            if len(clean_notes) > 1:
-                trans = random.choice(self.lexicon["transitions_add"])
-                body_sentences.append(f"{trans} {clean_notes[1].lower()}.")
-                
-            if len(clean_notes) > 2:
-                # Group the remaining notes into a list
-                remaining = ", and ".join([n.lower() for n in clean_notes[2:4]])
-                body_sentences.append(f"We are also seeing that {remaining}.")
-
-        body_text = " ".join(body_sentences)
-
-        # 4. Append the Grade / Verdict
-        verdict = random.choice(self.lexicon["grades"].get(grade, self.lexicon["grades"]["D"]))
-        
-        # 5. Final Assembly
-        final_response = f"{opener} {body_text} {verdict} (Grade: {grade})"
-        
-        return final_response
+            base = "Back online. Broker connected."
+ 
+        suggestions = [
+            "Run a portfolio scan?",
+            "Check positions, or scan for fresh setups?",
+            "Ready when you are — scan, analyse, or check risk?",
+        ]
+        return f"{base} Regime: {reg}. {random.choice(suggestions)}"
+ 
+    def _account(self, plan, r) -> str:
+        acct = r.get("account_data", {})
+        dd   = r.get("drawdown_analysis", {})
+        fl   = r.get("floating_pnl", {})
+ 
+        if not acct:
+            return "Could not fetch account data from MT5."
+ 
+        bal  = acct.get("balance", 0)
+        eq   = acct.get("equity", 0)
+        ml   = acct.get("margin_level")
+        fm   = acct.get("free_margin", 0)
+        dd_v = dd.get("trailing_drawdown", 0)
+        dd_p = dd.get("drawdown_pct", 0)
+        pnl  = fl.get("total", acct.get("profit", 0))
+ 
+        ml_str = f"{ml:.1f}%" if ml else "N/A"
+        lines = [
+            f"Balance ${bal:,.2f} | Equity ${eq:,.2f} | Free margin ${fm:,.2f}.",
+            f"Margin level {ml_str}.",
+            f"Floating P&L ${pnl:+,.2f}.",
+        ]
+        if dd_v > 0:
+            lines.append(f"Trailing drawdown from peak: ${dd_v:,.2f} ({dd_p:.1f}%).")
+        return " ".join(lines)
+ 
+    def _positions(self, plan, r) -> str:
+        pos_data = r.get("open_positions", {})
+        positions = pos_data.get("positions", [])
+ 
+        if not positions:
+            return "No open positions."
+ 
+        total = pos_data.get("total_pnl", 0)
+        lines = [f"{len(positions)} open position(s). Total floating: ${total:+,.2f}."]
+        for p in positions:
+            pnl_sign = "+" if p["profit"] >= 0 else ""
+            lines.append(
+                f"  {p['symbol']} {p['action']} {p['volume']}L "
+                f"@ {p['price_open']} → {pnl_sign}${p['profit']:.2f}"
+            )
+        return "\n".join(lines)
+ 
+    def _scan(self, plan, r) -> str:
+        best  = r.get("best_opportunities", {})
+        gate  = r.get("risk_gate", {})
+        regime= r.get("regime_snapshot", {}).get("regime", "Unknown")
+ 
+        if not gate.get("gate_open", True):
+            return f"Risk gate closed — {gate.get('reason', 'drawdown limit reached')}. No scan executed."
+ 
+        executed = best.get("executed", [])
+        waiting  = best.get("waiting", [])
+        blocked  = best.get("blocked", [])
+        total    = best.get("total", 0)
+ 
+        parts = [f"Portfolio scan complete. {total} symbol(s) checked. Regime: {regime}."]
+ 
+        if executed:
+            parts.append(f"{len(executed)} trade(s) executed:")
+            parts.extend(f"  {e}" for e in executed)
+        if waiting:
+            parts.append(f"{len(waiting)} symbol(s) waiting for a signal.")
+        if blocked:
+            parts.append(f"{len(blocked)} blocked by risk rules.")
+        if not executed and not waiting:
+            parts.append("No actionable setups found this cycle.")
+ 
+        return "\n".join(parts)
+ 
+    def _risk(self, plan, r) -> str:
+        acct = r.get("account_data", {})
+        dd   = r.get("drawdown_analysis", {})
+        mg   = r.get("margin_check", {})
+        ot   = r.get("overtrading_check", {})
+        pos  = r.get("open_positions", {})
+ 
+        parts = []
+        if acct:
+            bal = acct.get("balance", 0)
+            eq  = acct.get("equity", 0)
+            parts.append(f"Balance ${bal:,.2f} | Equity ${eq:,.2f}.")
+ 
+        if dd:
+            dd_v = dd.get("trailing_drawdown", 0)
+            dd_p = dd.get("drawdown_pct", 0)
+            hi   = dd.get("daily_high", 0)
+            parts.append(
+                f"Peak equity today ${hi:,.2f}. "
+                f"Trailing drawdown ${dd_v:,.2f} ({dd_p:.1f}%)."
+            )
+ 
+        ml = mg.get("margin_level")
+        if ml:
+            severity = "critical" if ml < 150 else "healthy" if ml > 300 else "moderate"
+            parts.append(f"Margin level {ml:.0f}% — {severity}.")
+ 
+        n_pos = pos.get("count", 0)
+        parts.append(f"{n_pos} open position(s).")
+ 
+        ot_warn = ot.get("warning")
+        if ot_warn:
+            parts.append(f"Concentration warning: {ot_warn}")
+ 
+        return " ".join(parts) if parts else "Unable to retrieve risk metrics."
+ 
+    def _history(self, plan, r) -> str:
+        hist = r.get("closed_trades", {})
+        perf = r.get("performance_analysis", {})
+ 
+        if not hist:
+            return "No trade history data available."
+ 
+        count  = hist.get("count", 0)
+        pnl    = hist.get("pnl", 0)
+        buys   = hist.get("buys", 0)
+        sells  = hist.get("sells", 0)
+        closes = hist.get("closes", 0)
+ 
+        if count == 0:
+            return "No closed trades recorded today."
+ 
+        lines = [
+            f"{count} trade action(s) today: {buys} buy, {sells} sell, {closes} close.",
+            f"Realised P&L: ${pnl:+,.2f}.",
+        ]
+ 
+        best  = perf.get("best_performer")
+        worst = perf.get("worst_performer")
+        by_sym= perf.get("by_symbol", {})
+ 
+        if best and by_sym.get(best, 0) > 0:
+            lines.append(f"Best: {best} (+${by_sym[best]:.2f}).")
+        if worst and by_sym.get(worst, 0) < 0:
+            lines.append(f"Worst: {worst} (${by_sym[worst]:.2f}).")
+ 
+        return " ".join(lines)
+ 
+    def _price(self, plan, r) -> str:
+        tick   = r.get("live_price", {})
+        regime = r.get("market_regime", {}).get("regime", "Unknown")
+        symbol = plan.symbol or tick.get("symbol", "?")
+ 
+        bid    = tick.get("bid", 0)
+        ask    = tick.get("ask", 0)
+        spread = tick.get("spread", 0)
+ 
+        if not bid:
+            return f"Could not fetch live price for {symbol}."
+ 
+        return (
+            f"{symbol}: Bid {bid} / Ask {ask}. "
+            f"Spread {spread:.1f} pips. Regime: {regime}."
+        )
+ 
+    def _close_confirm(self, plan, r) -> str:
+        pos  = r.get("open_positions", {})
+        sym  = plan.symbol or "unknown"
+        poss = [p for p in pos.get("positions", []) if p["symbol"] == sym]
+        if not poss:
+            return f"No open position found for {sym}."
+        p = poss[0]
+        return (
+            f"Ready to close {sym} ({p['action']} {p['volume']}L, "
+            f"floating ${p['profit']:+.2f}). Say 'yes' to confirm."
+        )
+ 
+    def _close_all_confirm(self, plan, r) -> str:
+        pos   = r.get("open_positions", {})
+        fl    = r.get("floating_pnl", {})
+        n     = pos.get("count", 0)
+        total = fl.get("total", 0)
+        if n == 0:
+            return "No open positions to close."
+        return (
+            f"Close all {n} position(s)? Total floating: ${total:+,.2f}. "
+            f"Say 'yes' to confirm."
+        )
+ 
+    def _news(self, plan, r) -> str:
+        regime = r.get("regime_snapshot", {}).get("regime", "Unknown")
+        acct   = r.get("account_data", {})
+        eq     = acct.get("equity", 0) if acct else 0
+        return (
+            f"Current regime: {regime}. "
+            f"No live news feed connected — consider checking ForexFactory or Reuters "
+            f"for upcoming events before trading. "
+            f"Equity: ${eq:,.2f}."
+        )
+ 
+    def _strategy(self, plan, r) -> str:
+        snap  = r.get("regime_snapshot", {})
+        regime= snap.get("regime", "Unknown")
+        best  = snap.get("best_strategies", [])
+        return (
+            f"Current regime: {regime}. "
+            f"Best-fit strategies: {', '.join(best) if best else 'undetermined'}. "
+            f"Ensemble runs Mean Reversion, Momentum, Breakout, Scalping, Arbitrage, "
+            f"and Trend Following simultaneously. MetaScorer weights their votes "
+            f"using a trained XGBoost model (falls back to weighted voting until trained)."
+        )
+ 
+    def _portfolio(self, plan, r) -> str:
+        acct = r.get("account_data", {})
+        pos  = r.get("open_positions", {})
+        health = r.get("portfolio_health", {}).get("health_summary", "")
+        eq   = acct.get("equity", 0) if acct else 0
+        bal  = acct.get("balance", 0) if acct else 0
+        n    = pos.get("count", 0)
+        pnl  = pos.get("total_pnl", 0)
+        daily= eq - bal
+        return (
+            f"Portfolio equity ${eq:,.2f}. "
+            f"{n} open position(s), floating ${pnl:+,.2f}. "
+            f"Daily P&L ${daily:+,.2f}. "
+            + (f"{health}" if health else "")
+        )
+ 
+    def _general(self, plan, r) -> str:
+        snap = r.get("context_snapshot", {})
+        bal  = snap.get("balance", 0)
+        n    = snap.get("open_positions", 0)
+        reg  = snap.get("regime", "Unknown")
+        return (
+            f"Balance ${bal:,.2f} | {n} open position(s) | Regime: {reg}. "
+            f"Try: scan, positions, account, or name a symbol."
+        )
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # AgentCore  (public façade)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -872,3 +1133,4 @@ class AgentCore:
         self.last_plan = plan
 
         return response
+

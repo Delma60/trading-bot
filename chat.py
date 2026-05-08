@@ -1111,11 +1111,12 @@ from manager.nlp_engine import NLPEngine
 from manager.reasoning_engine import ReasoningEngine
 from manager.response_engine import ResponseEngine
 from manager.portfolio_manager import PortfolioManager
-from manager.risk_manager import RiskManager, DynamicRiskTargeter, TrailingStopManager
+from manager.risk_manager import RiskManager, DynamicRiskTargeter, TrailingStopManager, ProfitGuard
 from manager.profile_manager import ProfileManager
 from manager.agent_core import (AgentPlan, AgentCore)
 from strategies.strategy_manager import StrategyManager
 from trader import Trader
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1157,6 +1158,10 @@ class ActionExecutor:
         
         # 3. Extract the Dynamic Targets we built in the reasoning engine
         dynamic_targets = plan.context.get("dynamic_targets", {})
+        gk = TradeGatekeeper()
+        ok, reason = gk.gate(symbol, None)   # broker not needed; uses mt5 directly
+        if not ok:
+            return f"Trade blocked by gate: {reason}"
         
         if direction == "BUY":
             sl_pips = dynamic_targets.get("sl_buy_pips", 50)  # Safe fallback if empty
@@ -1306,7 +1311,9 @@ class ARIA:
         self.dynamic_targeter = DynamicRiskTargeter(self.broker)
         self.trailing_manager = TrailingStopManager(self.broker, self.dynamic_targeter)
         self.trailing_manager.start()
-
+        self.profit_guard = ProfitGuard(self.broker, notify_callback=self.receive_system_alert)
+        self.profit_guard.start()
+        
         # Memory — persists across turns in a single session
         self.memory: dict[str, Any] = {
             "last_symbol":    None,
@@ -1509,7 +1516,9 @@ class ARIA:
 
         # Check notifications
         if intent == "check_notifications":
-            return self._drain_inbox()
+            guard = self.profit_guard.status()
+            inbox = self._drain_inbox()
+            return  f"{inbox}\n\n{guard}"
 
         return None  # fall through to agent
 

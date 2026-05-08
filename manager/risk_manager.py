@@ -1,11 +1,12 @@
 # risk_manager.py
 from typing import Dict, Any, Optional
 import MetaTrader5 as mt5
-from datetime import datetime
+from datetime import datetime, timezone
 import math
 import pandas as pd
 import time
 import threading
+from collections import Counter
 
 class RiskManager:
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
@@ -435,3 +436,385 @@ class TrailingStopManager:
                                 print(f"[Profit Lock] ❌ Failed to verify 75% SL lock for {symbol} ticket {ticket}.")
                         else:
                             print(f"[Profit Lock] ❌ Broker failed to apply 75% SL lock for {symbol} ticket {ticket}.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Add this class to the bottom of manager/risk_manager.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ProfitGuard:
+    """
+    Protects floating profit from full reversal.
+
+    Problem solved
+    --------------
+    The bot opens a trade, it drifts into profit, then slowly gives every
+    penny back before the fixed SL finally fires — net result: a loss on
+    what was a winning trade.
+
+    Solution
+    --------
+    Track each ticket's *peak* floating profit.  When profit retraces
+    a tier-specific percentage from that peak, close the position and
+    lock in whatever is left.
+
+    Tiers (retracement % that triggers close)
+    ------------------------------------------
+    peak < $1.00   →  70 %   (tiny profit — let it breathe, noise is high)
+    peak $1 – $5   →  55 %
+    peak $5 – $20  →  45 %
+    peak > $20     →  35 %   (large winner — protect aggressively)
+
+    Breakeven lock
+    --------------
+    Once peak profit reaches `BREAKEVEN_TRIGGER` ($2 by default), the
+    position's SL is moved to the entry price.  This ensures the trade
+    can never become a full loss once it has been meaningfully profitable.
+
+    Damage-control exit
+    -------------------
+    If a trade whose peak was ≥ $5 crosses back through zero and reaches
+    −$0.50, it is closed immediately.  The SL would eventually do this
+    anyway, but the guard catches it faster and prevents a larger loss on
+    a trade that was already a solid winner.
+
+    Usage
+    -----
+        guard = ProfitGuard(broker, notify_callback=agent_notify)
+        guard.start()   # background thread, checks every 5 s
+
+    Called from chat.py in ARIA.__init__:
+        self.profit_guard = ProfitGuard(broker, notify_callback)
+        self.profit_guard.start()
+    """
+
+    MIN_PROFIT_TO_ACTIVATE: float = 0.30   # $ — guard ignores positions below this
+    BREAKEVEN_TRIGGER: float       = 2.00   # $ peak profit → move SL to entry price
+    DAMAGE_CONTROL_LOSS: float     = -0.50  # $ — close if profit drops below this after big peak
+    DAMAGE_CONTROL_PEAK: float     = 5.00   # $ — peak must have been this high to apply damage control
+    CHECK_INTERVAL: int            = 5      # seconds between scans
+
+    # (peak_ceiling, retracement_threshold)
+    TIERS: list[tuple[float, float]] = [
+        (1.00,        0.70),
+        (5.00,        0.55),
+        (20.00,       0.45),
+        (float("inf"), 0.35),
+    ]
+
+    def __init__(self, broker, notify_callback=print):
+        self.broker  = broker
+        self.notify  = notify_callback
+
+        self._peak:          dict[int, float] = {}   # ticket → highest seen profit
+        self._breakeven_set: set[int]         = set() # tickets whose SL is already at BE
+        self._closed_this_cycle: set[int]     = set() # prevent double-close in one scan
+
+        self.running  = False
+        self._thread  = None
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self._thread = threading.Thread(
+            target=self._guard_loop, daemon=True, name="ProfitGuard"
+        )
+        self._thread.start()
+        print("[System] Profit Guard online.")
+
+    def stop(self):
+        self.running = False
+        if self._thread:
+            self._thread.join(timeout=3)
+
+    # ── Main loop ─────────────────────────────────────────────────────────────
+
+    def _guard_loop(self):
+        while self.running:
+            try:
+                if self.broker.connected:
+                    self._closed_this_cycle.clear()
+                    self._check_all_positions()
+            except Exception as exc:
+                # Never crash the guard thread
+                print(f"[ProfitGuard] Error: {exc}")
+            time.sleep(self.CHECK_INTERVAL)
+
+    def _check_all_positions(self):
+        positions = self.broker.getPositions()
+
+        if not positions:
+            self._peak.clear()
+            self._breakeven_set.clear()
+            return
+
+        open_tickets = {p.ticket for p in positions}
+
+        # Purge tracking data for closed positions
+        for stale in (set(self._peak) - open_tickets):
+            self._peak.pop(stale, None)
+            self._breakeven_set.discard(stale)
+
+        for pos in positions:
+            self._evaluate(pos)
+
+    # ── Per-position evaluation ───────────────────────────────────────────────
+
+    def _evaluate(self, pos):
+        ticket = pos.ticket
+        profit = float(pos.profit)
+
+        # ── 1. Update peak ───────────────────────────────────────────────────
+        current_peak = self._peak.get(ticket, 0.0)
+        if profit > current_peak:
+            self._peak[ticket] = profit
+            current_peak        = profit
+
+        # ── 2. Breakeven lock ────────────────────────────────────────────────
+        if (current_peak >= self.BREAKEVEN_TRIGGER
+                and ticket not in self._breakeven_set):
+            self._set_breakeven(pos)
+
+        # ── 3. Noise filter ──────────────────────────────────────────────────
+        if current_peak < self.MIN_PROFIT_TO_ACTIVATE:
+            return
+
+        # ── 4. Damage-control exit ───────────────────────────────────────────
+        #    Trade was a solid winner but has now fallen hard into the red.
+        if (current_peak >= self.DAMAGE_CONTROL_PEAK
+                and profit <= self.DAMAGE_CONTROL_LOSS):
+            self._close(pos, reason=(
+                f"peaked at +${current_peak:.2f}, "
+                f"now ${profit:.2f} — damage-control exit"
+            ))
+            return
+
+        # ── 5. Retracement guard (only while still in profit) ─────────────--
+        if profit <= 0:
+            return   # already handled by SL or damage control
+
+        retracement = (current_peak - profit) / current_peak
+        threshold   = self._threshold_for(current_peak)
+
+        if retracement >= threshold:
+            self._close(pos, reason=(
+                f"peaked at +${current_peak:.2f}, "
+                f"now +${profit:.2f} ({retracement:.0%} retrace ≥ {threshold:.0%} threshold)"
+            ))
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _threshold_for(self, peak: float) -> float:
+        for ceiling, threshold in self.TIERS:
+            if peak < ceiling:
+                return threshold
+        return 0.35
+
+    def _set_breakeven(self, pos):
+        """Move the stop-loss to the trade's entry price."""
+        ticket     = pos.ticket
+        symbol     = pos.symbol
+        entry      = float(pos.price_open)
+        current_sl = float(pos.sl or 0.0)
+
+        # Don't move if SL is already at or better than breakeven
+        if pos.type == 0:   # BUY — sl must be ≤ entry to improve; we want ≥ entry
+            if current_sl >= entry:
+                self._breakeven_set.add(ticket)
+                return
+        else:               # SELL — sl must be ≥ entry; we want ≤ entry
+            if 0 < current_sl <= entry:
+                self._breakeven_set.add(ticket)
+                return
+
+        new_sl = round(entry, 5)
+        ok = self.broker.modify_position(ticket, symbol, new_sl)
+        if ok:
+            self._breakeven_set.add(ticket)
+            self.notify(
+                f"🔐 ProfitGuard: {symbol} SL moved to breakeven @ {new_sl}",
+                priority="normal",
+            )
+
+    def _close(self, pos, reason: str):
+        ticket = pos.ticket
+        if ticket in self._closed_this_cycle:
+            return   # already attempted this scan
+        self._closed_this_cycle.add(ticket)
+
+        self.notify(
+            f"🔒 ProfitGuard: Closing {pos.symbol} — {reason}",
+            priority="trade_executed",
+        )
+        self.broker.close_position(pos.symbol)
+        self._peak.pop(ticket, None)
+        self._breakeven_set.discard(ticket)
+
+    # ── Inspection / chat interface ───────────────────────────────────────────
+
+    def status(self) -> str:
+        """Return a human-readable status string for use in chat responses."""
+        if not self._peak:
+            return "No positions currently being guarded."
+
+        lines = ["ProfitGuard tracking:"]
+        for ticket, peak in self._peak.items():
+            threshold = self._threshold_for(peak)
+            be_locked = "✅ BE locked" if ticket in self._breakeven_set else "⚠️  no BE lock"
+            lines.append(
+                f"  #{ticket} | peak +${peak:.2f} | "
+                f"close on {threshold:.0%} retrace | {be_locked}"
+            )
+        return "\n".join(lines)
+    
+class TradeGatekeeper:
+    """
+    Pre-trade gate that checks spread and session quality.
+ 
+    Call gate() before any order submission.  Returns (True, "OK") when
+    conditions are acceptable, or (False, reason) to block the trade.
+ 
+    Parameters
+    ----------
+    max_spread_pips   : Maximum allowed spread in pips.  Signals above this
+                        are likely to be unprofitable after spread cost.
+                        Default 3.0 for major forex pairs.
+    avoid_asian_session: Block trades between 00:00–07:00 UTC, when
+                        majors have wide spreads and thin liquidity.
+    avoid_friday_close: Block new trades after 20:00 UTC on Fridays
+                        (weekend gap risk).
+    """
+ 
+    def __init__(
+        self,
+        max_spread_pips:     float = 3.0,
+        avoid_asian_session: bool  = True,
+        avoid_friday_close:  bool  = True,
+    ):
+        self.max_spread_pips     = max_spread_pips
+        self.avoid_asian_session = avoid_asian_session
+        self.avoid_friday_close  = avoid_friday_close
+ 
+    def gate(self, symbol: str, broker) -> tuple[bool, str]:
+        """
+        Returns (allowed: bool, reason: str).
+        Call this before submitting any order.
+        """
+        # ── Session filter ───────────────────────────────────────────────────
+        now_utc = datetime.now(timezone.utc)
+        hour    = now_utc.hour
+        weekday = now_utc.weekday()   # 0=Mon … 4=Fri … 6=Sun
+ 
+        if self.avoid_asian_session and 0 <= hour < 7:
+            return False, (
+                f"Asian session ({hour:02d}:00 UTC) — low liquidity, wide spreads. "
+                f"Waiting for London open."
+            )
+ 
+        if self.avoid_friday_close and weekday == 4 and hour >= 20:
+            return False, (
+                "Friday after 20:00 UTC — weekend gap risk. "
+                "No new positions before market close."
+            )
+ 
+        if weekday >= 5:   # Saturday or Sunday
+            return False, "Market closed (weekend)."
+ 
+        # ── Spread filter ────────────────────────────────────────────────────
+        spread_pips = self._get_spread_pips(symbol, broker)
+        if spread_pips is None:
+            return False, f"Could not fetch tick data for {symbol}."
+ 
+        if spread_pips > self.max_spread_pips:
+            return False, (
+                f"Spread too wide: {spread_pips:.1f} pips "
+                f"(limit {self.max_spread_pips} pips). "
+                f"Waiting for tighter conditions."
+            )
+ 
+        return True, "OK"
+ 
+    def _get_spread_pips(self, symbol: str, broker) -> float | None:
+        try:
+            tick = mt5.symbol_info_tick(symbol)
+            info = mt5.symbol_info(symbol)
+            if not tick or not info:
+                return None
+            spread_points = (tick.ask - tick.bid) / info.point
+            # Convert points → pips (10 points per pip for most forex)
+            pip_multiplier = 1.0 if any(
+                t in symbol.upper()
+                for t in ["BTC", "ETH", "XAU", "XAG", "US30", "NAS"]
+            ) else 10.0
+            return spread_points / pip_multiplier
+        except Exception:
+            return None
+
+class CorrelationGuard:
+    """
+    Prevents over-concentration in a single underlying currency.
+ 
+    Works by decomposing each 6-character forex symbol into its two legs
+    (e.g. EURUSD → EUR, USD) and counting how many open positions share a
+    leg with the proposed new trade.
+ 
+    Parameters
+    ----------
+    max_shared_legs : int
+        Maximum number of times one currency may appear across open positions
+        (including the proposed new trade).  Default 2 — allows one existing
+        position on the same currency before blocking a new entry.
+    """
+ 
+    def __init__(self, max_shared_legs: int = 2):
+        self.max_shared_legs = max_shared_legs
+ 
+    def check(self, symbol: str, broker) -> tuple[bool, str]:
+        """
+        Returns (allowed: bool, reason: str).
+ 
+        Call before opening a new position.
+        """
+        positions = broker.getPositions() or []
+        if not positions:
+            return True, "No existing positions."
+ 
+        # Extract legs from all open positions
+        open_legs: list[str] = []
+        for pos in positions:
+            open_legs.extend(self._legs(pos.symbol))
+ 
+        leg_counts = Counter(open_legs)
+ 
+        # Check proposed symbol's legs against existing counts
+        proposed_legs = self._legs(symbol)
+        for leg in proposed_legs:
+            # Count would become leg_counts[leg] + 1 after this trade
+            if leg_counts[leg] + 1 > self.max_shared_legs:
+                concentrated = [
+                    pos.symbol for pos in positions
+                    if leg in self._legs(pos.symbol)
+                ]
+                return False, (
+                    f"Correlation limit: {leg} already appears in "
+                    f"{leg_counts[leg]} open position(s) "
+                    f"({', '.join(concentrated)}). "
+                    f"Max shared legs = {self.max_shared_legs}."
+                )
+ 
+        return True, "OK"
+ 
+    @staticmethod
+    def _legs(symbol: str) -> list[str]:
+        """Split a 6-char forex symbol into its two 3-char currency legs."""
+        sym = symbol.upper()
+        # Skip non-forex instruments (metals, crypto, indices)
+        if any(sym.startswith(p) for p in ["XAU", "XAG", "BTC", "ETH", "US", "GER"]):
+            return []
+        if len(sym) >= 6:
+            return [sym[:3], sym[3:6]]
+        return []
+ 

@@ -10,13 +10,61 @@ from .mean_reversion import MeanReversionStrategy
 from strategies.features.feature_engineer import FeatureEngineer
 from strategies.models.lstm_predictor import LSTMPredictor
 from strategies.models.meta_scorer import MetaScorer
-
+import threading
+import time
 
 class DummyStrategy:
     """Safe placeholder for strategies not yet implemented."""
     def analyze(self, df: pd.DataFrame) -> dict:
         return {"action": "WAIT", "confidence": 0.0, "reason": "Strategy not yet implemented."}
 
+
+class OHLCVCache:
+    """
+    Thread-safe time-to-live cache for OHLCV DataFrames.
+ 
+    Prevents redundant MT5 calls when multiple strategies analyse the
+    same symbol in the same scan cycle.
+ 
+    Usage in StrategyManager.__init__:
+        self._ohlcv_cache = OHLCVCache(ttl_seconds=60)
+ 
+    Usage in check_signals() — replace the broker.ohclv_data() call:
+        raw_df = self._ohlcv_cache.fetch(
+            self.broker, symbol, timeframe, num_bars=1000
+        )
+    """
+ 
+    def __init__(self, ttl_seconds: int = 60):
+        self._store: dict[tuple, tuple[float, object]] = {}
+        self._ttl   = ttl_seconds
+        self._lock  = threading.Lock()
+ 
+    def fetch(self, broker, symbol: str, timeframe: str, num_bars: int = 1000):
+        key = (symbol.upper(), timeframe)
+        with self._lock:
+            entry = self._store.get(key)
+            if entry and (time.monotonic() - entry[0]) < self._ttl:
+                return entry[1]   # cache hit
+ 
+        # Cache miss — fetch from broker (outside the lock so we don't block)
+        df = broker.ohclv_data(symbol, timeframe=timeframe, num_bars=num_bars)
+ 
+        if df is not None and not df.empty:
+            with self._lock:
+                self._store[key] = (time.monotonic(), df)
+ 
+        return df
+ 
+    def invalidate(self, symbol: str = None, timeframe: str = None):
+        """Force a refresh on next fetch. Call after known market events."""
+        with self._lock:
+            if symbol is None:
+                self._store.clear()
+            else:
+                key = (symbol.upper(), timeframe or "H1")
+                self._store.pop(key, None)
+ 
 
 class StrategyManager:
     """
@@ -72,6 +120,7 @@ class StrategyManager:
         self.lstm = LSTMPredictor()
         self.meta = MetaScorer()
         self.features = FeatureEngineer()
+        self._ohlcv_cache = OHLCVCache(ttl_seconds=60)
 
         # Unsupervised learning engine
         try:
@@ -100,6 +149,41 @@ class StrategyManager:
     def execute_strategy(self, strategy_name: str):
         """Return the pre-loaded strategy engine object."""
         return self.engines.get(strategy_name, DummyStrategy())
+
+    def record_trade_outcome(self, feature_vector, action: str, profit: float):
+        """
+        Call this when a position CLOSES.
+
+        Parameters
+        ----------
+        feature_vector : np.ndarray
+            The vector returned in check_signals()["feature_vector"] at the
+            time the trade was opened.  Store it in a dict keyed by ticket
+            when the trade opens; pass it here when it closes.
+        action : str
+            "BUY" or "SELL" — the direction that was taken.
+        profit : float
+            Final realised P&L of the closed position.
+
+        The label passed to MetaScorer is:
+            - the actual direction ("BUY"/"SELL") if profitable
+            - "WAIT" if the trade was a loss (meaning the model should have
+            waited, regardless of direction)
+        """
+        label = action if profit > 0 else "WAIT"
+        self.meta.collect_sample(feature_vector, label)
+
+        # Auto-train once we cross the minimum sample threshold
+        sample_count = len(self.meta._samples)
+        if sample_count >= 200 and sample_count % 50 == 0:
+            # Every 50 new samples after the 200-sample threshold, retrain
+            acc = self.meta.train(force=True)
+            if acc > 0:
+                self.notify(
+                    f"[MetaScorer] Retrained on {sample_count} samples. "
+                    f"Validation accuracy: {acc:.1%}",
+                    priority="normal",
+                )
 
     def check_signals(
         self,
@@ -132,7 +216,7 @@ class StrategyManager:
         }
         """
         # 1. Fetch raw OHLCV ──────────────────────────────────────────────────
-        raw_df = self.broker.ohclv_data(symbol, timeframe=timeframe, num_bars=1000)
+        raw_df = self._ohlcv_cache.fetch(self.broker, symbol, timeframe, num_bars=1000)
         if raw_df is None or raw_df.empty:
             return {
                 "action": "WAIT",

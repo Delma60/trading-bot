@@ -10,6 +10,7 @@ from pathlib import Path
 import threading
 from .risk_manager import RiskManager
 from typing import Dict
+from manager.risk_manager import TradeGatekeeper, CorrelationGuard
 
 class PortfolioManager:
     """The ML-Driven Offense Engine: Learns which strategies work in which environments."""
@@ -23,11 +24,12 @@ class PortfolioManager:
         self.strategy_manager = strategy_manager
         self.risk_manager = risk_manager
         self.notify = notify_callback
-        
+        self.gate = TradeGatekeeper(max_spread_pips=3.0)
         # Load the fallback config
         self.config = self._load_json(self.CONFIG_PATH, fallback={})
         self.asset_classes = self.config.get("asset_classes", {"Forex": ["EURUSD"]})
         self.strategy_mapping = self.config.get("strategy_mapping", {})
+        self.corr_guard = CorrelationGuard(max_shared_legs=2)
         
         self.master_watchlist = []
         for symbols in self.asset_classes.values():
@@ -114,7 +116,7 @@ class PortfolioManager:
     def _get_current_market_state(self, symbol: str) -> np.ndarray:
         """Gathers and normalizes market regime features."""
         try:
-            df = self.broker.get_historical_rates(symbol, timeframe="H1", count=50)
+            df = self._ohlcv_cache.fetch(self.broker, symbol, timeframe="H1", num_bars=1000)
             
             if df is None or len(df) < 50:
                 return np.zeros((1, 4))
@@ -205,12 +207,17 @@ class PortfolioManager:
                 max_daily_loss=max_daily_loss,
                 portfolio_size=portfolio_size
             )
-            
+
             if not allowed:
                 # Skip this symbol and move to the next one in the queue
                 results.append(f"⚠️ {symbol}: Skipped. {reason}")
                 continue
-                
+            
+            ok, corr_reason = self.corr_guard.check(symbol, self.broker)
+            
+            if not ok:
+                results.append(f"⚠️ {symbol}: {corr_reason}")
+                continue
             # Get the state to feed the AI (and to log it if we take a trade!)
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
@@ -245,7 +252,8 @@ class PortfolioManager:
                         self._temporary_trade_states = getattr(self, '_temporary_trade_states', {})
                         self._temporary_trade_states[symbol] = {
                             "state": current_state.tolist(), # Assuming you saved current_state earlier
-                            "strategy": strategy_name
+                            "strategy": strategy_name,
+                            "action":   signal["action"],
                         }
                     elif not exec_result["success"]:
                         error_reason = exec_result["reason"]
@@ -288,25 +296,33 @@ class PortfolioManager:
         """Call this when a trade CLOSES to log the result."""
         trade_data = getattr(self, '_temporary_trade_states', {}).pop(symbol, None)
         if not trade_data:
-            return # We don't have the starting state for this trade
+            return
+    
+        fv = np.array(trade_data["state"])   # feature vector saved at open
+        action = trade_data.get("action", "BUY")
+        self.strategy_manager.record_trade_outcome(fv, action, profit)
+    
+        # trade_data = getattr(self, '_temporary_trade_states', {}).pop(symbol, None)
+        # if not trade_data:
+        #     return # We don't have the starting state for this trade
             
-        if profit > 0:
-            strategy_idx = self.available_strategies.index(trade_data["strategy"])
-            label = [1 if i == strategy_idx else 0 for i in range(len(self.available_strategies))]
+        # if profit > 0:
+        #     strategy_idx = self.available_strategies.index(trade_data["strategy"])
+        #     label = [1 if i == strategy_idx else 0 for i in range(len(self.available_strategies))]
             
-            entry = {"state": trade_data["state"], "label": label}
+        #     entry = {"state": trade_data["state"], "label": label}
             
-            history = self._load_json(self.TRAINING_DATA_PATH, fallback=[])
-            history.append(entry)
+        #     history = self._load_json(self.TRAINING_DATA_PATH, fallback=[])
+        #     history.append(entry)
             
-            with open(self.TRAINING_DATA_PATH, "w") as f:
-                json.dump(history, f)
-            self.notify(f"[Portfolio AI]: Logged winning trade for {symbol} to memory.")
+        #     with open(self.TRAINING_DATA_PATH, "w") as f:
+        #         json.dump(history, f)
+        #     self.notify(f"[Portfolio AI]: Logged winning trade for {symbol} to memory.")
             
-            # Check if we should wake up the AI
-            if not self.is_ai_ready and len(history) >= 50:
-                self.is_ai_ready = True
-                self.retrain_model()
+        #     # Check if we should wake up the AI
+        #     if not self.is_ai_ready and len(history) >= 50:
+        #         self.is_ai_ready = True
+        #         self.retrain_model()
     def get_portfolio_health(self) -> str:
         """Generates a quick health report for the Chatbot."""
         account = self.broker.getAccountInfo()
