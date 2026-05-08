@@ -14,6 +14,7 @@ from pathlib import Path
 # Global shutdown flag for graceful termination
 shutdown_event = threading.Event()
 current_agent_listener = None
+_scan_lock = threading.Lock()  # Prevent overlapping scan cycles
 
 def _default_agent_notify(msg: str, priority: str = "normal"):
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -41,6 +42,12 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
     profile_path = Path("data/profile.json")
 
     while not shutdown_event.is_set():
+        # Prevent overlapping scan cycles — skip if previous scan still running
+        if not _scan_lock.acquire(blocking=False):
+            if shutdown_event.wait(timeout=scan_interval_seconds):
+                break
+            continue
+        
         try:
             config = {}
             if profile_path.exists():
@@ -100,6 +107,8 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
             # Sleep for a minute before retrying to prevent error spam
             if shutdown_event.wait(60):
                 break
+        finally:
+            _scan_lock.release()
     
     notify("✅ Background Scanner stopped.")
 

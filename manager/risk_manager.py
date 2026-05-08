@@ -114,10 +114,10 @@ class RiskManager:
 
         positions = self.broker.getPositions()
         
-        # 1. Global Exposure Limit (Max trades = Number of symbols in portfolio)
+        # 1. Global Exposure Limit (Check against max_open_trades, not portfolio_size)
         current_open_trades = len(positions) if positions else 0
-        if current_open_trades >= portfolio_size:
-            return False, f"Global exposure reached ({current_open_trades}/{portfolio_size} trades)."
+        if current_open_trades >= self.max_open_trades:
+            return False, f"Global exposure reached ({current_open_trades}/{self.max_open_trades} trades)."
 
         # 2. Check Specific Symbol Limits
         if positions:
@@ -576,6 +576,7 @@ class ProfitGuard:
         self._peak: dict[int, float] = {}
         self._peak_pips: dict[int, float] = {}
         self._pip_val: dict[int, float] = {}
+        self._peak_date: dict[int, datetime] = {}  # Daily reset tracking
         self._breakeven_set: set[int] = set()
         self._be_attempted: set[int] = set()
         self._closed_this_cycle: set[int] = set()
@@ -645,6 +646,15 @@ class ProfitGuard:
         symbol = pos.symbol
         lots = float(pos.volume)
         profit = float(pos.profit)
+
+        # Daily reset: clear peak tracking at midnight so thresholds reset daily
+        today = datetime.now().date()
+        if self._peak_date.get(ticket) != today:
+            self._peak.pop(ticket, None)
+            self._peak_pips.pop(ticket, None)
+            self._breakeven_set.discard(ticket)
+            self._be_attempted.discard(ticket)
+            self._peak_date[ticket] = today
 
         if ticket not in self._pip_val:
             self._pip_val[ticket] = _pip_value_usd(symbol, lots)

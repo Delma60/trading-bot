@@ -1103,6 +1103,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -1364,6 +1365,10 @@ class ARIA:
         # Notification inbox (filled by background scanner)
         self.notification_inbox: list = []
         self.inbox_lock = threading.Lock()
+        
+        # Message processing timeout (prevents hung broker calls from freezing chat)
+        self.message_processor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ARIA-msg")
+        self.message_timeout_seconds = 30
 
         self.console = Console()
         self.session = PromptSession()
@@ -1400,6 +1405,7 @@ class ARIA:
     def process_message(self, user_input: str) -> str:
         """
         Main pipeline: keyword shortcuts → NLP → COGNITIVE LAYER → agent → optional action.
+        Wrapped with timeout to prevent hung broker calls from freezing the chat loop.
         
         The cognitive layer now captures:
         - User emotion
@@ -1408,6 +1414,18 @@ class ARIA:
         - Natural voice (voice layer)
         - Behavioral patterns (user model updates)
         """
+        try:
+            future = self.message_processor.submit(self._process_message_impl, user_input)
+            return future.result(timeout=self.message_timeout_seconds)
+        except FuturesTimeoutError:
+            msg = f"⏱️ Message processing timed out after {self.message_timeout_seconds}s — broker may be unresponsive. Please try again."
+            self.notify(msg, priority="critical")
+            return msg
+        except Exception as e:
+            return f"❌ Processing error: {str(e)}"
+    
+    def _process_message_impl(self, user_input: str) -> str:
+        """Internal implementation of message processing (may be called with timeout)."""
         text = user_input.strip()
         if not text:
             return ""
@@ -1491,6 +1509,16 @@ class ARIA:
         # ── 9. Persist memory ──────────────────────────────────────────────
         self.memory["last_intent"] = intent
         return natural_response
+    
+    def notify(self, msg: str, priority: str = "normal"):
+        """Receive system alerts (for compatibility with background scanner)."""
+        with self.inbox_lock:
+            self.notification_inbox.append({"msg": msg, "priority": priority})
+
+        if priority in ("critical", "trade_executed"):
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            prefix = "🚨" if priority == "critical" else "✅"
+            print(f"\n[{timestamp}] [ARIA]: {prefix} {msg}")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Classification

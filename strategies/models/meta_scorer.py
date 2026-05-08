@@ -158,6 +158,21 @@ class MetaScorer:
             X, y, test_size=0.2, random_state=42, stratify=y
         )
 
+        # Compute class weights to handle "WAIT" label imbalance
+        # This ensures BUY/SELL trades aren't underweighted despite being less frequent
+        unique_labels, label_counts = np.unique(y_tr, return_counts=True)
+        total_samples = len(y_tr)
+        class_weights = {
+            label: total_samples / (len(unique_labels) * count)
+            for label, count in zip(unique_labels, label_counts)
+        }
+        # Normalize to reasonable scale (max weight shouldn't exceed 5x min)
+        min_w = min(class_weights.values())
+        max_w = max(class_weights.values())
+        if max_w / min_w > 5:
+            scale = 5 * min_w / max_w
+            class_weights = {k: v * scale for k, v in class_weights.items()}
+
         self.model = XGBClassifier(
             n_estimators=400,
             max_depth=4,
@@ -172,12 +187,13 @@ class MetaScorer:
         self.model.fit(
             X_tr, y_tr,
             eval_set=[(X_val, y_val)],
+            sample_weight=[class_weights.get(label, 1.0) for label in y_tr],
             verbose=False,
         )
 
         val_acc = accuracy_score(y_val, self.model.predict(X_val))
         self._save()
-        print(f"[MetaScorer] Trained — val accuracy: {val_acc:.3f}")
+        print(f"[MetaScorer] Trained with class weighting {class_weights} — val accuracy: {val_acc:.3f}")
         return float(val_acc)
 
     def _model_score(

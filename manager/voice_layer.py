@@ -37,6 +37,7 @@ class VoiceLayer:
         self.wm = working_memory
         self.um = user_model
         self.il = inner_monologue
+        self.last_followthrough_question = None  # Track last question to avoid repetition
 
     def render(self, agent_output: str, thoughts: List, intent: str) -> str:
         """
@@ -122,6 +123,7 @@ class VoiceLayer:
         """
         Generate a natural follow-up question or suggestion.
         Only sometimes — not after every single response.
+        Avoids repeating the same question twice in a row.
         """
         if random.random() > 0.45:  # ~45% of the time
             return None
@@ -149,7 +151,14 @@ class VoiceLayer:
         else:
             return None
         
-        return random.choice(options)
+        # Exclude last question to avoid repetition
+        available = [q for q in options if q != self.last_followthrough_question]
+        if not available:
+            available = options
+        
+        chosen = random.choice(available)
+        self.last_followthrough_question = chosen
+        return chosen
 
     def _apply_personality(self, text: str) -> str:
         """Remove words ARIA never says."""

@@ -43,17 +43,30 @@ class EpisodicMemory:
 
     MEMORY_FILE = Path("data/episodic_memory.json")
     MAX_EPISODES = 500
+    BATCH_SAVE_INTERVAL = 10  # Flush writes every 10 episodes instead of every store()
 
     def __init__(self):
         self._episodes: List[Episode] = self._load()
+        self._unsaved_count = 0
 
     def store(self, episode: Episode):
-        """Store an episode and auto-prune if needed."""
+        """Store an episode and auto-prune if needed. Batches writes for efficiency."""
         self._episodes.append(episode)
+        self._unsaved_count += 1
+        
         if len(self._episodes) > self.MAX_EPISODES:
             # Keep most recent and highest-impact episodes
             self._episodes = self._episodes[-self.MAX_EPISODES:]
-        self._save()
+        
+        # Flush to disk every BATCH_SAVE_INTERVAL episodes or when max is exceeded
+        if self._unsaved_count >= self.BATCH_SAVE_INTERVAL or len(self._episodes) > self.MAX_EPISODES:
+            self.flush()
+
+    def flush(self):
+        """Explicitly flush all unsaved episodes to disk."""
+        if self._unsaved_count > 0:
+            self._save()
+            self._unsaved_count = 0
 
     def recall_relevant(self, context: dict, limit: int = 3) -> List[Episode]:
         """

@@ -137,11 +137,14 @@ class StrategyManager:
             "Momentum":           MomentumStrategy(),
             "Breakout":           BreakoutStrategy(),
             "Scalping":           ScalpingStrategy(),
-            "News_Trading":       NewsTradingStrategy(),
+            "News_Trading":       DummyStrategy(),  # Exclude unimplemented news strategy
             "Sentiment_Analysis": DummyStrategy(),
             "Arbitrage":          ArbitrageStrategy(),
             "Trend_Following":    TrendFollowingStrategy(),
         }
+        
+        # Exclude unimplemented strategies from ensemble voting
+        self.active_ensemble_strategies = [k for k in self.engines if k not in ("News_Trading", "Sentiment_Analysis")]
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -275,7 +278,8 @@ class StrategyManager:
 
         # 4. Collect signals from every strategy engine ───────────────────────
         strategy_signals: dict[str, dict] = {}
-        for name, engine in self.engines.items():
+        for name in self.active_ensemble_strategies:  # Use only implemented strategies
+            engine = self.engines[name]
             try:
                 method_sig = signature(engine.analyze)
                 args = [feat_df]
