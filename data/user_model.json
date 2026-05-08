@@ -1,0 +1,16 @@
+{
+  "risk_appetite": "moderate",
+  "trading_style": "unknown",
+  "experience_level": "intermediate",
+  "communication_pref": "concise",
+  "stress_threshold": 3,
+  "decision_speed": "deliberate",
+  "trust_in_bot": 0.5,
+  "preferred_session": "unknown",
+  "loss_aversion": "normal",
+  "confirmation_seeker": false,
+  "follows_signals": 0.5,
+  "overrides_bot": 0.0,
+  "total_sessions": 2,
+  "last_seen": "2026-05-08T16:21:37.726701"
+}

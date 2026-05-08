@@ -189,7 +189,8 @@ class AgentPlanner:
         ])
 
     def _plan_news(self, symbol, entities, memory) -> AgentPlan:
-        return AgentPlan(intent="news_update", symbol=None, steps=[
+        return AgentPlan(intent="news_update", symbol=symbol, steps=[
+            AgentStep("fetch_news",      "Scanning latest market intelligence..."),
             AgentStep("regime_snapshot", "Reading current market regime"),
             AgentStep("account_data",    "Account risk context"),
         ])
@@ -278,6 +279,7 @@ class AgentExecutor:
             "context_snapshot":  lambda: self._context_snapshot(),
             "live_price":        lambda: self._live_price(sym),
             "htf_trend_check": lambda: self._htf_trend_check(sym),
+            "fetch_news":        lambda: self._fetch_news(sym),
         }
         fn = handlers.get(step.name)
         return fn() if fn else {}
@@ -378,6 +380,43 @@ class AgentExecutor:
                 return {"trend": trend}
             except Exception:
                 return {"trend": "NEUTRAL"}
+
+    def _fetch_news(self, symbol) -> dict:
+        """
+        Fetches and classifies recent news through the ML pipeline.
+        Returns structured article data with sentiment, confidence, and relevance.
+        """
+        news_strategy = self.sm.engines.get("News_Trading") or self.sm.strategies.get("news_trading")
+        if not news_strategy:
+            return {"error": "News strategy not loaded.", "articles": []}
+        
+        try:
+            # 1. Pull recent raw RSS feeds
+            articles = news_strategy.fetcher.fetch(max_age_hours=12)
+            if not articles:
+                return {"articles": []}
+            
+            # 2. Run them through the ML Classifier pipeline
+            classified = []
+            for article in articles:
+                c = news_strategy.classifier.classify(article, symbol=symbol)
+                # Filter out statistical anomalies, noise, and irrelevant pairs
+                if not c.is_fake and c.relevance > 0.15:
+                    classified.append(c)
+            
+            # 3. Rank by highest confidence
+            classified.sort(key=lambda x: x.confidence, reverse=True)
+            
+            # 4. Convert to dict for JSON serialization
+            from dataclasses import asdict
+            result_articles = []
+            for c in classified[:5]:  # Top 5 articles
+                article_dict = asdict(c)
+                result_articles.append(article_dict)
+            
+            return {"articles": result_articles}
+        except Exception as e:
+            return {"error": str(e), "articles": []}
 
     def _risk_check(self, symbol) -> dict:
         cfg  = self._load_config()
@@ -1045,12 +1084,31 @@ class AgentSynthesizer:
         regime = r.get("regime_snapshot", {}).get("regime", "Unknown")
         acct   = r.get("account_data", {})
         eq     = acct.get("equity", 0) if acct else 0
-        return (
-            f"Current regime: {regime}. "
-            f"No live news feed connected — consider checking ForexFactory or Reuters "
-            f"for upcoming events before trading. "
-            f"Equity: ${eq:,.2f}."
-        )
+        news_r = r.get("fetch_news", {})
+        articles = news_r.get("articles", [])
+        error  = news_r.get("error")
+        
+        if error or not articles:
+            return (
+                f"Current regime: {regime}. "
+                f"No highly relevant or market-moving news detected recently. "
+                f"Market seems quiet or news is noise. "
+                f"Equity: ${eq:,.2f}."
+            )
+        
+        lines = [f"Market Intelligence (Regime: {regime}):"]
+        for article in articles:
+            sentiment = article.get("sentiment", "NEUTRAL")
+            confidence = article.get("confidence", 0.0)
+            cluster = article.get("cluster_label", "Event")
+            title = article.get("title", "")
+            
+            icon = "🟢" if sentiment == "BULLISH" else "🔴" if sentiment == "BEARISH" else "⚪"
+            
+            lines.append(f"• {icon} [{cluster}] {title} (Conf: {confidence:.0%})")
+        
+        lines.append(f"\nEquity: ${eq:,.2f}.")
+        return "\n".join(lines)
  
     def _strategy(self, plan, r) -> str:
         snap  = r.get("regime_snapshot", {})

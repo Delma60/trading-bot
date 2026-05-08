@@ -266,6 +266,8 @@ class PortfolioManager:
                             "strategy": strategy_name,
                             "action": signal["action"],
                             "symbol": symbol,
+                            "article_ids": [signal.get("article_id")] if signal.get("article_id") else signal.get("article_ids", []),
+                            "entry_price": fill_price,
                         }
                     else:
                         error_reason = exec_result.get("reason", "unknown error")
@@ -321,6 +323,53 @@ class PortfolioManager:
         fv = np.array(trade_data["state"])
         action = trade_data.get("action", "BUY")
         self.strategy_manager.record_trade_outcome(fv, action, profit)
+
+        # Feedback loop for news classifier if trade was news-based
+        article_ids = trade_data.get("article_ids", [])
+        entry_price = trade_data.get("entry_price")
+        symbol = trade_data.get("symbol")
+        
+        if article_ids and entry_price is not None and symbol:
+            try:
+                tick_data = self.broker.get_tick_data(symbol)
+                if tick_data:
+                    current_price = tick_data.get("bid") if action == "SELL" else tick_data.get("ask")
+                    if current_price:
+                        for article_id in article_ids:
+                            self.evaluate_news_impact(article_id, entry_price, current_price, action)
+            except:
+                pass  # Silently fail if price fetch doesn't work
+
+    def evaluate_news_impact(self, article_id: str, entry_price: float, current_price: float, action: str = "BUY"):
+        """
+        Evaluates the impact of news on price movement and feeds back to the news classifier.
+        Reconstructs directional movement based on action and realized PnL.
+        """
+        price_delta_pct = ((current_price - entry_price) / entry_price) * 100
+        
+        # Only label if the market actually moved significantly (≥0.05%)
+        if abs(price_delta_pct) >= 0.05:
+            # Reconstruct directional movement based on action
+            if action == "BUY":
+                direction = "UP" if price_delta_pct > 0 else "DOWN"
+            else:  # SELL
+                direction = "DOWN" if price_delta_pct > 0 else "UP"
+            
+            # Use the realized price delta as the label signal
+            delta_proxy = abs(price_delta_pct)
+            
+            # Inject the label back into the LSTM training pool
+            try:
+                news_strategy = self.strategy_manager.engines.get("News_Trading") or self.strategy_manager.strategies.get("news_trading")
+                if news_strategy and hasattr(news_strategy, "classifier"):
+                    news_strategy.classifier.inject_price_label(
+                        article_id=article_id, 
+                        label=direction, 
+                        delta=delta_proxy
+                    )
+            except:
+                pass  # Silently fail if classifier not available
+
     def get_portfolio_health(self) -> str:
         """Generates a quick health report for the Chatbot."""
         account = self.broker.getAccountInfo()

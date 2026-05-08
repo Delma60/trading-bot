@@ -6,6 +6,7 @@ from strategies.breakout import BreakoutStrategy
 from strategies.momentum import MomentumStrategy
 from strategies.scalping import ScalpingStrategy
 from strategies.trend_following import TrendFollowingStrategy
+from strategies.news_trading import NewsTradingStrategy
 from trader import Trader
 from .mean_reversion import MeanReversionStrategy
 from strategies.features.feature_engineer import FeatureEngineer
@@ -136,7 +137,7 @@ class StrategyManager:
             "Momentum":           MomentumStrategy(),
             "Breakout":           BreakoutStrategy(),
             "Scalping":           ScalpingStrategy(),
-            "News_Trading":       DummyStrategy(),
+            "News_Trading":       NewsTradingStrategy(),
             "Sentiment_Analysis": DummyStrategy(),
             "Arbitrage":          ArbitrageStrategy(),
             "Trend_Following":    TrendFollowingStrategy(),
