@@ -143,6 +143,37 @@ class Trader:
     def disconnect(self):
         mt5.shutdown()
         self.connected = False
+
+    def modify_position(self, ticket: int, symbol: str, new_sl: float, new_tp: float = None) -> bool:
+        """
+        Modifies an open position's Stop Loss and/or Take Profit in MT5.
+        """
+        if not self.connected:
+            return False
+
+        positions = mt5.positions_get(ticket=ticket)
+        if positions is None or len(positions) == 0:
+            return False
+
+        pos = positions[0]
+        tp_value = float(new_tp) if new_tp is not None else float(pos.tp or 0.0)
+
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": ticket,
+            "symbol": symbol,
+            "sl": float(new_sl),
+            "tp": tp_value,
+            "magic": 234000,
+        }
+
+        result = mt5.order_send(request)
+        if result and getattr(result, 'retcode', None) == mt5.TRADE_RETCODE_DONE:
+            return True
+        else:
+            error = getattr(result, 'comment', 'Unknown MT5 Error') if result else "Unknown MT5 Error"
+            self.notify(f"[Broker] Failed to modify ticket #{ticket}: {error}")
+            return False
     
     def _get_pip_multiplier(self, symbol: str) -> float:
         """

@@ -4,6 +4,8 @@ import MetaTrader5 as mt5
 from datetime import datetime
 import math
 import pandas as pd
+import time
+import threading
 
 class RiskManager:
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
@@ -284,3 +286,76 @@ class DynamicRiskTargeter:
             }
         except Exception:
             return {}
+
+
+class TrailingStopManager:
+    """
+    Background worker that continuously monitors open positions and trails their Stop Losses.
+    """
+
+    def __init__(self, broker, targeter, trail_atr_multiplier: float = 1.5):
+        self.broker = broker
+        self.targeter = targeter
+        self.trail_multiplier = trail_atr_multiplier
+        self.running = False
+        self._thread = None
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._thread.start()
+        print("[System] Trailing Stop Manager online.")
+
+    def stop(self):
+        self.running = False
+        if self._thread:
+            self._thread.join(timeout=2)
+
+    def _monitor_loop(self):
+        while self.running:
+            if not self.broker.connected:
+                time.sleep(5)
+                continue
+
+            positions = self.broker.getPositions()
+            if positions:
+                self._process_positions(positions)
+
+            time.sleep(10)
+
+    def _process_positions(self, positions):
+        for pos in positions:
+            symbol = pos.symbol
+            ticket = pos.ticket
+            order_type = pos.type
+            current_sl = float(pos.sl or 0.0)
+            open_price = float(pos.price_open)
+            current_price = float(pos.price_current)
+
+            risk_data = self.targeter.calculate_targets(symbol)
+            atr_pips = risk_data.get("atr_pips")
+            if not atr_pips or atr_pips <= 0:
+                continue
+
+            pip_multiplier = 100.0 if "JPY" in symbol.upper() else 10000.0
+            trail_distance = atr_pips / pip_multiplier
+
+            if order_type == 0:  # BUY
+                activation_level = open_price + trail_distance
+                if current_price > activation_level:
+                    new_sl = current_price - trail_distance
+                    if current_sl == 0.0 or new_sl > current_sl:
+                        new_sl = round(new_sl, 5)
+                        if self.broker.modify_position(ticket, symbol, new_sl):
+                            print(f"[Trailing Stop] Raised SL on {symbol} (BUY) to {new_sl}")
+
+            elif order_type == 1:  # SELL
+                activation_level = open_price - trail_distance
+                if current_price < activation_level:
+                    new_sl = current_price + trail_distance
+                    if current_sl == 0.0 or new_sl < current_sl:
+                        new_sl = round(new_sl, 5)
+                        if self.broker.modify_position(ticket, symbol, new_sl):
+                            print(f"[Trailing Stop] Lowered SL on {symbol} (SELL) to {new_sl}")

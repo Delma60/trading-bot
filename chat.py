@@ -1111,7 +1111,7 @@ from manager.nlp_engine import NLPEngine
 from manager.reasoning_engine import ReasoningEngine
 from manager.response_engine import ResponseEngine
 from manager.portfolio_manager import PortfolioManager
-from manager.risk_manager import RiskManager
+from manager.risk_manager import RiskManager, DynamicRiskTargeter, TrailingStopManager
 from manager.profile_manager import ProfileManager
 from manager.agent_core import (AgentPlan, AgentCore)
 from strategies.strategy_manager import StrategyManager
@@ -1301,6 +1301,11 @@ class ARIA:
 
         # Action executor (side-effect layer)
         self.executor = ActionExecutor(broker, strategy_manager, risk_manager, self.PROFILE_FILE)
+
+        # Trailing stop manager — automatically trails open positions once connected.
+        self.dynamic_targeter = DynamicRiskTargeter(self.broker)
+        self.trailing_manager = TrailingStopManager(self.broker, self.dynamic_targeter)
+        self.trailing_manager.start()
 
         # Memory — persists across turns in a single session
         self.memory: dict[str, Any] = {
