@@ -19,7 +19,7 @@ class PortfolioManager:
     TRAINING_DATA_PATH = Path("data/trade_history.json")
     CONFIG_PATH = Path("data/portfolio_config.json")
     
-    def __init__(self, broker, strategy_manager, risk_manager: RiskManager, notify_callback=print):
+    def __init__(self, broker, strategy_manager, risk_manager: RiskManager, cache=None, notify_callback=print):
         self.broker = broker
         self.strategy_manager = strategy_manager
         self.risk_manager = risk_manager
@@ -37,8 +37,8 @@ class PortfolioManager:
             
         self.available_strategies = list(self.strategy_manager.engines.keys())
         
-        # Reuse the strategy manager's OHLCV cache if available.
-        self._ohlcv_cache = getattr(self.strategy_manager, '_ohlcv_cache', OHLCVCache(ttl_seconds=60))
+        # Use provided cache or get from strategy manager
+        self._ohlcv_cache = cache or getattr(self.strategy_manager, '_ohlcv_cache', OHLCVCache(ttl_seconds=60))
         
         # Thread-safe lock for model predictions (prevents race conditions between main and background threads)
         self._model_lock = threading.Lock()
