@@ -14,3 +14,4 @@ data/symbols/**
 .env
 # ignore models/weight/**
 models/weights/**
+data/unsupervised/**
