@@ -3,23 +3,21 @@ chat.py — Upgraded Chatbot
 
 Key improvements over v1
 ------------------------
-1. Gemini is the primary language brain — every response is natural, not templated.
-   The NLP model classifies intent (fast path); Gemini generates the reply.
+1. NLP model classifies intent (fast path); simple responses for chat.
 
-2. Live context snapshot injected into every Gemini turn:
-   balance, open positions, last signal, active symbols.
+2. Live context snapshot injected into responses.
 
 3. Typewriter print effect for a more human, less robotic feel.
 
-4. Chain-of-thought display before complex trade decisions (think_aloud).
+4. Chain-of-thought display removed (Gemini dependency removed).
 
-5. Proactive follow-up suggestions after actions.
+5. Proactive follow-up suggestions removed.
 
 6. Fixed trade-execution logic bug (double BUY direction check removed).
 
 7. Symbol aliases resolve in entity extraction (gold→XAUUSD, etc.) via NLPEngine.
 
-8. Sentiment-aware responses — bot mirrors urgency when user is anxious.
+8. Sentiment-aware responses removed.
 """
 
 import json
@@ -37,9 +35,6 @@ from datetime import datetime
 from typing import Callable, Any, Optional
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from manager.gemini_engine import GeminiEngine
-from rich.console import Console
-from prompt_toolkit import PromptSession
 from manager.nlp_engine import NLPEngine
 from manager.portfolio_manager import PortfolioManager
 from manager.risk_manager import RiskManager
@@ -48,8 +43,8 @@ from strategies.strategy_manager import StrategyManager
 from trader import Trader
 
 
-class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
-    """Handles NLP, Gemini AI, and the conversational trading interface."""
+class Chatbot(ProfileManager, NLPEngine):
+    """Handles NLP and the conversational trading interface."""
 
     DATA_DIR        = Path("data")
     PROFILE_FILE    = DATA_DIR / "profile.json"
@@ -69,7 +64,6 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
     ):
         ProfileManager.__init__(self, data_dir=str(self.DATA_DIR))
         NLPEngine.__init__(self, intents_filepath=intents_filepath, data_dir=str(self.DATA_DIR))
-        GeminiEngine.__init__(self)
 
         self.stemmer           = LancasterStemmer()
         self.intents_filepath  = Path(intents_filepath)
@@ -123,6 +117,13 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         self.session = PromptSession()
         self._load_local_symbols()
 
+    def chat(self, user_message: str, action_result: str = None) -> str:
+        """Simple chat response without Gemini."""
+        if action_result:
+            return f"Action completed: {action_result}. How can I assist you further?"
+        else:
+            return "I'm here to help with your trading. What would you like to do?"
+
     # ── Output helpers ────────────────────────────────────────────────────────
 
     def _type_print(self, msg: str, delay: float = 0.012) -> None:
@@ -162,8 +163,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
 
     def _build_context_snapshot(self) -> dict:
         """
-        Assembles a concise summary of the current trading state and injects
-        it into GeminiEngine before each conversational turn.
+        Assembles a concise summary of the current trading state.
         """
         ctx: dict = {}
 
@@ -205,7 +205,6 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
                 f"{sig.get('reason', '')}"
             )
 
-        self.update_context(ctx)   # Push into GeminiEngine
         return ctx
 
     # ── IO helpers ────────────────────────────────────────────────────────────
@@ -605,7 +604,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             self._execute_action("bulk_scan", inp, entities)
             return True
 
-        # Step 5: Inject fresh context into Gemini before every turn
+        # Step 5: Build context snapshot
         self._build_context_snapshot()
 
         # Step 6: NLP classification
@@ -616,43 +615,12 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             self._execute_action(intent_tag, inp, entities)
             return True
 
-        # Step 8: Medium confidence → ask Gemini to confirm or answer directly
+        # Step 8: Medium confidence → execute the predicted action
         if 0.30 <= confidence < 0.75:
-            with open(self.intents_filepath, "r") as f:
-                valid_intents = [i["tag"] for i in json.load(f)["intents"]]
-
-            gemini_raw = self.route_intent(inp, valid_intents, intent_tag)
-
-            if gemini_raw in valid_intents:
-                self._execute_action(gemini_raw, inp, entities)
-                return True
-
-            if gemini_raw.startswith("GENERAL_CHAT:"):
-                # Gemini answered it directly — still run through chat() for personality
-                response = self.chat(inp)
-                self.bot_print(response)
-                return True
-
-            if gemini_raw.startswith("SUGGEST_NEW:"):
-                suggestion = gemini_raw.replace("SUGGEST_NEW:", "").strip()
-                parts      = suggestion.split("|", 1)
-                new_tag    = parts[0].strip()
-                suggested_response = parts[1].strip() if len(parts) > 1 else ""
-                self.bot_print(f"I don't have a dedicated command for that yet — sounds like '{new_tag}'.")
-                self.bot_print(suggested_response)
-                self.bot_print("Should I learn this phrase and add it to my knowledge base? (y/n)")
-                self.pending_action = "confirm_learning"
-                self.pending_data   = {
-                    "tag": new_tag, "pattern": inp, "response": suggested_response,
-                    "predicted_tag": new_tag, "original_input": inp,
-                }
-                return True
-
-            # Gemini couldn't route it either — still give a response
-            self.bot_print(self.chat(inp))
+            self._execute_action(intent_tag, inp, entities)
             return True
 
-        # Step 9: Low confidence — let Gemini handle it as open-ended chat
+        # Step 9: Low confidence — provide a simple response
         self.bot_print(self.chat(inp))
         return True
 
@@ -760,8 +728,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
 
     def _execute_action(self, tag: str, inp: str, entities: dict = None):
         """
-        Executes the action for a given intent. After each action, passes the
-        result through Gemini for a natural language response.
+        Executes the action for a given intent. Provides a response after each action.
         """
         if entities is None:
             entities = self.extract_entities(inp)
@@ -783,14 +750,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             signal = self.strategy_manager.check_signals(symbol)
             self.memory["last_signal"] = signal
 
-            ai_take = self.think_aloud(
-                f"I just got a {signal.get('action')} signal on {symbol} with "
-                f"{signal.get('confidence', 0):.0%} confidence. "
-                f"Reason: {signal.get('reason', 'N/A')}. "
-                f"The user wants to trade this symbol."
-            )
-            if ai_take:
-                self._think_step(2, ai_take)
+            # AI reasoning removed - proceeding with signal analysis
 
             # Step 2: Risk check
             self._think_step(3, "Checking risk rules...")
@@ -898,7 +858,7 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
         if tag in self.action_mappings:
             live_data = self.action_mappings[tag](inp)
 
-        # Format the data and generate a natural response via Gemini
+        # Format the data and provide a response
         if isinstance(live_data, dict):
             # Format as plain key-value string for context
             data_str = " | ".join(f"{k}: {v}" for k, v in live_data.items())
