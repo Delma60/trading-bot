@@ -1114,6 +1114,12 @@ from manager.portfolio_manager import PortfolioManager
 from manager.risk_manager import RiskManager, TradeGatekeeper, DynamicRiskTargeter, TrailingStopManager, ProfitGuard
 from manager.profile_manager import ProfileManager
 from manager.agent_core import (AgentPlan, AgentCore)
+from manager.working_memory import WorkingMemory, ConversationTurn
+from manager.episodic_memory import EpisodicMemory, Episode
+from manager.user_model import UserModel
+from manager.inner_monologue import InnerMonologue
+from manager.voice_layer import VoiceLayer
+from manager.proactive_engine import ProactiveEngine
 from strategies.strategy_manager import StrategyManager
 from trader import Trader
 
@@ -1324,6 +1330,27 @@ class ARIA:
             "last_setting":   None,
         }
 
+        # ─── COGNITIVE ARCHITECTURE ───────────────────────────────────────
+        # These components transform ARIA from reactive to truly conversational
+        self.working_memory  = WorkingMemory()
+        self.episodic_memory = EpisodicMemory()
+        self.user_model      = UserModel()
+        self.inner_monologue = InnerMonologue(
+            self.working_memory, self.episodic_memory, self.user_model
+        )
+        self.voice_layer = VoiceLayer(
+            self.working_memory, self.user_model, self.inner_monologue
+        )
+        self.proactive_engine = ProactiveEngine(
+            broker, self.working_memory, self.episodic_memory,
+            self.receive_system_alert
+        )
+        
+        # Start proactive engine and observe session start
+        self.proactive_engine.start()
+        self.user_model.observe("session_start")
+        # ─────────────────────────────────────────────────────────────────
+
         # Pending multi-turn state
         self.pending_action: Optional[str] = None
         self.pending_data: dict = {}
@@ -1366,8 +1393,14 @@ class ARIA:
 
     def process_message(self, user_input: str) -> str:
         """
-        Main pipeline: keyword shortcuts → NLP → agent → optional action.
-        Always returns a string for the ARIA to print.
+        Main pipeline: keyword shortcuts → NLP → COGNITIVE LAYER → agent → optional action.
+        
+        The cognitive layer now captures:
+        - User emotion
+        - Conversation narrative (working memory)
+        - Inner reasoning (monologue)
+        - Natural voice (voice layer)
+        - Behavioral patterns (user model updates)
         """
         text = user_input.strip()
         if not text:
@@ -1394,9 +1427,24 @@ class ARIA:
         # ── 4. Update memory from entities ────────────────────────────────
         self._update_memory(entities)
 
+        # ── 4.5 COGNITIVE: Detect emotion and log user turn ───────────────
+        emotion = self._detect_emotion(text)
+        self.working_memory.add_turn(ConversationTurn(
+            role="user", text=text, intent=intent, emotion=emotion
+        ))
+        
+        # Update symbols discussed in working memory
+        if entities.get("symbols"):
+            for sym in entities["symbols"]:
+                self.working_memory.remember_symbol(sym)
+
         # ── 5. Handle immediate action intents without agent pipeline ──────
         quick = self._handle_quick_action(intent, text, entities)
         if quick is not None:
+            # Log ARIA response to working memory
+            self.working_memory.add_turn(ConversationTurn(
+                role="aria", text=quick, intent=intent, emotion="neutral"
+            ))
             return quick
 
         # ── 6. Run agentic pipeline ────────────────────────────────────────
@@ -1407,16 +1455,36 @@ class ARIA:
             step_callback = self._step_callback,
         )
 
+        # ── 6.5 COGNITIVE: Inner monologue reasoning ───────────────────────
+        agent_result = {
+            "action": self.agent.last_plan.context.get("action", "WAIT") if self.agent.last_plan else "WAIT",
+            "confidence": self.agent.last_plan.context.get("confidence", 0.0) if self.agent.last_plan else 0.0,
+        }
+        thoughts = self.inner_monologue.think(intent, entities, agent_result)
+
+        # ── 6.7 COGNITIVE: Voice layer naturalization ──────────────────────
+        # Transform raw response through the voice layer for natural, varied output
+        natural_response = self.voice_layer.render(response, thoughts, intent)
+
         # ── 7. Post-process: offer to execute if agent recommended action ──
         plan = self.agent.last_plan
         if plan and plan.suggested_action and intent in (
             "execute_trade", "open_buy", "open_sell", "trade_execution"
         ):
-            response = self._maybe_execute(response, plan, entities)
+            natural_response = self._maybe_execute(natural_response, plan, entities)
 
-        # ── 8. Persist memory ──────────────────────────────────────────────
+        # ── 8. COGNITIVE: Log ARIA turn and update user model ──────────────
+        self.working_memory.add_turn(ConversationTurn(
+            role="aria", text=natural_response, intent=intent, emotion="neutral"
+        ))
+        
+        # Update user model based on what just happened
+        if intent in ("execute_trade", "open_buy", "open_sell"):
+            self.user_model.observe("asked_for_execution", {"symbol": self.memory.get("last_symbol")})
+        
+        # ── 9. Persist memory ──────────────────────────────────────────────
         self.memory["last_intent"] = intent
-        return response
+        return natural_response
 
     # ─────────────────────────────────────────────────────────────────────────
     # Classification
@@ -1459,6 +1527,23 @@ class ARIA:
             self.memory["last_symbol"] = entities["symbols"][0]
         if entities.get("timeframes"):
             self.memory["last_timeframe"] = entities["timeframes"][0]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Emotion Detection
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _detect_emotion(self, text: str) -> str:
+        """Simple rule-based emotion detection from user input."""
+        lower = text.lower()
+        if any(w in lower for w in ["why", "again", "still", "come on", "seriously", "ugh", "argh", "damn"]):
+            return "frustrated"
+        if any(w in lower for w in ["nice", "great", "yes", "let's go", "perfect", "awesome", "excellent"]):
+            return "positive"
+        if any(w in lower for w in ["worried", "nervous", "scared", "afraid", "concerned", "anxious"]):
+            return "anxious"
+        if any(w in lower for w in ["sure", "go ahead", "do it", "confirm", "let's", "ready"]):
+            return "confident"
+        return "neutral"
 
     # ─────────────────────────────────────────────────────────────────────────
     # Quick-action handlers (no agent pipeline needed)
@@ -1687,6 +1772,26 @@ class ARIA:
     def _clear_pending(self):
         self.pending_action = None
         self.pending_data   = {}
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Cleanup and Shutdown
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def shutdown(self):
+        """Gracefully shutdown ARIA and all background processes."""
+        try:
+            self.proactive_engine.stop()
+            self.trailing_manager.stop()
+            self.profit_guard.stop()
+        except Exception as e:
+            print(f"Error during shutdown: {e}")
+
+    def __del__(self):
+        """Destructor to ensure cleanup."""
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
     # ─────────────────────────────────────────────────────────────────────────
     # Setting change handler
