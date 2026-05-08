@@ -8,7 +8,7 @@ from trader import Trader
 from strategies.strategy_manager import StrategyManager
 from manager.risk_manager import RiskManager
 from manager.portfolio_manager import PortfolioManager
-from chat import Chatbot
+from chat import ARIA
 from pathlib import Path
 
 # Global shutdown flag for graceful termination
@@ -142,8 +142,8 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
     signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
 
-    # 6. Boot up the Chatbot on the Main Thread
-    bot = Chatbot(
+    # 6. Boot up ARIA on the Main Thread
+    bot = ARIA(
         intents_filepath="intents.json", 
         broker=broker, 
         strategy_manager=strategy_manager,

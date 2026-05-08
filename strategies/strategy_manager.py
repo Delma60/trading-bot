@@ -71,6 +71,14 @@ class StrategyManager:
         # ML/DL components — instantiated once and reused across calls
         self.lstm = LSTMPredictor()
         self.meta = MetaScorer()
+        self.features = FeatureEngineer()
+
+        # Unsupervised learning engine
+        try:
+            from manager.unsupervised_learner import UnsupervisedLearner
+            self.learner = UnsupervisedLearner()
+        except ImportError:
+            self.learner = None
 
         # Strategy engines — instantiated once to avoid per-call overhead
         self.engines: dict[str, object] = {
@@ -147,6 +155,12 @@ class StrategyManager:
                 "confidence": 0.0,
                 "reason": "Feature engineering produced an empty DataFrame.",
             }
+
+        # 3.5. Feed features to unsupervised learner ──────────────────────────
+        if self.learner:
+            latest_features = feat_df.iloc[-1]  # Most recent bar's features
+            regime = self.learner.ingest_market_bar(latest_features)
+            # Regime will be used by reasoning engine for context-aware decisions
 
         # 4. Collect signals from every strategy engine ───────────────────────
         strategy_signals: dict[str, dict] = {}

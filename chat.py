@@ -1,25 +1,3 @@
-"""
-chat.py — Upgraded Chatbot
-
-Key improvements over v1
-------------------------
-1. NLP model classifies intent (fast path); simple responses for chat.
-
-2. Live context snapshot injected into responses.
-
-3. Typewriter print effect for a more human, less robotic feel.
-
-4. Chain-of-thought display removed (Gemini dependency removed).
-
-5. Proactive follow-up suggestions removed.
-
-6. Fixed trade-execution logic bug (double BUY direction check removed).
-
-7. Symbol aliases resolve in entity extraction (gold→XAUUSD, etc.) via NLPEngine.
-
-8. Sentiment-aware responses removed.
-"""
-
 import json
 import random
 import re
@@ -36,23 +14,18 @@ from typing import Callable, Any, Optional
 from prompt_toolkit.patch_stdout import patch_stdout
 
 from manager.nlp_engine import NLPEngine
+from manager.reasoning_engine import ReasoningEngine
+from manager.response_engine import ResponseEngine
 from manager.portfolio_manager import PortfolioManager
 from manager.risk_manager import RiskManager
 from manager.profile_manager import ProfileManager
 from strategies.strategy_manager import StrategyManager
 from trader import Trader
+from rich.console import Console
+from prompt_toolkit import PromptSession
 
-
-class Chatbot(ProfileManager, NLPEngine):
-    """Handles NLP and the conversational trading interface."""
-
-    DATA_DIR        = Path("data")
-    PROFILE_FILE    = DATA_DIR / "profile.json"
-    HISTORY_FILE    = DATA_DIR / "history.json"
-    STATS_FILE      = DATA_DIR / "stats.json"
-    DATA_PICKLE     = DATA_DIR / "data.pickle"
-    MODEL_FILE      = DATA_DIR / "chatbot_model.keras"
-    SYMBOLS_CACHE_DIR = DATA_DIR / "symbols"
+class ARIA:
+    """Deterministic chatbot using NLP -> Reasoning -> Response pipeline."""
 
     def __init__(
         self,
@@ -62,67 +35,157 @@ class Chatbot(ProfileManager, NLPEngine):
         portfolio_manager: PortfolioManager,
         risk_manager: RiskManager,
     ):
-        ProfileManager.__init__(self, data_dir=str(self.DATA_DIR))
-        NLPEngine.__init__(self, intents_filepath=intents_filepath, data_dir=str(self.DATA_DIR))
+        # Initialize components
+        self.nlp = NLPEngine(intents_filepath=intents_filepath, data_dir=str(Path("data")))
+        self.profile_manager = ProfileManager(data_dir=str(Path("data")))
 
-        self.stemmer           = LancasterStemmer()
-        self.intents_filepath  = Path(intents_filepath)
-        self.broker            = broker
-        self.strategy_manager  = strategy_manager
+        self.broker = broker
+        self.strategy_manager = strategy_manager
         self.portfolio_manager = portfolio_manager
-        self.risk_manager      = risk_manager
+        self.risk_manager = risk_manager
 
-        self.notification_inbox: list = []
-        self.inbox_lock = threading.Lock()
-        self.last_intent: Optional[str] = None
-        self.active_suggestion: Optional[str] = None
+        self.reasoning = ReasoningEngine(
+            self.strategy_manager,
+            self.risk_manager,
+            self.portfolio_manager
+        )
+        self.responder = ResponseEngine()
 
-        # Trading config
-        self.trading_symbols:      list  = []
-        self.daily_goal:           float = 0.0
-        self.target_profit:        float = 0.0
-        self.stop_loss:            float = 0.0
-        self.risk_percentage:      float = 0.0
-        self.max_daily_loss:       float = 0.0
-        self.preferred_timeframes: list  = []
-        self.symbol_cache:         list  = []
-        self.symbol_lookup:        dict  = {}
-
-        # Contextual memory — persists key facts across turns
+        # Memory for context
         self.memory = {
-            "last_symbol":    None,
-            "last_timeframe": "H1",
-            "last_money_amount": None,
-            "last_signal":    None,
-            "last_setting":   None,
-        }
-
-        # Multi-turn dialogue state
-        self.pending_action: Optional[str] = None
-        self.pending_data:   dict = {}
-
-        self.action_mappings = {
-            "active_positions":    lambda _: self._format_positions_data(),
-            "account_summary":     lambda _: self._format_account_data(),
-            "trading_symbols":     lambda _: self._format_symbols_data(),
-            "trading_settings":    lambda _: self._format_settings_data(),
-            "update_config":       lambda _: self.setup_trading_config(),
-            "bulk_scan":           lambda _: self._run_autonomous_scan(),
-            "check_notifications": lambda _: self._read_inbox(),
-            "close_all":           lambda _: self.broker.close_all_positions(),
-            "retrain_model":       lambda _: self._retrain_model(),
+            "last_symbol": None,
+            "last_signal": None,
         }
 
         self.console = Console()
         self.session = PromptSession()
-        self._load_local_symbols()
+
+        # Add notification inbox for compatibility
+        self.notification_inbox: list = []
+        self.inbox_lock = threading.Lock()
+
+    def receive_system_alert(self, msg: str, priority: str = "normal"):
+        """Receive system alerts (for compatibility with main.py)."""
+        with self.inbox_lock:
+            self.notification_inbox.append({"msg": msg, "priority": priority})
+
+        if priority in ["critical", "trade_executed"]:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            print(f"\n[{timestamp}] [ARIA]: 🚨 {msg}" if priority == "critical" else f"\n[{timestamp}] [ARIA]: ✅ {msg}")
+
+    def start_chat(self):
+        """Simplified chat startup without Gemini."""
+        print("")
+
+        # Load or request broker credentials
+        data = self.profile_manager._read_json(self.profile_manager.PROFILE_FILE)
+        login = data.get("login")
+        password = data.get("password")
+        server = data.get("server")
+
+        if login and password and server:
+            if not self.broker.connect(login=login, password=password, server=server):
+                self._type_print("Saved credentials failed — please log in again.")
+                login = password = server = None
+
+        while not self.broker.connected:
+            try:
+                login_input = int(input("[ARIA]: MT5 Account Number: ").strip())
+            except ValueError:
+                self._type_print("Account number must be an integer.")
+                continue
+            if len(str(login_input)) < 5:
+                self._type_print("Account number too short.")
+                continue
+
+            password_input = getpass.getpass("[ARIA]: Password: ")
+            if not password_input:
+                self._type_print("Password can't be empty.")
+                continue
+
+            server_input = input("[ARIA]: Broker Server (e.g. MetaQuotes-Demo): ").strip()
+            if not server_input:
+                self._type_print("Server can't be empty.")
+                continue
+
+            if self.broker.connect(login=login_input, password=password_input, server=server_input):
+                data.update({"login": login_input, "password": password_input, "server": server_input})
+                self.profile_manager._write_json(self.profile_manager.PROFILE_FILE, data)
+                self._type_print(f"Connected. Account #{self.broker.login} is live.")
+            else:
+                self._type_print("Connection failed — verify credentials and make sure MT5 is running.")
+
+        # Simple greeting
+        greeting = self.process_message("hello")
+        self._type_print(greeting)
+
+        # Main chat loop
+        try:
+            while True:
+                with patch_stdout():
+                    inp = self.session.prompt("[You]: ").strip()
+                    if inp.lower() in ['quit', 'exit', 'bye']:
+                        self._type_print("Goodbye!")
+                        break
+                    response = self.process_message(inp)
+                    self._type_print(response)
+        except KeyboardInterrupt:
+            self._type_print("Shutting down...")
+
+    def process_message(self, user_input: str) -> str:
+        """Main processing pipeline: NLP -> Reasoning -> Response."""
+        # 1. NLP classification
+        intent_data = self.nlp.process(user_input)
+        intent = intent_data.get('intent', 'unknown')
+        entities = intent_data.get('entities', [])
+
+        # 2. Rule-Based Reasoning based on Intent
+        if intent == "analyze_symbol":
+            symbol = entities[0] if entities else self.memory.get("last_symbol", "EURUSD")
+            if symbol:
+                self.memory["last_symbol"] = symbol
+                analysis = self.reasoning.analyze_asset(symbol)
+
+                # Generate comprehensive analysis response
+                narration = analysis.get("narration", "")
+                regime_advice = analysis.get("regime_advice", "")
+                scored = analysis.get("scored", {})
+                grade = scored.get("grade", "C")
+
+                response = f"{narration} {regime_advice}"
+                if grade in ["A", "B"]:
+                    response += f" Quality grade: {grade} — this setup has strong potential."
+                elif grade == "C":
+                    response += f" Quality grade: {grade} — proceed with caution."
+                else:
+                    response += f" Quality grade: {grade} — I'd recommend waiting for a better setup."
+
+                return response
+
+        elif intent == "portfolio_status":
+            context = self.reasoning.get_portfolio_context()
+            return self.responder.action_response(
+                f"Portfolio valued at ${context.get('total_value', '0.00')} "
+                f"with {context.get('active_positions', 0)} active positions. "
+                f"Daily P&L: {context.get('daily_pnl', '+0.00')}.",
+                "data_returned"
+            )
+
+        elif intent == "greeting":
+            # Get account info for greeting
+            account = self.broker.getAccountInfo() or {}
+            suggestion = "Ready for analysis."
+            return self.responder.greeting(account, suggestion)
+
+        # 3. Fallback for unknown intents
+        return self.responder.fallback()
 
     def chat(self, user_message: str, action_result: str = None) -> str:
-        """Simple chat response without Gemini."""
+        """Route to the new deterministic processing pipeline."""
         if action_result:
             return f"Action completed: {action_result}. How can I assist you further?"
         else:
-            return "I'm here to help with your trading. What would you like to do?"
+            return self.process_message(user_message)
 
     # ── Output helpers ────────────────────────────────────────────────────────
 
@@ -810,9 +873,12 @@ class Chatbot(ProfileManager, NLPEngine):
                     f"Signal confidence was {signal.get('confidence', 0):.0%}."
                 )
                 self.bot_print(self.chat(inp, action_result=action_summary))
+
+                # Generate proactive suggestion using current context
+                context = self._build_context_snapshot()
+                regime = self.reasoning.learner.get_current_regime() if self.reasoning.learner else "Unknown"
                 self._proactive_suggest(
-                    f"Want me to set an alert if {symbol} moves against you? "
-                    f"Or run a full portfolio scan to check other opportunities?"
+                    self.responder.proactive(context, regime, self.reasoning)
                 )
             else:
                 err = result.get("comment", "Unknown broker error") if result else "Execution failed"

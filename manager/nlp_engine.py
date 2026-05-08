@@ -96,6 +96,16 @@ class NLPEngine:
         idx     = int(np.argmax(results))
         return self.labels[idx], float(results[idx])
 
+    def process(self, text: str) -> dict:
+        """Combined intent prediction and entity extraction."""
+        intent, confidence = self.predict_intent(text)
+        entities = self.extract_entities(text)
+        return {
+            'intent': intent,
+            'confidence': confidence,
+            'entities': entities.get('symbols', [])
+        }
+
     # ── Entity extraction ─────────────────────────────────────────────────────
 
     def extract_entities(self, text: str) -> dict:
