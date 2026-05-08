@@ -473,3 +473,80 @@ class Trader:
                 self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
         
         return success
+
+    def close_profitable_positions(self, symbol: str = None):
+        """Close only currently profitable open positions."""
+        if not self.connected:
+            return "Cannot close trades: Not connected to MT5."
+
+        positions = mt5.positions_get()
+        if positions is None or len(positions) == 0:
+            return "No open positions found."
+
+        if symbol:
+            positions = [p for p in positions if p.symbol == symbol]
+            if not positions:
+                return f"No open positions found for {symbol}."
+
+        profitable_positions = [p for p in positions if p.profit is not None and p.profit > 0]
+        if not profitable_positions:
+            return "No profitable positions found to close."
+
+        responses = []
+        for position in profitable_positions:
+            pos_symbol = position.symbol
+            symbol_info = mt5.symbol_info(pos_symbol)
+            if symbol_info is None:
+                responses.append(f"Failed to close {pos_symbol}: could not fetch symbol info.")
+                continue
+
+            tick = mt5.symbol_info_tick(pos_symbol)
+            if tick is None:
+                responses.append(f"Failed to close {pos_symbol}: could not fetch current tick price.")
+                continue
+
+            if position.type == mt5.POSITION_TYPE_BUY:
+                order_type = mt5.ORDER_TYPE_SELL
+                price = tick.bid
+            else:
+                order_type = mt5.ORDER_TYPE_BUY
+                price = tick.ask
+
+            filling_mode = symbol_info.filling_mode
+            if filling_mode & 1:
+                type_filling = mt5.ORDER_FILLING_FOK
+            elif filling_mode & 2:
+                type_filling = mt5.ORDER_FILLING_IOC
+            else:
+                type_filling = mt5.ORDER_FILLING_RETURN
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": pos_symbol,
+                "volume": position.volume,
+                "type": order_type,
+                "position": position.ticket,
+                "price": price,
+                "deviation": 20,
+                "magic": 234000,
+                "comment": "Close profitable trade",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": type_filling,
+            }
+
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                responses.append(f"❌ Failed to close {pos_symbol} (Ticket #{position.ticket}): {result.comment}")
+            else:
+                self._log_trade_history(
+                    action="CLOSE",
+                    symbol=pos_symbol,
+                    lots=position.volume,
+                    price=result.price,
+                    ticket=result.order,
+                    comment=f"Profit: {position.profit}",
+                    strategy="Unknown"
+                )
+                responses.append(f"✅ Closed profitable {pos_symbol} (Ticket #{position.ticket}) at {result.price} for profit ${position.profit:.2f}")
+
+        return responses

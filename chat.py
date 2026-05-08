@@ -538,6 +538,10 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
             self._execute_action("retrain_model", inp, entities)
             return True
 
+        if "close" in clean_inp and "profitable" in clean_inp:
+            self._execute_action("close_profitable", inp, entities)
+            return True
+
         # === STEP 5: Predict intent via Keras model ===
         if any(word in clean_inp for word in ["start", "scan"]):
             intent_tag = "bulk_scan"
@@ -840,6 +844,17 @@ class Chatbot(ProfileManager, NLPEngine, GeminiEngine):
                 return
             
             self.broker.close_position(symbol)
+            return
+
+        elif tag == "close_profitable":
+            symbol = entities["symbols"][0] if entities["symbols"] else self.memory.get("last_symbol")
+            result = self.broker.close_profitable_positions(symbol=symbol)
+
+            if isinstance(result, list):
+                for line in result:
+                    self.bot_print(line)
+            else:
+                self.bot_print(result)
             return
         
         elif tag == "deposit" or tag == "withdraw":

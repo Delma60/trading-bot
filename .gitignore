@@ -1,3 +1,4 @@
+**/.gitignore
 data/history.json
 # Runtime and generated data files
 data/chatbot_model.keras
@@ -6,11 +7,10 @@ data/profile.json
 data/stats.json
 data/portfolio_config.json
 data/symbols/**
-data/trading_history.csv
+**/trading_history.csv
 **/__pycache__/chat.cpython-313.pyc
 **/chat.cpython-313.pyc
 **/__pycache__/**
 .env
-.gitignore
 # ignore models/weight/**
 models/weights/**

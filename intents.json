@@ -266,13 +266,40 @@
                 "WARNING: Attempting to close all open positions immediately...",
                 "Executing mass closure of all active trades.",
                 "Sending close commands for every open order.",
-                "I\u00e2\u20ac\u2122m closing every position in your account now.",
+                "I’m closing every position in your account now.",
                 "All active trades are being terminated.",
                 "Performing a full account flatten operation.",
                 "Canceling exposure and closing all market positions.",
                 "Your account is being reset to flat.",
                 "Closing all trades and freeing margin now.",
                 "Initiating total position exit at the next available price."
+            ]
+        },
+        {
+            "tag": "close_profitable",
+            "patterns": [
+                "Close profitable trade",
+                "Close profitable trades",
+                "Close my profitable position",
+                "Exit profitable trades",
+                "Close all profitable positions",
+                "Close the profitable trade",
+                "Close only profitable trades",
+                "Close my winning trade",
+                "Exit winning positions",
+                "Close winning trade"
+            ],
+            "responses": [
+                "Checking for profitable positions to exit now...",
+                "Closing only your profitable trades as requested.",
+                "Searching the terminal for winning positions to close.",
+                "I’m exiting your profitable trade(s) right now.",
+                "Closing your winners and leaving losing trades alone.",
+                "I will only close positions that are currently in profit.",
+                "Executing a partial flatten of profitable trades.",
+                "Closing your winning positions now.",
+                "I’m taking profits on any open profitable trades.",
+                "Closing only the trades that are currently profitable."
             ]
         },
         {
