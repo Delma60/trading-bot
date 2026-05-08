@@ -1212,7 +1212,8 @@ class ARIA:
     # ── Shortcut keyword → intent overrides (before NLP) ─────────────────────
     _KEYWORD_INTENTS: list[tuple[list[str], str]] = [
         (["scan", "start scanning", "run scan", "go"], "bulk_scan"),
-        (["positions", "open trades", "what am I in"], "active_positions"),
+        (["close profitable", "take profits", "take profit", "close winners", "close good positions"], "close_profitable_positions"),
+        (["positions", "open trades", "what am I in", "good positions", "profitable positions", "winning trades", "winners"], "profitable_positions"),
         (["balance", "account", "equity"], "account_summary"),
         (["risk", "drawdown", "exposure"], "risk_management"),
         (["history", "pnl", "daily results", "how did I do"], "trade_history"),
@@ -1441,6 +1442,13 @@ class ARIA:
                 f"Close all {n} position(s)? Floating P&L: ${floating:+.2f}. "
                 f"Say 'yes' to confirm."
             )
+
+        # Close profitable positions immediately when explicitly requested
+        if intent == "close_profitable_positions" or "close profitable" in lower or "take profit" in lower or "take profits" in lower:
+            result = self.broker.close_profitable_positions()
+            if isinstance(result, list):
+                return "\n".join(result)
+            return result
 
         # Retrain model
         if intent == "retrain_model":

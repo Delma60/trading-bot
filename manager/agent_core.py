@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
+from manager.risk_manager import DynamicRiskTargeter
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -82,6 +83,7 @@ class AgentPlanner:
             "account_summary":  self._plan_account,
             "trade_history":    self._plan_history,
             "active_positions": self._plan_positions,
+            "profitable_positions": self._plan_positions,
             "get_price":        self._plan_price_check,
             "close_position":   self._plan_close,
             "close_all":        self._plan_close_all,
@@ -227,6 +229,7 @@ class AgentExecutor:
         self.rm        = risk_manager
         self.pm        = portfolio_manager
         self.reasoning = reasoning
+        self.dynamic_targeter = DynamicRiskTargeter(self.broker)
 
     # ── Dispatcher ────────────────────────────────────────────────────────────
 
@@ -239,6 +242,10 @@ class AgentExecutor:
             result = {"error": str(exc)}
         step.duration_ms = (time.perf_counter() - t0) * 1000
         return result or {}
+
+    def _dynamic_risk_targets(self, symbol) -> dict:
+        """Delegates structural target calculation to the standalone targeter."""
+        return self.dynamic_targeter.calculate_targets(symbol)
 
     def _dispatch(self, step: AgentStep, plan: AgentPlan) -> dict:
         sym = plan.symbol
@@ -257,6 +264,7 @@ class AgentExecutor:
             "drawdown_analysis": lambda: self._drawdown_analysis(),
             "portfolio_scan":    lambda: self._portfolio_scan(),
             "best_opportunities":lambda: self._best_opportunities(plan),
+            "dynamic_risk_targets": lambda: self._dynamic_risk_targets(sym),
             "risk_gate":         lambda: self._global_risk_gate(),
             "overtrading_check": lambda: self._overtrading_check(),
             "margin_check":      lambda: self._margin_check(),
@@ -307,6 +315,9 @@ class AgentExecutor:
     def _quality_score(self, plan: AgentPlan) -> dict:
         sig_r    = self._get_step_result(plan, "signal_ensemble")
         regime_r = self._get_step_result(plan, "market_regime")
+        htf_r = self._get_step_result(plan, "htf_trend_check")
+        risk_r   = self._get_step_result(plan, "risk_check")
+        
         if not sig_r:
             return {"grade": "D", "score": 0, "proceed": False, "notes": []}
 
@@ -319,11 +330,47 @@ class AgentExecutor:
         }
         strategy_signals = sig_r.get("strategy_signals", {})
         regime   = regime_r.get("regime", "Unknown") if regime_r else "Unknown"
-        risk_plan = {"stop_loss_pips": 20, "take_profit_pips": 40}
-
+        risk_plan = risk_r.get("risk_plan", {"stop_loss_pips": 20, "take_profit_pips": 40}) 
+        htf_trend = htf_r.get("trend", "NEUTRAL") if htf_r else "NEUTRAL"
+        
         return self.reasoning.reasoner.score(
-            signal, strategy_signals, regime, risk_plan, self.reasoning
+            signal, 
+            strategy_signals,
+            regime, 
+            risk_plan, 
+            self.reasoning,
+            htf_trend
         )
+
+    def _htf_trend_check(self, symbol) -> dict:
+            """Determines the trend on a higher timeframe (e.g., Daily)."""
+            if not symbol:
+                return {"trend": "NEUTRAL"}
+            
+            try:
+                # Fetch Daily (D1) candles to act as the higher timeframe
+                df = self.broker.get_historical_rates(symbol, timeframe="D1", count=20)
+                if df is None or df.empty:
+                    return {"trend": "NEUTRAL"}
+                
+                # Simple SMA-20 Trend check
+                closes = df['close'].values
+                if len(closes) < 20:
+                    return {"trend": "NEUTRAL"}
+                    
+                sma_20 = sum(closes[-20:]) / 20
+                current_price = closes[-1]
+                
+                if current_price > sma_20:
+                    trend = "BUY"
+                elif current_price < sma_20:
+                    trend = "SELL"
+                else:
+                    trend = "NEUTRAL"
+                    
+                return {"trend": trend}
+            except Exception:
+                return {"trend": "NEUTRAL"}
 
     def _risk_check(self, symbol) -> dict:
         cfg  = self._load_config()
@@ -667,495 +714,108 @@ class AgentExecutor:
 
 class AgentSynthesizer:
     """
-    Merges AgentStep results into a single, coherent, data-rich response.
-    Every factual claim references a live number from the step results.
+    Deterministic Natural Language Generation (NLG) engine.
+    Creates dynamic, non-repetitive English responses from raw trading data
+    without relying on external LLMs.
     """
-
     def __init__(self, reasoning):
         self.reasoning = reasoning
-
-    def synthesize(self, plan: AgentPlan) -> str:
-        r = {s.name: (s.result or {}) for s in plan.steps}
-        intent = plan.intent
-
-        dispatch = {
-            "analyze_symbol":   self._synth_analysis,
-            "execute_trade":    self._synth_trade,
-            "portfolio_status": self._synth_portfolio,
-            "bulk_scan":        self._synth_scan,
-            "risk_management":  self._synth_risk,
-            "account_summary":  self._synth_account,
-            "trade_history":    self._synth_history,
-            "active_positions": self._synth_positions,
-            "get_price":        self._synth_price,
-            "close_position":   self._synth_close,
-            "close_all":        self._synth_close_all,
-            "news_update":      self._synth_news,
-            "greeting":         self._synth_greeting,
-            "strategy_info":    self._synth_strategy,
-            "general":          self._synth_general,
+        
+        # ── Lexical Dictionary ──
+        self.lexicon = {
+            "greetings": [
+                "System online.", "Ready.", "Awaiting input.", "All systems green."
+            ],
+            "buy_openers": [
+                "I'm seeing bullish confluence on {symbol}.",
+                "The structure on {symbol} is flagging a long entry.",
+                "Buying pressure is building on {symbol}.",
+                "We have a clear upward bias on {symbol}."
+            ],
+            "sell_openers": [
+                "Bearish distribution detected on {symbol}.",
+                "The structure on {symbol} is rolling over short.",
+                "Sell signals are aligning for {symbol}.",
+                "We have a clear downward bias on {symbol}."
+            ],
+            "wait_openers": [
+                "{symbol} is currently a mixed bag.",
+                "I have no clear statistical edge on {symbol} right now.",
+                "Conditions on {symbol} are too choppy to call.",
+                "Staying flat on {symbol}."
+            ],
+            "transitions_add": [
+                "Furthermore,", "Additionally,", "To add to that,", "Also,"
+            ],
+            "transitions_contrast": [
+                "However,", "That said,", "On the flip side,", "Despite this,"
+            ],
+            "grades": {
+                "A": ["This is a premium, high-probability setup.", "Conditions are optimal.", "I highly recommend this trade."],
+                "B": ["It's a solid setup with good alignment.", "There is a viable edge here.", "Favorable risk profile overall."],
+                "C": ["Proceed with caution.", "It's a marginal setup at best.", "You might want to wait for cleaner price action."],
+                "D": ["I strongly advise sitting this one out.", "The math does not support a trade here.", "Too much conflicting data."]
+            }
         }
-        fn = dispatch.get(intent, self._synth_general)
-        return fn(plan, r)
 
-    # ── Intent synthesizers ───────────────────────────────────────────────────
+    def synthesize(self, plan: 'AgentPlan') -> str:
+        """Main routing function for synthesis."""
+        if plan.intent in ["analyze_symbol", "ai_analysis"]:
+            return self._synth_dynamic_analysis(plan)
+        elif plan.intent == "greeting":
+            return random.choice(self.lexicon["greetings"])
+        
+        # Fallback for simple actions
+        return f"Action '{plan.intent}' processed successfully."
 
-    def _synth_analysis(self, plan: AgentPlan, r: dict) -> str:
-        sym      = plan.symbol or "UNKNOWN"
-        sig_r    = r.get("signal_ensemble", {})
-        regime_r = r.get("market_regime", {})
-        score_r  = r.get("quality_score", {})
-        risk_r   = r.get("risk_check", {})
-        size_r   = r.get("position_sizing", {})
-        anom_r   = r.get("anomaly_check", {})
-        corr_r   = r.get("correlation_hint", {})
-
-        action     = sig_r.get("action", "WAIT")
-        confidence = sig_r.get("confidence", 0.0)
-        source     = sig_r.get("source", "ensemble")
-        lstm       = sig_r.get("lstm_prediction", {})
-        strat_sigs = sig_r.get("strategy_signals", {})
-
-        regime    = regime_r.get("regime", "Unknown")
-        best_s    = regime_r.get("best_strategies", [])
-        grade     = score_r.get("grade", "D")
-        score     = score_r.get("score", 0)
-        proceed   = score_r.get("proceed", False)
-        notes     = score_r.get("notes", [])
-
-        risk_ok   = risk_r.get("allowed", True)
-        risk_msg  = risk_r.get("reason", "")
-        risk_cmt  = risk_r.get("risk_comment")
-
-        lots      = size_r.get("lots", 0.0)
-        sl_pips   = size_r.get("stop_loss_pips", 20.0)
-        risk_usd  = size_r.get("risk_usd", 0.0)
-
-        is_anom   = anom_r.get("is_anomaly", False)
-        anom_score= anom_r.get("anomaly_score", 0.0)
-        corr      = corr_r.get("correlated", [])
-
-        parts = []
-
-        # ── 1. Signal narration ───────────────────────────────────────────────
-        sig_dict = {
-            "action": action, "confidence": confidence,
-            "reason": sig_r.get("reason", ""),
-            "source": source, "lstm_prediction": lstm,
-        }
-        parts.append(self.reasoning.narrator.narrate(sig_dict, sym))
-
-        # ── 2. Regime + best strategies ───────────────────────────────────────
-        regime_line = self.reasoning.regime_advisor.advise(regime, self.reasoning)
-        if best_s:
-            fit = ", ".join(best_s[:2])
-            parts.append(f"Regime: '{regime}'. Best-fit strategies right now: {fit}. {regime_line}")
+    def _synth_dynamic_analysis(self, plan: 'AgentPlan') -> str:
+        """Builds a flowing paragraph dynamically from the execution notes."""
+        symbol = plan.symbol or "the asset"
+        r = plan.context  # The dictionary populated by the executor
+        
+        grade = r.get("grade", "D")
+        direction = r.get("action", "WAIT")
+        notes = r.get("notes", [])
+        
+        # 1. Choose an opener based on direction
+        if direction == "BUY":
+            opener = random.choice(self.lexicon["buy_openers"]).format(symbol=symbol)
+        elif direction == "SELL":
+            opener = random.choice(self.lexicon["sell_openers"]).format(symbol=symbol)
         else:
-            parts.append(f"Regime: '{regime}'. {regime_line}")
-
-        # ── 3. Strategy consensus ─────────────────────────────────────────────
-        if strat_sigs:
-            agree  = sum(1 for s in strat_sigs.values() if s.get("action") == action and s.get("confidence", 0) > 0.3)
-            total  = len(strat_sigs)
-            consensus = f"{agree}/{total} strategies agree."
-            lstm_dir  = lstm.get("direction", "NEUTRAL")
-            lstm_conf = lstm.get("confidence", 0.0)
-            align = "confirms" if (
-                (action == "BUY" and lstm_dir == "UP") or
-                (action == "SELL" and lstm_dir == "DOWN")
-            ) else "conflicts with" if lstm_dir != "NEUTRAL" else "is neutral on"
-            parts.append(f"{consensus} LSTM {align} the signal ({lstm_dir} @ {lstm_conf:.0%}).")
-
-        # ── 4. Quality grade ──────────────────────────────────────────────────
-        grade_text = {
-            "A": f"Quality grade A ({score}/100) — strong confluence, high-probability entry.",
-            "B": f"Quality grade B ({score}/100) — reasonable setup, manage size carefully.",
-            "C": f"Quality grade C ({score}/100) — weak confluence. Consider waiting.",
-            "D": f"Quality grade D ({score}/100) — poor setup. I'd pass on this one.",
-        }.get(grade, f"Grade {grade} ({score}/100).")
-        parts.append(grade_text)
-
-        # ── 5. Anomaly warning ────────────────────────────────────────────────
-        if is_anom:
-            parts.append(
-                f"⚠️ Anomaly detected (score {anom_score:.2f}) — market conditions are unusual. "
-                f"Reduce size or wait for conditions to normalise."
-            )
-
-        # ── 6. Risk gate ──────────────────────────────────────────────────────
-        if not risk_ok:
-            parts.append(f"🛑 Risk gate BLOCKED: {risk_msg}")
-        elif risk_cmt:
-            parts.append(f"💡 {risk_cmt}")
-
-        # ── 7. Correlated pairs ───────────────────────────────────────────────
-        if corr:
-            parts.append(f"Correlated pairs worth watching: {', '.join(corr)}.")
-
-        # ── 8. Actionable recommendation ─────────────────────────────────────
-        if proceed and risk_ok and not is_anom and action != "WAIT":
-            if lots and lots > 0:
-                parts.append(
-                    f"📊 Suggested entry: {action} {lots} lots | SL: {sl_pips:.0f} pips | "
-                    f"Risk: ~${risk_usd:.2f}. "
-                    f"Say 'execute' or 'place the trade' to proceed."
-                )
-                plan.suggested_action = f"{action} {lots} {sym}"
-            else:
-                parts.append(
-                    f"📊 Signal: {action} on {sym}. Position sizing failed — check margin. "
-                    f"Consider micro-lots (0.01)."
-                )
-        elif action == "WAIT":
-            parts.append("Staying flat — no clean entry yet.")
-
-        return " ".join(parts)
-
-    def _synth_trade(self, plan: AgentPlan, r: dict) -> str:
-        # For trade intents, output the same analysis as analyze_symbol;
-        # the actual execution is handled by chat.py's action executor.
-        return self._synth_analysis(plan, r)
-
-    def _synth_portfolio(self, plan: AgentPlan, r: dict) -> str:
-        acct_r    = r.get("account_data", {})
-        pos_r     = r.get("open_positions", {})
-        health_r  = r.get("portfolio_health", {})
-        regime_r  = r.get("regime_snapshot", {})
-        dd_r      = r.get("drawdown_analysis", {})
-
-        balance   = acct_r.get("balance", 0)
-        equity    = acct_r.get("equity", 0)
-        ml        = acct_r.get("margin_level")
-        pos_count = pos_r.get("count", 0)
-        total_pnl = pos_r.get("total_pnl", 0.0)
-        health    = health_r.get("health_summary", "")
-        regime    = regime_r.get("regime", "Unknown")
-        best_s    = regime_r.get("best_strategies", [])
-        trailing  = dd_r.get("trailing_drawdown", 0.0)
-        dd_pct    = dd_r.get("drawdown_pct", 0.0)
-
-        lines = [
-            f"Account — Balance: ${balance:,.2f} | Equity: ${equity:,.2f} | "
-            f"Floating P&L: ${total_pnl:+.2f}.",
-        ]
-
-        if ml:
-            ml_status = "✅" if ml > 300 else "⚠️" if ml > 150 else "🔴"
-            lines.append(f"Margin level: {ml_status} {ml:.0f}%.")
-
-        if pos_count:
-            positions = pos_r.get("positions", [])
-            pos_strs  = [
-                f"{'🟢' if p['profit']>=0 else '🔴'} {p['symbol']} "
-                f"{p['action']} {p['volume']}L (${p['profit']:+.2f})"
-                for p in positions[:5]
-            ]
-            lines.append(f"{pos_count} open position(s): " + " | ".join(pos_strs))
-        else:
-            lines.append("No open positions — portfolio is flat.")
-
-        lines.append(f"Daily trailing drawdown: ${trailing:.2f} ({dd_pct:.1f}%).")
-
-        if regime != "Unknown":
-            strat_hint = f" Best fit: {', '.join(best_s[:2])}." if best_s else ""
-            lines.append(f"Market regime: '{regime}'.{strat_hint}")
-
-        if health:
-            lines.append(health)
-
-        return "\n".join(lines)
-
-    def _synth_scan(self, plan: AgentPlan, r: dict) -> str:
-        gate_r    = r.get("risk_gate", {})
-        best_r    = r.get("best_opportunities", {})
-        regime_r  = r.get("regime_snapshot", {})
-
-        if not gate_r.get("gate_open", True):
-            dd = gate_r.get("drawdown", 0)
-            return (
-                f"🛑 Risk gate CLOSED — trailing drawdown ${dd:.2f} has hit the daily limit. "
-                f"No new trades until tomorrow or until the gate reopens."
-            )
-
-        executed = best_r.get("executed", [])
-        blocked  = best_r.get("blocked", [])
-        closed   = best_r.get("closed", [])
-        regime   = regime_r.get("regime", "Unknown")
-        best_s   = regime_r.get("best_strategies", [])
-
-        parts = [f"Scan complete. Regime: '{regime}'."]
-
-        if executed:
-            parts.append(f"✅ {len(executed)} trade(s) executed:")
-            parts.extend(f"  {e}" for e in executed[:5])
-        else:
-            parts.append("No signals met the execution threshold this cycle.")
-
-        if blocked:
-            parts.append(f"⚠️ {len(blocked)} symbol(s) blocked by risk rules.")
-
-        if closed:
-            parts.append(f"⏳ {len(closed)} market(s) currently closed.")
-
-        if best_s:
-            parts.append(f"Best-fit strategies for current conditions: {', '.join(best_s[:2])}.")
-
-        return "\n".join(parts)
-
-    def _synth_risk(self, plan: AgentPlan, r: dict) -> str:
-        acct_r  = r.get("account_data", {})
-        dd_r    = r.get("drawdown_analysis", {})
-        ot_r    = r.get("overtrading_check", {})
-        mg_r    = r.get("margin_check", {})
-        pos_r   = r.get("open_positions", {})
-
-        balance  = acct_r.get("balance", 0)
-        equity   = acct_r.get("equity", 0)
-        high     = dd_r.get("daily_high", balance)
-        trailing = dd_r.get("trailing_drawdown", 0.0)
-        dd_pct   = dd_r.get("drawdown_pct", 0.0)
-        ml       = mg_r.get("margin_level") or acct_r.get("margin_level")
-        pos_cnt  = pos_r.get("count", 0)
-
-        lines = [
-            f"Risk Snapshot — Balance: ${balance:,.2f} | Equity: ${equity:,.2f}",
-            f"Daily peak: ${high:,.2f} | Trailing drawdown: ${trailing:.2f} ({dd_pct:.1f}%)",
-        ]
-
-        if ml:
-            status = "✅ Healthy" if ml > 300 else "⚠️ Elevated" if ml > 150 else "🔴 Critical"
-            lines.append(f"Margin level: {ml:.0f}% — {status}.")
-
-        lines.append(f"Open positions: {pos_cnt}.")
-
-        ot_warning = ot_r.get("warning")
-        if ot_warning:
-            lines.append(ot_warning)
-        else:
-            lines.append("No overtrading patterns detected.")
-
-        return "\n".join(lines)
-
-    def _synth_account(self, plan: AgentPlan, r: dict) -> str:
-        acct_r   = r.get("account_data", {})
-        float_r  = r.get("floating_pnl", {})
-        regime_r = r.get("regime_snapshot", {})
-
-        balance  = acct_r.get("balance", 0)
-        equity   = acct_r.get("equity", 0)
-        ml       = acct_r.get("margin_level")
-        floating = float_r.get("total", 0.0)
-        win_pnl  = float_r.get("winning", 0.0)
-        lose_pnl = float_r.get("losing", 0.0)
-        n_pos    = float_r.get("count", 0)
-        regime   = regime_r.get("regime", "Unknown")
-
-        lines = [
-            f"Balance: ${balance:,.2f} | Equity: ${equity:,.2f}",
-            f"Floating P&L: ${floating:+.2f} "
-            f"(Winners +${win_pnl:.2f} | Losers ${lose_pnl:.2f}) across {n_pos} position(s).",
-        ]
-        if ml:
-            lines.append(f"Margin level: {ml:.0f}%.")
-        lines.append(f"Market regime: '{regime}'.")
-        return " ".join(lines)
-
-    def _synth_history(self, plan: AgentPlan, r: dict) -> str:
-        hist_r  = r.get("closed_trades", {})
-        perf_r  = r.get("performance_analysis", {})
-        ot_r    = r.get("overtrading_check", {})
-
-        count   = hist_r.get("count", 0)
-        pnl     = hist_r.get("pnl", 0.0)
-        buys    = hist_r.get("buys", 0)
-        sells   = hist_r.get("sells", 0)
-        closes  = hist_r.get("closes", 0)
-
-        by_sym  = perf_r.get("by_symbol", {})
-        best    = perf_r.get("best_performer")
-        worst   = perf_r.get("worst_performer")
-        strat_c = perf_r.get("strategy_counts", {})
-
-        if count == 0:
-            return "No trades logged today yet. The slate is clean."
-
-        pnl_str = f"${abs(pnl):.2f} {'profit' if pnl >= 0 else 'loss'}"
-        lines   = [
-            f"Today — {count} trades ({buys} BUY, {sells} SELL, {closes} closed) | P&L: {pnl_str}."
-        ]
-
-        if best and by_sym:
-            lines.append(f"Best: {best} (${by_sym[best]:+.2f}).")
-        if worst and by_sym and worst != best:
-            lines.append(f"Worst: {worst} (${by_sym[worst]:+.2f}).")
-
-        if strat_c:
-            top_strat = max(strat_c, key=strat_c.get)
-            lines.append(f"Most active strategy: {top_strat} ({strat_c[top_strat]} trades).")
-
-        ot_w = ot_r.get("warning")
-        if ot_w:
-            lines.append(ot_w)
-
-        return " ".join(lines)
-
-    def _synth_positions(self, plan: AgentPlan, r: dict) -> str:
-        pos_r    = r.get("open_positions", {})
-        risk_r   = r.get("risk_per_pos", {})
-        health_r = r.get("portfolio_health", {})
-
-        count    = pos_r.get("count", 0)
-        positions= pos_r.get("positions", [])
-        total    = pos_r.get("total_pnl", 0.0)
-        health   = health_r.get("health_summary", "")
-
-        if count == 0:
-            return "No open positions. Portfolio is flat — good time to scan for entries."
-
-        lines = [f"{count} open position(s) | Floating P&L: ${total:+.2f}"]
-        for p in positions:
-            icon = "🟢" if p["profit"] >= 0 else "🔴"
-            lines.append(
-                f"  {icon} {p['symbol']} {p['action']} {p['volume']}L "
-                f"@ {p['price_open']} | P&L ${p['profit']:+.2f} | #{p['ticket']}"
-            )
-
-        high_risk = [x for x in risk_r.get("items", []) if x["risk_pct"] > 5]
-        if high_risk:
-            lines.append(f"⚠️ High exposure: {', '.join(x['symbol'] for x in high_risk)}")
-
-        if health:
-            lines.append(health)
-
-        return "\n".join(lines)
-
-    def _synth_price(self, plan: AgentPlan, r: dict) -> str:
-        price_r  = r.get("live_price", {})
-        regime_r = r.get("market_regime", {})
-        sym      = price_r.get("symbol", plan.symbol or "?")
-        bid      = price_r.get("bid", 0)
-        ask      = price_r.get("ask", 0)
-        spread   = price_r.get("spread", 0)
-        regime   = regime_r.get("regime", "Unknown")
-
-        if not bid:
-            return f"Could not fetch live price for {sym}. Check if market is open."
-
-        return (
-            f"{sym} — Bid: {bid} | Ask: {ask} | Spread: {spread:.1f} pips. "
-            f"Regime: '{regime}'."
-        )
-
-    def _synth_close(self, plan: AgentPlan, r: dict) -> str:
-        pos_r = r.get("open_positions", {})
-        sym   = plan.symbol
-        positions = [p for p in pos_r.get("positions", []) if p["symbol"] == sym]
-        if not positions:
-            return f"No open positions found for {sym}."
-        plan.suggested_action = f"CLOSE {sym}"
-        return (
-            f"Found {len(positions)} open position(s) for {sym}. "
-            f"Confirm close? Say 'yes close {sym}' to proceed."
-        )
-
-    def _synth_close_all(self, plan: AgentPlan, r: dict) -> str:
-        pos_r   = r.get("open_positions", {})
-        float_r = r.get("floating_pnl", {})
-        count   = pos_r.get("count", 0)
-        total   = float_r.get("total", 0.0)
-        if count == 0:
-            return "No open positions to close."
-        plan.suggested_action = "CLOSE_ALL"
-        return (
-            f"You have {count} open position(s) with ${total:+.2f} floating P&L. "
-            f"Confirm to close all? Say 'yes close all' to proceed."
-        )
-
-    def _synth_news(self, plan: AgentPlan, r: dict) -> str:
-        regime_r = r.get("regime_snapshot", {})
-        acct_r   = r.get("account_data", {})
-        regime   = regime_r.get("regime", "Unknown")
-        best_s   = regime_r.get("best_strategies", [])
-        equity   = acct_r.get("equity", 0)
-        strat_hint = f" Best-fit strategies: {', '.join(best_s[:2])}." if best_s else ""
-
-        return (
-            f"I don't have a live news feed, but here's the current picture: "
-            f"market regime is '{regime}'.{strat_hint} "
-            f"Account equity: ${equity:,.2f}. "
-            f"Check ForexFactory or Bloomberg for scheduled events."
-        )
-
-    def _synth_greeting(self, plan: AgentPlan, r: dict) -> str:
-        acct_r   = r.get("account_data", {})
-        pos_r    = r.get("open_positions", {})
-        regime_r = r.get("regime_snapshot", {})
-
-        balance  = acct_r.get("balance", 0)
-        equity   = acct_r.get("equity", 0)
-        pos_cnt  = pos_r.get("count", 0)
-        total_pnl= pos_r.get("total_pnl", 0.0)
-        regime   = regime_r.get("regime", "Unknown")
-        best_s   = regime_r.get("best_strategies", [])
-
-        account_line = (
-            f"Balance ${balance:,.2f} | Equity ${equity:,.2f}."
-            if balance else "Broker connected."
-        )
-
-        if pos_cnt:
-            pos_line = f"{pos_cnt} trade(s) open, floating ${total_pnl:+.2f}."
-        else:
-            pos_line = "Portfolio is flat — no open positions."
-
-        if regime != "Unknown" and best_s:
-            regime_line = f"Market is in a '{regime}' regime. Best fit: {', '.join(best_s[:2])}."
-        else:
-            regime_line = ""
-
-        suggestions = [
-            "Run a portfolio scan?",
-            "Analyse a symbol?",
-            "Check open positions?",
-            "Review risk metrics?",
-        ]
-        opener = random.choice([
-            "ARIA online.", "Back online.", "Systems live.", "Ready.",
-        ])
-        return f"{opener} {account_line} {pos_line} {regime_line} {random.choice(suggestions)}"
-
-    def _synth_strategy(self, plan: AgentPlan, r: dict) -> str:
-        regime_r = r.get("regime_snapshot", {})
-        acct_r   = r.get("account_data", {})
-        regime   = regime_r.get("regime", "Unknown")
-        best_s   = regime_r.get("best_strategies", [])
-        tracked  = regime_r.get("tracked_symbols", [])
-
-        lines = [
-            f"Current regime: '{regime}'.",
-            f"Best-fit strategies for this environment: {', '.join(best_s) if best_s else 'Not determined yet.'}",
-            f"Tracking {len(tracked)} symbol(s): {', '.join(tracked[:5])}{'...' if len(tracked) > 5 else ''}.",
-            "Ensemble pipeline: FeatureEngineer → 7 strategy engines → LSTM predictor → XGBoost meta-scorer.",
-            "Signal threshold: >30% confidence to suggest, >75% to auto-execute in scan mode.",
-        ]
-        return "\n".join(lines)
-
-    def _synth_general(self, plan: AgentPlan, r: dict) -> str:
-        ctx = r.get("context_snapshot", {})
-        balance  = ctx.get("balance", 0)
-        n_pos    = ctx.get("open_positions", 0)
-        regime   = ctx.get("regime", "Unknown")
-        suggestions = [
-            "scan the portfolio", "analyse a symbol", "check positions",
-            "review your risk metrics", "check account balance",
-        ]
-        return (
-            f"Not sure what you meant. "
-            f"Context: Balance ${balance:,.2f} | {n_pos} open position(s) | Regime '{regime}'. "
-            f"Try: {random.choice(suggestions)}."
-        )
-
-
+            opener = random.choice(self.lexicon["wait_openers"]).format(symbol=symbol)
+
+        # 2. Process the notes (Extracting the English reasoning from the points)
+        # Assuming notes look like: "HTF Trend Aligned (BUY) → +15 pts"
+        clean_notes = []
+        for note in notes:
+            # Strip the points part (e.g., " → +15 pts") to make it conversational
+            clean_text = note.split(" → ")[0]
+            clean_notes.append(clean_text)
+
+        # 3. Build the body paragraph
+        body_sentences = []
+        if clean_notes:
+            body_sentences.append(f"Specifically, {clean_notes[0].lower()}.")
+            
+            if len(clean_notes) > 1:
+                trans = random.choice(self.lexicon["transitions_add"])
+                body_sentences.append(f"{trans} {clean_notes[1].lower()}.")
+                
+            if len(clean_notes) > 2:
+                # Group the remaining notes into a list
+                remaining = ", and ".join([n.lower() for n in clean_notes[2:4]])
+                body_sentences.append(f"We are also seeing that {remaining}.")
+
+        body_text = " ".join(body_sentences)
+
+        # 4. Append the Grade / Verdict
+        verdict = random.choice(self.lexicon["grades"].get(grade, self.lexicon["grades"]["D"]))
+        
+        # 5. Final Assembly
+        final_response = f"{opener} {body_text} {verdict} (Grade: {grade})"
+        
+        return final_response
 # ─────────────────────────────────────────────────────────────────────────────
 # AgentCore  (public façade)
 # ─────────────────────────────────────────────────────────────────────────────

@@ -212,10 +212,48 @@
                 "what am I in right now",
                 "any open trades",
                 "check my trades",
-                "positions"
+                "positions",
+                "good positions",
+                "profitable positions",
+                "winning trades",
+                "check good positions"
             ],
             "responses": [
                 "Pulling your open positions..."
+            ]
+        },
+        {
+            "tag": "profitable_positions",
+            "patterns": [
+                "Show profitable positions",
+                "List winning trades",
+                "Check good positions",
+                "Check profitable positions",
+                "What positions are winning?",
+                "Which positions are profitable?",
+                "Show my winners",
+                "List all profitable positions"
+            ],
+            "responses": [
+                "Reviewing winning positions and current profits..."
+            ]
+        },
+        {
+            "tag": "close_profitable_positions",
+            "patterns": [
+                "Close profitable positions",
+                "Close winning trades",
+                "Take profits on winners",
+                "Close good positions",
+                "Close all profitable positions",
+                "Close profitable trade",
+                "Close profitable position",
+                "Close profitable market",
+                "Take profit on winners",
+                "Take profit now"
+            ],
+            "responses": [
+                "Closing only profitable positions now."
             ]
         },
         {

@@ -3,6 +3,7 @@ from typing import Dict, Any, Optional
 import MetaTrader5 as mt5
 from datetime import datetime
 import math
+import pandas as pd
 
 class RiskManager:
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
@@ -227,3 +228,59 @@ class RiskManager:
 
         # Return rounded to 2 decimal places to avoid MT5 floating point rejection errors
         return round(clean_lot_size, 2)
+
+
+class DynamicRiskTargeter:
+    """
+    An independent engine that calculates structural Stop Loss and Take Profit
+    targets using ATR and recent swing highs/lows.
+    """
+
+    def __init__(self, broker):
+        self.broker = broker
+
+    def calculate_targets(self, symbol: str) -> dict:
+        if not symbol:
+            return {
+                "atr_pips": 0.0,
+                "sl_buy_pips": 0.0,
+                "tp_buy_pips": 0.0,
+                "sl_sell_pips": 0.0,
+                "tp_sell_pips": 0.0,
+            }
+
+        try:
+            df = self.broker.get_historical_rates(symbol, timeframe="H1", count=25)
+            if df is None or df.empty or len(df) < 14:
+                return {}
+
+            df = df.copy()
+            df["prev_close"] = df["close"].shift(1)
+            df["tr1"] = df["high"] - df["low"]
+            df["tr2"] = (df["high"] - df["prev_close"]).abs()
+            df["tr3"] = (df["low"] - df["prev_close"]).abs()
+            df["tr"] = df[["tr1", "tr2", "tr3"]].max(axis=1)
+            atr = df["tr"].rolling(window=14, min_periods=14).mean().iloc[-1]
+            if pd.isna(atr):
+                return {}
+
+            pip_multiplier = 100.0 if "JPY" in symbol.upper() else 10000.0
+            atr_pips = atr * pip_multiplier
+            current_price = df["close"].iloc[-1]
+            recent_high = df["high"].rolling(window=20, min_periods=1).max().iloc[-1]
+            recent_low = df["low"].rolling(window=20, min_periods=1).min().iloc[-1]
+
+            sl_buy_pips = max((current_price - recent_low) * pip_multiplier, atr_pips)
+            tp_buy_pips = max((recent_high - current_price) * pip_multiplier * 1.5, atr_pips)
+            sl_sell_pips = max((recent_high - current_price) * pip_multiplier, atr_pips)
+            tp_sell_pips = max((current_price - recent_low) * pip_multiplier * 1.5, atr_pips)
+
+            return {
+                "atr_pips": round(atr_pips, 1),
+                "sl_buy_pips": round(sl_buy_pips, 1),
+                "tp_buy_pips": round(tp_buy_pips, 1),
+                "sl_sell_pips": round(sl_sell_pips, 1),
+                "tp_sell_pips": round(tp_sell_pips, 1),
+            }
+        except Exception:
+            return {}

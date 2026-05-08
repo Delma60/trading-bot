@@ -123,7 +123,8 @@ class TradeReasoner:
         strategy_signals: dict,
         regime:           str,
         risk_plan:        dict,
-        reasoning_engine = None,  # Added to access learner
+        reasoning_engine = None,
+        htf_trend = "NEUTRAL"
     ) -> dict:
         pts = 0
         notes = []
@@ -182,16 +183,33 @@ class TradeReasoner:
             notes.append(f"LSTM disagrees ({lstm_dir}) → +0 pts")
 
         # 5. Risk/reward quality (max 15)
-        sl   = risk_plan.get("stop_loss_pips", 0)
-        tp   = risk_plan.get("stop_loss_pips", 0) * 2  # assumed 1:2
-        if sl > 0 and tp > 0:
-            rr = tp / sl
-            rr_pts = min(round(rr * 5), 15)
-            pts   += rr_pts
-            notes.append(f"R:R estimated 1:{rr:.1f} → {rr_pts}/15 pts")
-        else:
-            pts += 7
-            notes.append("R:R not calculable → +7 pts")
+       # Improved R:R scoring logic in reasoning_engine.py
+        sl_pips = risk_plan.get("stop_loss_pips", 0)
+        tp_pips = risk_plan.get("take_profit_pips", sl_pips * 1.5) # Fallback to 1.5 if missing
+
+        if sl_pips > 0 and tp_pips > 0:
+            rr = tp_pips / sl_pips
+            # Reward setups that have at least 1:1.5, penalize anything under 1:1
+            if rr < 1.0:
+                rr_pts = 0
+                notes.append(f"Poor R:R (1:{rr:.1f}). SL is wider than TP target → 0/15 pts")
+            else:
+                rr_pts = min(round((rr - 1.0) * 10), 15)  # 1:2.5 gives max 15 points
+                pts += rr_pts
+                notes.append(f"Strong R:R profiling 1:{rr:.1f} → {rr_pts}/15 pts")
+
+        # 6. Higher Timeframe (HTF) Alignment
+        direction = signal.get("action", "WAIT")
+        if direction in ["BUY", "SELL"]:
+            if htf_trend == direction:
+                pts += 15  # Bonus for trading with the macro trend
+                notes.append(f"HTF Trend Aligned ({htf_trend}) → +15 pts")
+            elif htf_trend == "NEUTRAL":
+                pts += 5
+                notes.append("HTF Trend is neutral → +5 pts")
+            else:
+                pts -= 15  # Severe penalty for fighting the macro trend
+                notes.append(f"Counter HTF Trend (HTF is {htf_trend}) → -15 pts")
 
         # Grade
         if pts >= 80:   grade = "A"
