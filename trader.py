@@ -18,8 +18,35 @@ class Trader:
         self.magic = magic
         # Centralized Execution Lock (prevents race conditions across all threads)
         self._execution_lock = threading.Lock()
+        self._pending_orders = set()  # Tracks in-flight orders to avoid duplicates
+        self._cooldown: dict[str, datetime] = {}
+        self._cooldown_lock = threading.Lock()
+        self._cooldown_seconds = 5  # default cooldown duration in seconds
         # Legacy lock for compatibility
         self._order_lock = self._execution_lock
+
+    def set_cooldown(self, seconds: int):
+        """Adjust cooldown duration in seconds."""
+        self._cooldown_seconds = max(0, seconds)
+
+    def is_in_cooldown(self, symbol: str) -> tuple[bool, float]:
+        """Return whether a symbol is still cooling down and remaining seconds."""
+        with self._cooldown_lock:
+            expiry = self._cooldown.get(symbol)
+            if expiry is None:
+                return False, 0.0
+            remaining = (expiry - datetime.now()).total_seconds()
+            if remaining <= 0:
+                del self._cooldown[symbol]
+                return False, 0.0
+            return True, remaining
+
+    def _mark_cooldown(self, symbol: str):
+        """Mark a symbol as cooling down after a successful close."""
+        if self._cooldown_seconds <= 0:
+            return
+        with self._cooldown_lock:
+            self._cooldown[symbol] = datetime.now() + timedelta(seconds=self._cooldown_seconds)
         
     def is_mt5_running(self):
         """Check if MetaTrader 5 terminal is running"""
@@ -243,126 +270,146 @@ class Trader:
         if not self.ensure_connected():
             return {"success": False, "reason": "Lost connection to MT5. Reconnection failed."}
 
-        # 1. Verify the symbol is available and visible
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
-            return {"success": False, "reason": f"{symbol} not found on broker."}
-        if not symbol_info.visible:
-            if not mt5.symbol_select(symbol, True):
-                return {"success": False, "reason": f"Could not select {symbol} in Market Watch."}
+        # Cooldown prevents immediate re-entry after any close
+        in_cd, remaining = self.is_in_cooldown(symbol)
+        if in_cd:
+            return {
+                "success": False,
+                "reason": f"{symbol} in cooldown — {remaining:.1f}s remaining."
+            }
 
-        # 2. Define the Order Type and get the correct execution price
-        order_type = mt5.ORDER_TYPE_BUY if action.upper() == 'BUY' else mt5.ORDER_TYPE_SELL
-        tick = mt5.symbol_info_tick(symbol)
-        
-        if not tick:
-            return {"success": False, "reason": f"Could not fetch current price for {symbol}."}
-            
-        price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
-        point = symbol_info.point
-        pip_multiplier = self._get_pip_multiplier(symbol)
+        order_key = f"{symbol}_{action.upper()}"
 
-        # 3. Calculate Stop Loss and Take Profit prices securely against Spread
-        sl_price = 0.0
-        tp_price = 0.0
-
-        digits = symbol_info.digits
-        min_stop_level = symbol_info.trade_stops_level or 0
-        spread_points = int(round((tick.ask - tick.bid) / point))
-
-        sl_points = int(stop_loss_pips * pip_multiplier) if stop_loss_pips > 0 else 0
-        tp_points = int(take_profit_pips * pip_multiplier) if take_profit_pips > 0 else 0
-
-        safe_distance = spread_points + min_stop_level
-        if sl_points > 0:
-            sl_points = max(sl_points, safe_distance)
-        if tp_points > 0:
-            tp_points = max(tp_points, safe_distance)
-
-        if order_type == mt5.ORDER_TYPE_BUY:
-            if sl_points > 0:
-                sl_price = tick.ask - (sl_points * point)
-            if tp_points > 0:
-                tp_price = tick.ask + (tp_points * point)
-        elif order_type == mt5.ORDER_TYPE_SELL:
-            if sl_points > 0:
-                sl_price = tick.bid + (sl_points * point)
-            if tp_points > 0:
-                tp_price = tick.bid - (tp_points * point)
-
-        # Round to the broker's supported digit precision
-        if sl_price:
-            sl_price = round(sl_price, digits)
-        if tp_price:
-            tp_price = round(tp_price, digits)
-
-        # Sanity check: ensure stop levels are on the correct side of the price
-        if sl_price and ((order_type == mt5.ORDER_TYPE_BUY and sl_price >= price) or (order_type == mt5.ORDER_TYPE_SELL and sl_price <= price)):
-            return {"success": False, "reason": "Invalid Stop Loss level after normalization."}
-        if tp_price and ((order_type == mt5.ORDER_TYPE_BUY and tp_price <= price) or (order_type == mt5.ORDER_TYPE_SELL and tp_price >= price)):
-            return {"success": False, "reason": "Invalid Take Profit level after normalization."}
-
-        filling_mode = symbol_info.filling_mode
-        
-        # Check supported modes using bitwise AND operator (1 = FOK, 2 = IOC)
-        if filling_mode & 1:
-            # FOK (Fill Or Kill) - Complete volume must be filled, or the order is canceled.
-            type_filling = mt5.ORDER_FILLING_FOK
-        elif filling_mode & 2:
-            # IOC (Immediate Or Cancel) - Fill what you can immediately, cancel the rest.
-            type_filling = mt5.ORDER_FILLING_IOC
-        else:
-            # RETURN - Standard market execution, allowed to be partially filled and remain on the book.
-            type_filling = mt5.ORDER_FILLING_RETURN
-        
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": float(lots),
-            "type": order_type,
-            "price": price,
-            "sl": sl_price,
-            "tp": tp_price,
-            "deviation": 20,          # Max slippage allowed (in points)
-            "magic": self.magic,      # Unique Bot ID
-            "comment": "AI Bot Trade",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": type_filling,
-        }
-
-        # 5. Send the order - SERIALIZED via execution lock to prevent race conditions
+        # 1. Prevent duplicate submissions for the same symbol/action
         with self._execution_lock:
-            # Re-check connection inside lock (in case connection dropped during wait)
-            if not self.connected or mt5.terminal_info() is None:
-                return {"success": False, "reason": "Connection lost while waiting for execution lock."}
-            
-            result = mt5.order_send(request)
+            if order_key in self._pending_orders:
+                return {"success": False, "reason": f"Order for {symbol} already in flight."}
+            self._pending_orders.add(order_key)
 
-        # 6. Check if it succeeded and handle specific error codes
-        if result.retcode == mt5.TRADE_RETCODE_DONE:
-            self._log_trade_history(
-                action=action.upper(),
-                symbol=symbol,
-                lots=lots,
-                price=result.price,
-                ticket=result.order,
-                comment=request.get("comment", ""),
-                strategy=strategy
-            )
-            return {"success": True, "ticket": result.order, "price": result.price}
-        
-        # Handle specific error conditions
-        elif result.retcode == mt5.TRADE_RETCODE_REQUOTE:
-            self.notify(f"⚠️ REQUOTE on {symbol}: Ask={tick.ask}, Bid={tick.bid}. Price moved too fast. Retry.")
-            return {"success": False, "reason": f"Requote at {tick.ask}/{tick.bid}. Price moved during submission."}
-        
-        elif result.retcode == mt5.TRADE_RETCODE_PRICE_CHANGED:
-            self.notify(f"⚠️ PRICE_CHANGED on {symbol}: Slippage detected. Requested {price}, market moved.")
-            return {"success": False, "reason": f"Price changed before execution. Slippage occurred."}
-        
-        else:
-            self.notify(f"❌ Order rejected. MT5 Code: {result.retcode}, Comment: {result.comment}")
-            return {"success": False, "reason": f"Order rejected. MT5 Code: {result.retcode}, {result.comment}"}
+        try:
+            # 2. Verify the symbol is available and visible
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is None:
+                return {"success": False, "reason": f"{symbol} not found on broker."}
+            if not symbol_info.visible:
+                if not mt5.symbol_select(symbol, True):
+                    return {"success": False, "reason": f"Could not select {symbol} in Market Watch."}
+
+            # 2. Define the Order Type and get the correct execution price
+            order_type = mt5.ORDER_TYPE_BUY if action.upper() == 'BUY' else mt5.ORDER_TYPE_SELL
+            tick = mt5.symbol_info_tick(symbol)
+            
+            if not tick:
+                return {"success": False, "reason": f"Could not fetch current price for {symbol}."}
+                
+            price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
+            point = symbol_info.point
+            pip_multiplier = self._get_pip_multiplier(symbol)
+
+            # 3. Calculate Stop Loss and Take Profit prices securely against Spread
+            sl_price = 0.0
+            tp_price = 0.0
+
+            digits = symbol_info.digits
+            min_stop_level = symbol_info.trade_stops_level or 0
+            spread_points = int(round((tick.ask - tick.bid) / point))
+
+            sl_points = int(stop_loss_pips * pip_multiplier) if stop_loss_pips > 0 else 0
+            tp_points = int(take_profit_pips * pip_multiplier) if take_profit_pips > 0 else 0
+
+            safe_distance = spread_points + min_stop_level
+            if sl_points > 0:
+                sl_points = max(sl_points, safe_distance)
+            if tp_points > 0:
+                tp_points = max(tp_points, safe_distance)
+
+            if order_type == mt5.ORDER_TYPE_BUY:
+                if sl_points > 0:
+                    sl_price = tick.ask - (sl_points * point)
+                if tp_points > 0:
+                    tp_price = tick.ask + (tp_points * point)
+            elif order_type == mt5.ORDER_TYPE_SELL:
+                if sl_points > 0:
+                    sl_price = tick.bid + (sl_points * point)
+                if tp_points > 0:
+                    tp_price = tick.bid - (tp_points * point)
+
+            # Round to the broker's supported digit precision
+            if sl_price:
+                sl_price = round(sl_price, digits)
+            if tp_price:
+                tp_price = round(tp_price, digits)
+
+            # Sanity check: ensure stop levels are on the correct side of the price
+            if sl_price and ((order_type == mt5.ORDER_TYPE_BUY and sl_price >= price) or (order_type == mt5.ORDER_TYPE_SELL and sl_price <= price)):
+                return {"success": False, "reason": "Invalid Stop Loss level after normalization."}
+            if tp_price and ((order_type == mt5.ORDER_TYPE_BUY and tp_price <= price) or (order_type == mt5.ORDER_TYPE_SELL and tp_price >= price)):
+                return {"success": False, "reason": "Invalid Take Profit level after normalization."}
+
+            filling_mode = symbol_info.filling_mode
+            
+            # Check supported modes using bitwise AND operator (1 = FOK, 2 = IOC)
+            if filling_mode & 1:
+                # FOK (Fill Or Kill) - Complete volume must be filled, or the order is canceled.
+                type_filling = mt5.ORDER_FILLING_FOK
+            elif filling_mode & 2:
+                # IOC (Immediate Or Cancel) - Fill what you can immediately, cancel the rest.
+                type_filling = mt5.ORDER_FILLING_IOC
+            else:
+                # RETURN - Standard market execution, allowed to be partially filled and remain on the book.
+                type_filling = mt5.ORDER_FILLING_RETURN
+            
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": float(lots),
+                "type": order_type,
+                "price": price,
+                "sl": sl_price,
+                "tp": tp_price,
+                "deviation": 20,          # Max slippage allowed (in points)
+                "magic": self.magic,      # Unique Bot ID
+                "comment": "AI Bot Trade",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": type_filling,
+            }
+
+            # 5. Send the order - SERIALIZED via execution lock to prevent race conditions
+            with self._execution_lock:
+                # Re-check connection inside lock (in case connection dropped during wait)
+                if not self.connected or mt5.terminal_info() is None:
+                    return {"success": False, "reason": "Connection lost while waiting for execution lock."}
+                
+                result = mt5.order_send(request)
+
+            # 6. Check if it succeeded and handle specific error codes
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                self._log_trade_history(
+                    action=action.upper(),
+                    symbol=symbol,
+                    lots=lots,
+                    price=result.price,
+                    ticket=result.order,
+                    comment=request.get("comment", ""),
+                    strategy=strategy
+                )
+                return {"success": True, "ticket": result.order, "price": result.price}
+            
+            # Handle specific error conditions
+            elif result.retcode == mt5.TRADE_RETCODE_REQUOTE:
+                self.notify(f"⚠️ REQUOTE on {symbol}: Ask={tick.ask}, Bid={tick.bid}. Price moved too fast. Retry.")
+                return {"success": False, "reason": f"Requote at {tick.ask}/{tick.bid}. Price moved during submission."}
+            
+            elif result.retcode == mt5.TRADE_RETCODE_PRICE_CHANGED:
+                self.notify(f"⚠️ PRICE_CHANGED on {symbol}: Slippage detected. Requested {price}, market moved.")
+                return {"success": False, "reason": f"Price changed before execution. Slippage occurred."}
+            
+            else:
+                self.notify(f"❌ Order rejected. MT5 Code: {result.retcode}, Comment: {result.comment}")
+                return {"success": False, "reason": f"Order rejected. MT5 Code: {result.retcode}, {result.comment}"}
+        finally:
+            with self._execution_lock:
+                self._pending_orders.discard(order_key)
 
     
     def get_historical_rates(self, symbol: str, timeframe: str = "H1", count: int = 50):
@@ -496,6 +543,7 @@ class Trader:
                         strategy="Unknown",
                         profit=position.profit,
                     )
+                    self._mark_cooldown(symbol)
                     self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
 
     def close_position(self, symbol: str):
@@ -578,6 +626,7 @@ class Trader:
                         strategy="Unknown",
                         profit=position.profit,
                     )
+                    self._mark_cooldown(symbol)
                     self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
 
         return success
@@ -656,60 +705,7 @@ class Trader:
                     strategy="Unknown",
                     profit=position.profit,
                 )
-                responses.append(f"✅ Closed profitable {pos_symbol} (Ticket #{position.ticket}) at {result.price} for profit ${position.profit:.2f}")
+                self._mark_cooldown(pos_symbol)
+                responses.append(f"✅ Closed {pos_symbol} (Ticket #{position.ticket}) at {result.price}")
 
-        return responses
-
-    def partial_close_position(self, ticket: int, symbol: str, close_ratio: float = 0.5) -> dict:
-        """Close a fraction of an open position to secure profits."""
-        if not self.connected:
-            return {"success": False, "reason": "Not connected to MT5"}
-
-        positions = mt5.positions_get(ticket=ticket)
-        if not positions:
-            return {"success": False, "reason": "Position not found"}
-
-        pos = positions[0]
-        info = mt5.symbol_info(symbol)
-        if info is None:
-            return {"success": False, "reason": "Symbol info not found"}
-
-        close_volume = round(pos.volume * close_ratio, 2)
-        min_lot = info.volume_min
-
-        if close_volume < min_lot:
-            return {"success": False, "reason": f"Volume {close_volume} below minimum {min_lot}"}
-
-        action = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
-        price = mt5.symbol_info_tick(symbol).bid if action == mt5.ORDER_TYPE_SELL else mt5.symbol_info_tick(symbol).ask
-
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": close_volume,
-            "type": action,
-            "position": pos.ticket,
-            "price": price,
-            "deviation": 20,
-            "magic": 234000,
-            "comment": f"Partial Close {close_ratio*100}%",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
-
-        result = mt5.order_send(request)
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return {"success": False, "reason": f"Retcode {result.retcode}: {result.comment}"}
-
-        self._log_trade_history(
-            action="CLOSE",
-            symbol=symbol,
-            lots=close_volume,
-            price=result.price,
-            ticket=result.order,
-            comment=f"Partial Close {close_ratio*100}%",
-            strategy="Unknown",
-            profit=pos.profit * close_ratio,
-        )
-
-        return {"success": True, "ticket": result.order, "volume_closed": close_volume}
+        return "\n".join(responses)

@@ -487,6 +487,15 @@ class AgentExecutor:
         account = self.broker.getAccountInfo()
         if not account:
             return {}
+
+        cfg = self._load_config()
+        tracked = cfg.get("trading_symbols", [])
+        cooldowns = {}
+        for symbol in tracked:
+            in_cd, remaining = self.broker.is_in_cooldown(symbol)
+            if in_cd:
+                cooldowns[symbol] = f"{remaining:.0f}s"
+
         return {
             "balance":      round(account.balance, 2),
             "equity":       round(account.equity, 2),
@@ -494,6 +503,7 @@ class AgentExecutor:
             "margin_level": round(account.margin_level, 2) if account.margin_level else None,
             "margin":       round(getattr(account, "margin", 0.0), 2),
             "free_margin":  round(getattr(account, "margin_free", 0.0), 2),
+            "cooldowns":    cooldowns,
         }
 
     def _open_positions(self) -> dict:
@@ -951,6 +961,10 @@ class AgentSynthesizer:
         ]
         if dd_v > 0:
             lines.append(f"Trailing drawdown from peak: ${dd_v:,.2f} ({dd_p:.1f}%).")
+        cds = acct.get("cooldowns", {})
+        if cds:
+            cd_str = ", ".join(f"{s}({t})" for s, t in cds.items())
+            lines.append(f"⏸️ Cooling down: {cd_str}")
         return " ".join(lines)
  
     def _positions(self, plan, r) -> str:

@@ -1353,11 +1353,6 @@ class ARIA:
         self.user_model.observe("session_start")
         # ─────────────────────────────────────────────────────────────────
 
-        # Trade Cooldown — prevents re-entry immediately after closing
-        # Maps symbol → timestamp when cooldown expires
-        self.trade_cooldown: dict[str, datetime] = {}
-        self.cooldown_duration_minutes = 1 # 0 = disabled, > 0 = minutes to wait
-
         # Pending multi-turn state
         self.pending_action: Optional[str] = None
         self.pending_data: dict = {}
@@ -1712,11 +1707,6 @@ class ARIA:
         if not allowed:
             return f"🛑 Trade blocked: {reason}"
 
-        # Check cooldown
-        is_allowed, cooldown_msg = self._check_cooldown(symbol)
-        if not is_allowed:
-            return cooldown_msg
-
         return self.executor.execute_trade(symbol, direction)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1770,12 +1760,6 @@ class ARIA:
                 d   = self.pending_data
                 symbol = d["symbol"]
                 
-                # Check cooldown before confirming
-                is_allowed, cooldown_msg = self._check_cooldown(symbol)
-                if not is_allowed:
-                    self._clear_pending()
-                    return True, cooldown_msg
-                
                 resp = self.executor.execute_trade(symbol, d["direction"], d.get("lots"))
                 self._clear_pending()
                 return True, resp
@@ -1794,8 +1778,6 @@ class ARIA:
             if lower in ("yes", "y", "confirm", "close it"):
                 symbol = self.pending_data.get("symbol")
                 resp   = self.executor.close_position(symbol)
-                if "✅" in resp:  # Only mark cooldown if close succeeded
-                    self._mark_cooldown(symbol)
                 self._clear_pending()
                 return True, resp
             self._clear_pending()
@@ -1805,14 +1787,6 @@ class ARIA:
         if action == "confirm_close_all":
             if lower in ("yes", "y", "confirm", "close all"):
                 resp = self.executor.close_all()
-                # Mark cooldown for all open positions (they were closed)
-                if "✅" in resp:
-                    try:
-                        positions = self.broker.getPositions()
-                        for pos in positions:
-                            self._mark_cooldown(pos.symbol)
-                    except:
-                        pass  # If we can't get positions, still proceed with close
                 self._clear_pending()
                 return True, resp
             self._clear_pending()
@@ -1852,12 +1826,6 @@ class ARIA:
                 d = self.pending_data
                 symbol = d["symbol"]
                 
-                # Check cooldown before retrying
-                is_allowed, cooldown_msg = self._check_cooldown(symbol)
-                if not is_allowed:
-                    self._clear_pending()
-                    return True, cooldown_msg
-                
                 resp = self.executor.execute_trade(symbol, d["direction"], lots=0.01)
                 self._clear_pending()
                 return True, resp
@@ -1896,46 +1864,17 @@ class ARIA:
 
     def set_cooldown_duration(self, minutes: int):
         """Set the cooldown period (in minutes) after closing a trade."""
-        self.cooldown_duration_minutes = max(0, minutes)
-        if minutes > 0:
-            self._type_print(f"Cooldown set to {minutes} minute(s). "
-                           f"Cannot re-trade a symbol for {minutes}min after closing it.")
-        else:
-            self._type_print("Cooldown disabled.")
+        seconds = max(0, int(minutes * 60))
+        try:
+            self.broker.set_cooldown(seconds)
+            if seconds > 0:
+                self._type_print(f"Cooldown set to {minutes} minute(s). "
+                               f"Cannot re-trade a symbol for {minutes}min after closing it.")
+            else:
+                self._type_print("Cooldown disabled.")
+        except Exception:
+            self._type_print("Failed to update broker cooldown setting.")
 
-    def _mark_cooldown(self, symbol: str):
-        """Mark a symbol as in cooldown after it's closed."""
-        if self.cooldown_duration_minutes > 0:
-            expiry = datetime.now() + timedelta(minutes=self.cooldown_duration_minutes)
-            self.trade_cooldown[symbol] = expiry
-
-    def _check_cooldown(self, symbol: str) -> tuple[bool, str]:
-        """
-        Check if a symbol is in cooldown.
-        Returns (is_allowed, message).
-        """
-        if symbol not in self.trade_cooldown:
-            return True, ""
-        
-        expiry = self.trade_cooldown[symbol]
-        if datetime.now() >= expiry:
-            # Cooldown expired
-            del self.trade_cooldown[symbol]
-            return True, ""
-        
-        # Still in cooldown
-        remaining = (expiry - datetime.now()).total_seconds() / 60
-        return False, (
-            f"⏸️ {symbol} is in cooldown for {remaining:.1f} more minute(s). "
-            f"You just closed it — prevent impulsive re-entry."
-        )
-
-    def _clear_cooldown(self, symbol: Optional[str] = None):
-        """Clear cooldown for a symbol or all symbols."""
-        if symbol:
-            self.trade_cooldown.pop(symbol, None)
-        else:
-            self.trade_cooldown.clear()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Setting change handler
