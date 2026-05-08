@@ -2,10 +2,16 @@
 strategies/models/news_classifier.py — Lightweight Heuristic News Classification
 
 Provides sentiment and cluster labeling for financial news using keyword matching
-and domain lexicon. No external API dependencies, works offline.
+and domain lexicon. The NewsFetcher uses RSS/Atom feeds to collect recent articles.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+import hashlib
+import xml.etree.ElementTree as ET
+from typing import List, Optional
+
+import requests
 
 
 @dataclass
@@ -61,8 +67,13 @@ class NewsClassifier:
         NewsClassification
             Sentiment, confidence, cluster label, and relevance score.
         """
-        title = str(article.get("title", "")).lower()
-        description = str(article.get("description", "")).lower()
+        def get_field(field_name: str) -> str:
+            if isinstance(article, dict):
+                return str(article.get(field_name, "") or "")
+            return str(getattr(article, field_name, "") or "")
+
+        title = get_field("title").lower()
+        description = get_field("description").lower()
         text = title + " " + description
         
         # Count sentiment indicators
@@ -100,5 +111,91 @@ class NewsClassifier:
             cluster_label=assigned_cluster,
             is_fake=False,
             relevance=round(relevance, 2),
-            title=article.get("title", "Unknown Event")
+            title=get_field("title") or "Unknown Event"
         )
+
+
+import hashlib
+from datetime import datetime, timedelta
+
+# Cluster importance weights for signal scoring
+CLUSTER_WEIGHTS = {
+    "Rate Decision":   2.0,
+    "Inflation Data":  1.8,
+    "Labor Market":    1.5,
+    "GDP & Growth":    1.3,
+    "Geopolitical":    1.2,
+    "General Market":  1.0,
+}
+
+
+class NewsArticle:
+    """Simple article container."""
+    def __init__(self, title: str, description: str = "", url: str = ""):
+        self.title       = title
+        self.description = description
+        self.url         = url
+        self.id          = hashlib.md5(title.encode()).hexdigest()[:12]
+        self.published   = datetime.now()
+
+
+class NewsFetcher:
+    """
+    Lightweight RSS fetcher. Pulls financial headlines from free feeds.
+    Falls back gracefully if network is unavailable.
+    """
+
+    RSS_FEEDS = [
+        "https://feeds.reuters.com/reuters/businessNews",
+        "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "https://rss.cnbc.com/rss/cnbc_world.xml",
+    ]
+
+    def __init__(self):
+        self._cache: list[NewsArticle] = []
+        self._last_fetch: datetime = datetime.min
+
+    def fetch(self, max_age_hours: int = 2) -> list[NewsArticle]:
+        """
+        Returns cached articles if fresh, otherwise attempts RSS fetch.
+        Silently returns empty list if network is unavailable.
+        """
+        now = datetime.now()
+        if self._cache and (now - self._last_fetch) < timedelta(hours=max_age_hours):
+            return self._cache
+
+        articles = []
+        for feed_url in self.RSS_FEEDS:
+            try:
+                articles.extend(self._parse_feed(feed_url))
+            except Exception:
+                continue  # Network unavailable — skip silently
+
+        if articles:
+            self._cache = articles
+            self._last_fetch = now
+
+        return self._cache
+
+    def _parse_feed(self, url: str) -> list[NewsArticle]:
+        """Parse an RSS feed URL into NewsArticle objects."""
+        try:
+            import urllib.request
+            import xml.etree.ElementTree as ET
+
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                content = response.read()
+
+            root = ET.fromstring(content)
+            articles = []
+            for item in root.iter("item"):
+                title = item.findtext("title", "").strip()
+                desc  = item.findtext("description", "").strip()
+                link  = item.findtext("link", "").strip()
+                if title:
+                    articles.append(NewsArticle(title, desc, link))
+
+            return articles[:20]  # limit per feed
+        except Exception:
+            return []

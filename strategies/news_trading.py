@@ -43,7 +43,7 @@ class NewsTradingStrategy:
                 continue
 
             # 4. Aggregate Impact & Sentiment
-            impact_multiplier = CLUSTER_WEIGHTS.get(classified.cluster, 1.0)
+            impact_multiplier = CLUSTER_WEIGHTS.get(classified.cluster_label, 1.0)
             signal_weight = classified.confidence * impact_multiplier
 
             if classified.sentiment == "BULLISH":
