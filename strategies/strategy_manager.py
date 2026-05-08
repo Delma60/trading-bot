@@ -1,5 +1,6 @@
 import pandas as pd
 
+from inspect import signature
 from strategies.arbitrage import ArbitrageStrategy
 from strategies.breakout import BreakoutStrategy
 from strategies.momentum import MomentumStrategy
@@ -159,7 +160,7 @@ class StrategyManager:
         feature_vector : np.ndarray
             The vector returned in check_signals()["feature_vector"] at the
             time the trade was opened.  Store it in a dict keyed by ticket
-            when the trade opens; pass it here when it closes.
+            when the trade closes.
         action : str
             "BUY" or "SELL" — the direction that was taken.
         profit : float
@@ -184,6 +185,23 @@ class StrategyManager:
                     f"Validation accuracy: {acc:.1%}",
                     priority="normal",
                 )
+
+    def continuous_learning_routine(self, symbol: str):
+        """Retrain strategy models and meta-scorer for a symbol using recent history."""
+        raw_df = self._ohlcv_cache.fetch(self.broker, symbol, "H1", num_bars=2000)
+        if raw_df is None or raw_df.empty:
+            self.notify(f"[StrategyManager] Could not fetch OHLCV for {symbol} to retrain.")
+            return
+
+        feat_df = FeatureEngineer.compute(raw_df)
+        if feat_df.empty:
+            self.notify(f"[StrategyManager] Feature engineering failed for {symbol} during retraining.")
+            return
+
+        self.lstm.train(feat_df, symbol=symbol, force=True)
+        acc = self.meta.train(force=True)
+        if acc > 0:
+            self.notify(f"[StrategyManager] Retrained models for {symbol}. Meta accuracy: {acc:.1%}")
 
     def check_signals(
         self,
@@ -250,7 +268,13 @@ class StrategyManager:
         strategy_signals: dict[str, dict] = {}
         for name, engine in self.engines.items():
             try:
-                strategy_signals[name] = engine.analyze(feat_df)
+                method_sig = signature(engine.analyze)
+                args = [feat_df]
+                if len(method_sig.parameters) >= 2:
+                    args.append(symbol)
+                if len(method_sig.parameters) >= 3:
+                    args.append(self.broker)
+                strategy_signals[name] = engine.analyze(*args)
             except Exception as exc:
                 self.notify(f"[StrategyManager] ⚠️ {name} raised: {exc}")
                 strategy_signals[name] = {"action": "WAIT", "confidence": 0.0}

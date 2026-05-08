@@ -16,7 +16,7 @@ class RiskManager:
         self.max_open_trades = max_open_trades
         self.min_margin_level = min_margin_level
         self.notify = notify_callback
-        self.MIN_PROFIT_TO_PYRAMID: float = 2.00   # USD — must be this profitable to pyramid
+        self.MIN_PROFIT_TO_PYRAMID: float = 0.50   # USD — must be this profitable to pyramid
         self.SPREAD_TOLERANCE_USD:  float = -0.50  # USD — below this = genuine loser (not just spread noise)
         
         self.daily_high_watermark = 0.0 
@@ -266,7 +266,12 @@ class DynamicRiskTargeter:
             if pd.isna(atr):
                 return {}
 
-            pip_multiplier = 100.0 if "JPY" in symbol.upper() else 10000.0
+            if "XAU" in symbol.upper() or "XAG" in symbol.upper():
+                pip_multiplier = 100.0
+            elif "JPY" in symbol.upper():
+                pip_multiplier = 100.0
+            else:
+                pip_multiplier = 10000.0
             atr_pips = atr * pip_multiplier
             current_price = df["close"].iloc[-1]
             recent_high = df["high"].rolling(window=20, min_periods=1).max().iloc[-1]
@@ -368,7 +373,12 @@ class TrailingStopManager:
             if not atr_pips or atr_pips <= 0:
                 continue
 
-            pip_multiplier = 100.0 if "JPY" in symbol.upper() else 10000.0
+            if "XAU" in symbol.upper() or "XAG" in symbol.upper():
+                pip_multiplier = 100.0
+            elif "JPY" in symbol.upper():
+                pip_multiplier = 100.0
+            else:
+                pip_multiplier = 10000.0
             breakeven_trigger_distance = (atr_pips * 0.8) / pip_multiplier
 
             if ticket not in self.peak_prices:
@@ -385,7 +395,7 @@ class TrailingStopManager:
                     if current_sl < open_price:
                         be_price = round(open_price + (2.0 / pip_multiplier), 5)
                         if self.broker.modify_position(ticket, symbol, be_price):
-                            if self._verify_stop_loss(ticket, symbol, be_price):
+                            if self._verify_order_levels(ticket, symbol, be_price):
                                 print(f"[Profit Lock] 🛡️ {symbol} is now RISK FREE at {be_price}")
                                 current_sl = be_price
                             else:
@@ -398,7 +408,7 @@ class TrailingStopManager:
                     if seventy_five_percent_mark > current_sl:
                         new_sl = round(seventy_five_percent_mark, 5)
                         if self.broker.modify_position(ticket, symbol, new_sl):
-                            if self._verify_stop_loss(ticket, symbol, new_sl):
+                            if self._verify_order_levels(ticket, symbol, new_sl):
                                 print(f"[Profit Lock] 💰 Raised 75% Profit Lock on {symbol} to {new_sl}")
                             else:
                                 print(f"[Profit Lock] ❌ Failed to verify 75% SL lock for {symbol} ticket {ticket}.")
@@ -416,7 +426,7 @@ class TrailingStopManager:
                     if current_sl == 0.0 or current_sl > open_price:
                         be_price = round(open_price - (2.0 / pip_multiplier), 5)
                         if self.broker.modify_position(ticket, symbol, be_price):
-                            if self._verify_stop_loss(ticket, symbol, be_price):
+                            if self._verify_order_levels(ticket, symbol, be_price):
                                 print(f"[Profit Lock] 🛡️ {symbol} is now RISK FREE at {be_price}")
                                 current_sl = be_price
                             else:
@@ -429,7 +439,7 @@ class TrailingStopManager:
                     if current_sl == 0.0 or seventy_five_percent_mark < current_sl:
                         new_sl = round(seventy_five_percent_mark, 5)
                         if self.broker.modify_position(ticket, symbol, new_sl):
-                            if self._verify_stop_loss(ticket, symbol, new_sl):
+                            if self._verify_order_levels(ticket, symbol, new_sl):
                                 print(f"[Profit Lock] 💰 Lowered 75% Profit Lock on {symbol} to {new_sl}")
                             else:
                                 print(f"[Profit Lock] ❌ Failed to verify 75% SL lock for {symbol} ticket {ticket}.")
@@ -505,9 +515,10 @@ class ProfitGuard:
         self.broker  = broker
         self.notify  = notify_callback
 
-        self._peak:          dict[int, float] = {}   # ticket → highest seen profit
-        self._breakeven_set: set[int]         = set() # tickets whose SL is already at BE
-        self._closed_this_cycle: set[int]     = set() # prevent double-close in one scan
+        self._peak:              dict[int, float] = {}   # ticket → highest seen profit
+        self._breakeven_set:     set[int]         = set() # tickets whose SL is already at BE
+        self._be_attempted:      set[int]         = set() # tickets already attempted for breakeven move
+        self._closed_this_cycle: set[int]         = set() # prevent double-close in one scan
 
         self.running  = False
         self._thread  = None
@@ -635,18 +646,24 @@ class ProfitGuard:
         entry      = float(pos.price_open)
         current_sl = float(pos.sl or 0.0)
 
+        if ticket in self._be_attempted:
+            return
+
         # Don't move if SL is already at or better than breakeven
         if pos.type == 0:   # BUY — sl must be ≤ entry to improve; we want ≥ entry
             if current_sl >= entry:
                 self._breakeven_set.add(ticket)
+                self._be_attempted.add(ticket)
                 return
         else:               # SELL — sl must be ≥ entry; we want ≤ entry
             if 0 < current_sl <= entry:
                 self._breakeven_set.add(ticket)
+                self._be_attempted.add(ticket)
                 return
 
         new_sl = round(entry, 5)
         ok = self.broker.modify_position(ticket, symbol, new_sl)
+        self._be_attempted.add(ticket)
         if ok:
             self._breakeven_set.add(ticket)
             self.notify(

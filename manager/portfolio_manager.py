@@ -11,7 +11,7 @@ import threading
 from .risk_manager import RiskManager
 from typing import Dict
 from manager.risk_manager import TradeGatekeeper, CorrelationGuard
-
+from strategies.strategy_manager import OHLCVCache
 class PortfolioManager:
     """The ML-Driven Offense Engine: Learns which strategies work in which environments."""
     
@@ -36,6 +36,9 @@ class PortfolioManager:
             self.master_watchlist.extend(symbols)
             
         self.available_strategies = list(self.strategy_manager.engines.keys())
+        
+        # Reuse the strategy manager's OHLCV cache if available.
+        self._ohlcv_cache = getattr(self.strategy_manager, '_ohlcv_cache', OHLCVCache(ttl_seconds=60))
         
         # Thread-safe lock for model predictions (prevents race conditions between main and background threads)
         self._model_lock = threading.Lock()
@@ -180,7 +183,7 @@ class PortfolioManager:
         best_strategy_index = np.argmax(predictions)
         return self.available_strategies[best_strategy_index]
 
-    def evaluate_portfolio_opportunities(self, risk_pct: float, stop_loss: float, max_daily_loss: float) -> list:
+    def evaluate_portfolio_opportunities(self, risk_pct: float, stop_loss: float, max_daily_loss: float, dry_run: bool = False) -> list:
         results = []
         portfolio_size = len(self.master_watchlist)
         
@@ -230,6 +233,12 @@ class PortfolioManager:
                 )
                 
                 if trade_plan["approved"]:
+                    if dry_run:
+                        results.append(
+                            f"📈 {symbol}: {signal['action']} | confidence {signal.get('confidence', 0.0):.0%} | strategy {signal.get('strategy_used', strategy_name)}"
+                        )
+                        continue
+
                     # For session-based trading, use micro-lots to prevent large position blowups
                     lots = self.risk_manager.calculate_micro_lot()  # Returns 0.01
                     sl_pips = trade_plan["stop_loss_pips"]
@@ -251,7 +260,7 @@ class PortfolioManager:
                         # (Optional) If you are using the AI logging, store the state here
                         self._temporary_trade_states = getattr(self, '_temporary_trade_states', {})
                         self._temporary_trade_states[symbol] = {
-                            "state": current_state.tolist(), # Assuming you saved current_state earlier
+                            "state": current_state.flatten().tolist(),
                             "strategy": strategy_name,
                             "action":   signal["action"],
                         }

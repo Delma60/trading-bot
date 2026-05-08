@@ -1111,7 +1111,7 @@ from manager.nlp_engine import NLPEngine
 from manager.reasoning_engine import ReasoningEngine
 from manager.response_engine import ResponseEngine
 from manager.portfolio_manager import PortfolioManager
-from manager.risk_manager import RiskManager, DynamicRiskTargeter, TrailingStopManager, ProfitGuard
+from manager.risk_manager import RiskManager, TradeGatekeeper, DynamicRiskTargeter, TrailingStopManager, ProfitGuard
 from manager.profile_manager import ProfileManager
 from manager.agent_core import (AgentPlan, AgentCore)
 from strategies.strategy_manager import StrategyManager
@@ -1135,14 +1135,21 @@ class ActionExecutor:
         self.sm        = strategy_manager
         self.rm        = risk_manager
         self.profile   = profile_path
+        self._cfg_cache = None
 
     def _cfg(self) -> dict:
-        try:
-            return json.loads(self.profile.read_text())
-        except Exception:
-            return {"risk_percentage": 1.0, "stop_loss": 20.0,
-                    "max_daily_loss": 500.0, "trading_symbols": ["EURUSD"],
-                    "target_profit": 10.0}
+        if self._cfg_cache is None:
+            try:
+                self._cfg_cache = json.loads(self.profile.read_text())
+            except Exception:
+                self._cfg_cache = {
+                    "risk_percentage": 1.0,
+                    "stop_loss": 20.0,
+                    "max_daily_loss": 500.0,
+                    "trading_symbols": ["EURUSD"],
+                    "target_profit": 10.0,
+                }
+        return self._cfg_cache
 
     # Inside ActionExecutor in chat.py
     
@@ -1177,19 +1184,16 @@ class ActionExecutor:
 
         # 4. Send the order to the MT5 Broker
         try:
-            success = self.broker.open_trade(
+            result = self.broker.execute_trade(
                 symbol=symbol,
-                order_type=direction,
-                volume=lot_size,
-                sl_pips=sl_pips,
-                tp_pips=tp_pips
+                action=direction,
+                lots=lot_size,
+                stop_loss_pips=sl_pips,
+                take_profit_pips=tp_pips,
             )
-            
-            if success:
-                return f"Successfully executed {direction} on {symbol} (SL: {sl_pips}p, TP: {tp_pips}p)."
-            else:
-                return f"Broker rejected the {direction} order for {symbol}."
-                
+            if result.get("success"):
+                return f"Successfully executed {direction} on {symbol} (Ticket #{result['ticket']})."
+            return f"Broker rejected the {direction} order for {symbol}: {result.get('reason', 'unknown error')}"
         except Exception as e:
             return f"Execution failed: {str(e)}"
 
@@ -1588,6 +1592,10 @@ class ARIA:
             self.pending_action = "confirm_trade"
             self.pending_data   = {"direction": direction, "symbol": symbol,
                                    "lots": float(parts[1]) if len(parts) > 1 else None}
+            response += (
+                f"\n\nReady to execute {direction} {symbol}? "
+                f"Say 'yes' to confirm or 'cancel'."
+            )
 
         return response
 
@@ -1880,7 +1888,11 @@ class ARIA:
                     self._type_print("Logging out. Goodbye.")
                     break
 
-                response = self.process_message(inp)
+                try:
+                    response = self.process_message(inp)
+                except Exception as exc:
+                    response = f"Something went wrong: {exc}. Try again."
+
                 if response:
                     self._type_print(response)
 

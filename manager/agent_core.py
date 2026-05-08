@@ -332,6 +332,9 @@ class AgentExecutor:
             "lstm_prediction": sig_r.get("lstm_prediction", {}),
         }
         strategy_signals = sig_r.get("strategy_signals", {})
+        if not self.reasoning or not hasattr(self.reasoning, "reasoner"):
+            return {"grade": "D", "score": 0, "proceed": False, "notes": ["Reasoning engine unavailable."]}
+
         regime   = regime_r.get("regime", "Unknown") if regime_r else "Unknown"
         risk_plan = risk_r.get("risk_plan", {"stop_loss_pips": 20, "take_profit_pips": 40}) 
         htf_trend = htf_r.get("trend", "NEUTRAL") if htf_r else "NEUTRAL"
@@ -512,9 +515,10 @@ class AgentExecutor:
         cfg = self._load_config()
         try:
             results = self.pm.evaluate_portfolio_opportunities(
-                risk_pct      = cfg.get("risk_percentage", 1.0),
-                stop_loss     = cfg.get("stop_loss", 20.0),
-                max_daily_loss= cfg.get("max_daily_loss", 500.0),
+                risk_pct       = cfg.get("risk_percentage", 1.0),
+                stop_loss      = cfg.get("stop_loss", 20.0),
+                max_daily_loss = cfg.get("max_daily_loss", 500.0),
+                dry_run        = True,
             )
             return {"scan_results": results}
         except Exception as e:
@@ -606,8 +610,12 @@ class AgentExecutor:
                         elif action == "SELL": sells  += 1
                         elif action == "CLOSE":
                             closes += 1
+                            profit_value = row.get("Profit", "") or row.get("Comment", "")
                             try:
-                                pnl += float(row.get("Comment", "0").replace("Profit:", "").strip())
+                                if row.get("Profit"):
+                                    pnl += float(row.get("Profit"))
+                                else:
+                                    pnl += float(profit_value.replace("Profit:", "").strip())
                             except ValueError:
                                 pass
             return {
@@ -624,8 +632,12 @@ class AgentExecutor:
         for t in trades:
             if t.get("Action") == "CLOSE":
                 sym = t.get("Symbol", "")
+                profit_value = t.get("Profit", "") or t.get("Comment", "")
                 try:
-                    val = float(t.get("Comment", "0").replace("Profit:", "").strip())
+                    if t.get("Profit"):
+                        val = float(t.get("Profit"))
+                    else:
+                        val = float(profit_value.replace("Profit:", "").strip())
                     by_sym[sym] = by_sym.get(sym, 0.0) + val
                 except ValueError:
                     pass
@@ -1124,9 +1136,10 @@ class AgentCore:
             step.result = self.executor.run(step, plan)
             step.status = "done" if "error" not in (step.result or {}) else "failed"
 
-        risk_step = plan.context.get("dynamic_risk_targets")
-        if risk_step:
-            plan.context["dynamic_targets"] = risk_step
+        for step in plan.steps:
+            if step.name == "dynamic_risk_targets" and step.result:
+                plan.context["dynamic_targets"] = step.result
+                break
 
         response = self.synthesizer.synthesize(plan)
         plan.final_response = response

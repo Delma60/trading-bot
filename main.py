@@ -90,14 +90,8 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
                 priority = "trade_executed" if "EXECUTED" in result else "critical" if "🛑" in result or "FATAL" in result else "normal"
                 notify(result, priority=priority)
 
-            # 7. Brief pause to prevent CPU overload before the next real-time scan
-            # Wait in small increments to allow quick shutdown response
-            wait_time = 0
-            while wait_time < scan_interval_seconds and not shutdown_event.is_set():
-                time.sleep(0.1)  # Check every 100ms
-                wait_time += 0.1
-            
-            if shutdown_event.is_set():
+            # 7. Wait for the next scan or a shutdown signal.
+            if shutdown_event.wait(timeout=scan_interval_seconds):
                 notify("🛑 Shutdown signal received. Scanner stopping gracefully...")
                 break
                 

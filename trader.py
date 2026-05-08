@@ -51,7 +51,7 @@ class Trader:
         self.notify(f"✅ MT5 Connected: {self.login} on {self.server}")
         return True
     
-    def _log_trade_history(self, action: str, symbol: str, lots: float, price: float, ticket: int, comment: str, strategy: str = "Unknown"):
+    def _log_trade_history(self, action: str, symbol: str, lots: float, price: float, ticket: int, comment: str, strategy: str = "Unknown", profit: float = None):
         """Logs executed trades to a CSV file for future analytics/ML training."""
         file_path = Path("data/trade_history.csv")
         file_exists = file_path.exists()
@@ -63,9 +63,8 @@ class Trader:
             writer = csv.writer(f)
             # Write headers if the file is new
             if not file_exists:
-                writer.writerow(["Timestamp", "Ticket", "Action", "Symbol", "Volume", "Execution_Price", "Comment", "Strategy"])
+                writer.writerow(["Timestamp", "Ticket", "Action", "Symbol", "Volume", "Execution_Price", "Comment", "Strategy", "Profit"])
             
-            # Write the trade data
             writer.writerow([
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 ticket,
@@ -74,7 +73,8 @@ class Trader:
                 lots,
                 price,
                 comment,
-                strategy
+                strategy,
+                profit if profit is not None else ""
             ])
     
     def getSymbols(self):
@@ -324,7 +324,6 @@ class Trader:
             return None
             
         df = pd.DataFrame(rates)
-        df.to_csv(f"data/symbols/{symbol}_{timeframe}_data.csv", index=False)
         return df
     
     def getBalance(self):
@@ -434,7 +433,8 @@ class Trader:
                     price=result.price,
                     ticket=result.order,
                     comment=f"Profit: {position.profit}",
-                    strategy="Unknown"
+                    strategy="Unknown",
+                    profit=position.profit,
                 )
                 self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
 
@@ -499,7 +499,8 @@ class Trader:
                     price=result.price,
                     ticket=result.order,
                     comment=f"Profit: {position.profit}",
-                    strategy="Unknown"
+                    strategy="Unknown",
+                    profit=position.profit,
                 )
                 self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
         
@@ -576,7 +577,8 @@ class Trader:
                     price=result.price,
                     ticket=result.order,
                     comment=f"Profit: {position.profit}",
-                    strategy="Unknown"
+                    strategy="Unknown",
+                    profit=position.profit,
                 )
                 responses.append(f"✅ Closed profitable {pos_symbol} (Ticket #{position.ticket}) at {result.price} for profit ${position.profit:.2f}")
 

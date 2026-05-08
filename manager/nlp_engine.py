@@ -78,6 +78,7 @@ class NLPEngine:
         self.output: list   = []
         self.nlp_model      = None
         self.intents_data: dict = {}
+        self.is_training = False
 
         self._initialize()
 
@@ -91,6 +92,8 @@ class NLPEngine:
 
     def predict_intent(self, text: str) -> tuple[str, float]:
         """Returns (intent_tag, confidence) for the given text."""
+        if self.nlp_model is None:
+            return "general", 0.0
         bag     = self._bag_of_words(text)
         results = self.nlp_model.predict(bag, verbose=0)[0]
         idx     = int(np.argmax(results))
@@ -257,19 +260,24 @@ class NLPEngine:
     def _build_model(self):
         if self.model_file.exists():
             self.nlp_model = load_model(str(self.model_file))
-        else:
-            self.nlp_model = Sequential([
+            return
+
+        def train_model():
+            self.is_training = True
+            model = Sequential([
                 Dense(128, input_shape=(len(self.training[0]),), activation="relu"),
                 Dense(64, activation="relu"),
                 Dense(len(self.output[0]), activation="softmax"),
             ])
-            self.nlp_model.compile(
+            model.compile(
                 optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"]
             )
-            self.nlp_model.fit(
-                self.training, self.output, epochs=200, batch_size=8, verbose=0
-            )
-            self.nlp_model.save(str(self.model_file))
+            model.fit(self.training, self.output, epochs=200, batch_size=8, verbose=0)
+            model.save(str(self.model_file))
+            self.nlp_model = model
+            self.is_training = False
+
+        threading.Thread(target=train_model, daemon=True).start()
 
     def _process_data(self):
         if self.pickle_file.exists():
