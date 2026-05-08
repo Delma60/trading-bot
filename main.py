@@ -153,7 +153,9 @@ if __name__ == "__main__":
         agent_notify("Keyboard interrupt detected.")
         shutdown_event.set()
     except Exception as e:
+        import traceback
         agent_notify(f"❌ Unexpected error: {e}")
+        traceback.print_exc()  # Print full stack trace for debugging
         shutdown_event.set()
     finally:
         # === GRACEFUL SHUTDOWN SEQUENCE ===

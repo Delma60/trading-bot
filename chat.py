@@ -1072,6 +1072,7 @@
 #             print("\n[ARIA]: Interrupt received — shutting down.")
 #         except Exception as exc:
 #             print(f"\n[ARIA]: ❌ Unexpected error: {exc}")
+# Control Panel\Hardware and Sound\Power Options\Edit Plan Settings
 """
 chat.py — ARIA: Adaptive Reasoning & Intelligence for Algo-trading
 
@@ -1099,7 +1100,7 @@ import sys
 import time
 import getpass
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -1350,6 +1351,11 @@ class ARIA:
         self.proactive_engine.start()
         self.user_model.observe("session_start")
         # ─────────────────────────────────────────────────────────────────
+
+        # Trade Cooldown — prevents re-entry immediately after closing
+        # Maps symbol → timestamp when cooldown expires
+        self.trade_cooldown: dict[str, datetime] = {}
+        self.cooldown_duration_minutes = 1 # 0 = disabled, > 0 = minutes to wait
 
         # Pending multi-turn state
         self.pending_action: Optional[str] = None
@@ -1646,6 +1652,11 @@ class ARIA:
         if not allowed:
             return f"🛑 Trade blocked: {reason}"
 
+        # Check cooldown
+        is_allowed, cooldown_msg = self._check_cooldown(symbol)
+        if not is_allowed:
+            return cooldown_msg
+
         return self.executor.execute_trade(symbol, direction)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1697,7 +1708,15 @@ class ARIA:
         if action == "confirm_trade":
             if lower in ("yes", "y", "go", "do it", "confirm", "execute"):
                 d   = self.pending_data
-                resp = self.executor.execute_trade(d["symbol"], d["direction"], d.get("lots"))
+                symbol = d["symbol"]
+                
+                # Check cooldown before confirming
+                is_allowed, cooldown_msg = self._check_cooldown(symbol)
+                if not is_allowed:
+                    self._clear_pending()
+                    return True, cooldown_msg
+                
+                resp = self.executor.execute_trade(symbol, d["direction"], d.get("lots"))
                 self._clear_pending()
                 return True, resp
             if lower in ("no", "n", "cancel", "abort", "skip"):
@@ -1715,6 +1734,8 @@ class ARIA:
             if lower in ("yes", "y", "confirm", "close it"):
                 symbol = self.pending_data.get("symbol")
                 resp   = self.executor.close_position(symbol)
+                if "✅" in resp:  # Only mark cooldown if close succeeded
+                    self._mark_cooldown(symbol)
                 self._clear_pending()
                 return True, resp
             self._clear_pending()
@@ -1724,6 +1745,14 @@ class ARIA:
         if action == "confirm_close_all":
             if lower in ("yes", "y", "confirm", "close all"):
                 resp = self.executor.close_all()
+                # Mark cooldown for all open positions (they were closed)
+                if "✅" in resp:
+                    try:
+                        positions = self.broker.getPositions()
+                        for pos in positions:
+                            self._mark_cooldown(pos.symbol)
+                    except:
+                        pass  # If we can't get positions, still proceed with close
                 self._clear_pending()
                 return True, resp
             self._clear_pending()
@@ -1761,7 +1790,15 @@ class ARIA:
         if action == "retry_micro_lot":
             if lower in ("yes", "y"):
                 d = self.pending_data
-                resp = self.executor.execute_trade(d["symbol"], d["direction"], lots=0.01)
+                symbol = d["symbol"]
+                
+                # Check cooldown before retrying
+                is_allowed, cooldown_msg = self._check_cooldown(symbol)
+                if not is_allowed:
+                    self._clear_pending()
+                    return True, cooldown_msg
+                
+                resp = self.executor.execute_trade(symbol, d["direction"], lots=0.01)
                 self._clear_pending()
                 return True, resp
             self._clear_pending()
@@ -1794,6 +1831,53 @@ class ARIA:
             pass
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Trade Cooldown Management
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def set_cooldown_duration(self, minutes: int):
+        """Set the cooldown period (in minutes) after closing a trade."""
+        self.cooldown_duration_minutes = max(0, minutes)
+        if minutes > 0:
+            self._type_print(f"Cooldown set to {minutes} minute(s). "
+                           f"Cannot re-trade a symbol for {minutes}min after closing it.")
+        else:
+            self._type_print("Cooldown disabled.")
+
+    def _mark_cooldown(self, symbol: str):
+        """Mark a symbol as in cooldown after it's closed."""
+        if self.cooldown_duration_minutes > 0:
+            expiry = datetime.now() + timedelta(minutes=self.cooldown_duration_minutes)
+            self.trade_cooldown[symbol] = expiry
+
+    def _check_cooldown(self, symbol: str) -> tuple[bool, str]:
+        """
+        Check if a symbol is in cooldown.
+        Returns (is_allowed, message).
+        """
+        if symbol not in self.trade_cooldown:
+            return True, ""
+        
+        expiry = self.trade_cooldown[symbol]
+        if datetime.now() >= expiry:
+            # Cooldown expired
+            del self.trade_cooldown[symbol]
+            return True, ""
+        
+        # Still in cooldown
+        remaining = (expiry - datetime.now()).total_seconds() / 60
+        return False, (
+            f"⏸️ {symbol} is in cooldown for {remaining:.1f} more minute(s). "
+            f"You just closed it — prevent impulsive re-entry."
+        )
+
+    def _clear_cooldown(self, symbol: Optional[str] = None):
+        """Clear cooldown for a symbol or all symbols."""
+        if symbol:
+            self.trade_cooldown.pop(symbol, None)
+        else:
+            self.trade_cooldown.clear()
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Setting change handler
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -1808,6 +1892,7 @@ class ARIA:
         "target profit":    ("target_profit",   "Target Profit"),
         "stop loss":        ("stop_loss",        "Stop Loss"),
         "sl":               ("stop_loss",        "Stop Loss"),
+        "cooldown":         ("cooldown_duration_minutes", "Cooldown Duration"),
     }
 
     def _try_setting_change(self, text: str) -> Optional[str]:
@@ -1830,12 +1915,20 @@ class ARIA:
         if target_key and new_value is not None:
             if target_key in self._SETTING_MAP:
                 cfg_key, display = self._SETTING_MAP[target_key]
+                
+                # Handle cooldown specially (not in config file)
+                if cfg_key == "cooldown_duration_minutes":
+                    self.set_cooldown_duration(int(new_value))
+                    self.memory["last_setting"] = target_key
+                    return f"Updated {display} to {int(new_value)} minute(s). Saved."
+                
+                # Handle other config settings
                 self._update_config(cfg_key, new_value)
                 self.memory["last_setting"] = target_key
                 return f"Updated {display} to {new_value}. Saved."
             return (
                 f"I don't recognise '{target_key}'. "
-                f"Valid settings: risk, target, stop loss, daily loss."
+                f"Valid settings: risk, target, stop loss, daily loss, cooldown."
             )
         return None
 
@@ -1879,7 +1972,7 @@ class ARIA:
 
     def _broker_login(self):
         """Try saved credentials, then prompt interactively."""
-        data = self.profile_manager._read_json(self.profile_manager.profile_file)
+        data = self.profile_manager.load_credentials()
         login, password, server = (
             data.get("login"), data.get("password"), data.get("server")
         )
@@ -1910,8 +2003,7 @@ class ARIA:
                 continue
 
             if self.broker.connect(login=login, password=password, server=server):
-                data.update({"login": login, "password": password, "server": server})
-                self.profile_manager._write_json(self.profile_manager.profile_file, data)
+                self.profile_manager.save_credentials(login, password, server)
                 self._type_print(f"Connected. Account #{self.broker.login} is live.")
             else:
                 self._type_print("Connection failed — verify credentials and check MT5 is running.")
