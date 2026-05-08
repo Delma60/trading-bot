@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from trader import Trader
 from strategies.strategy_manager import StrategyManager
+from manager.local_cache import LocalCache
 from manager.risk_manager import RiskManager
 from manager.portfolio_manager import PortfolioManager
 from chat import ARIA
@@ -124,15 +125,47 @@ if __name__ == "__main__":
 
     # 1. Initialize the core API connection
     broker = Trader(notify_callback=agent_notify)
+    credentials_path = Path("data/credentials.json")
+    credentials = {}
+    if credentials_path.exists():
+        try:
+            credentials = json.loads(credentials_path.read_text())
+        except Exception as exc:
+            agent_notify(f"⚠️ Failed to read credentials: {exc}")
 
-    # 2. Initialize the Engines
-    strategy_manager = StrategyManager(broker, notify_callback=agent_notify)
-    risk_manager = RiskManager(broker, max_open_trades=3, min_margin_level=150.0, notify_callback=agent_notify)
+    connected = False
+    if credentials:
+        connected = broker.connect(
+            credentials.get("login", ""),
+            credentials.get("password", ""),
+            credentials.get("server", "MetaQuotes-Demo"),
+        )
 
-    # 3. Initialize the Portfolio Manager
-    portfolio_manager = PortfolioManager(broker, strategy_manager, risk_manager, notify_callback=agent_notify)
+    if not connected:
+        agent_notify("⚠️ Broker not connected. LocalCache will still warm up from disk if available.")
 
-    # 4. Start the Background Scanner Thread
+    # 2. Load profile symbols and initialize shared cache
+    profile_path = Path("data/profile.json")
+    cfg = {}
+    if profile_path.exists():
+        try:
+            cfg = json.loads(profile_path.read_text())
+        except Exception as exc:
+            agent_notify(f"⚠️ Failed to read profile config: {exc}")
+
+    symbols = cfg.get("trading_symbols", ["EURUSD"])
+    cache = LocalCache(broker, symbols, notify_callback=agent_notify)
+    cache.warm_up()
+    cache.start()
+
+    # 3. Initialize the Engines
+    strategy_manager = StrategyManager(broker, cache=cache, notify_callback=agent_notify)
+    risk_manager = RiskManager(broker, cache=cache, max_open_trades=len(symbols), min_margin_level=150.0, notify_callback=agent_notify)
+
+    # 4. Initialize the Portfolio Manager
+    portfolio_manager = PortfolioManager(broker, strategy_manager, risk_manager, cache=cache, notify_callback=agent_notify)
+
+    # 5. Start the Background Scanner Thread
     # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
         target=autonomous_scanner,
@@ -179,7 +212,12 @@ if __name__ == "__main__":
         if scanner_thread.is_alive():
             agent_notify("⚠️ Scanner thread did not stop within timeout.")
         
-        # 3. Disconnect from broker
+        # 3. Stop cache refresh loop
+        if 'cache' in locals() and cache is not None:
+            agent_notify("Saving cache to disk and stopping background refresh...")
+            cache.stop()
+
+        # 4. Disconnect from broker
         if broker.connected:
             agent_notify("Disconnecting from MetaTrader 5...")
             try:
@@ -188,6 +226,6 @@ if __name__ == "__main__":
             except Exception as e:
                 agent_notify(f"⚠️ Error disconnecting broker: {e}")
         
-        # 4. Final goodbye message
+        # 5. Final goodbye message
         agent_notify("👋 Trading bot shutdown complete. Goodbye!\n")
         sys.exit(0)

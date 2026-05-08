@@ -106,9 +106,10 @@ class SmartReEntrySystem:
 class RiskManager:
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
     
-    def __init__(self, broker, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print,
+    def __init__(self, broker, cache=None, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print,
                  pyramid_min_pips: float = 1.0, spread_tolerance_pips: float = 1.0):
         self.broker = broker
+        self.cache = cache
         self.max_open_trades = max_open_trades
         self.min_margin_level = min_margin_level
         self.notify = notify_callback
@@ -148,9 +149,13 @@ class RiskManager:
             return 0.0
 
     def _pyramid_min_usd(self, symbol: str, lots: float) -> float:
+        if self.cache is not None:
+            return self.cache.get_pip_value(symbol, lots) * self.pyramid_min_pips
         return _pip_value_usd(symbol, lots) * self.pyramid_min_pips
 
     def _spread_tolerance_usd(self, symbol: str, lots: float) -> float:
+        if self.cache is not None:
+            return -abs(self.cache.get_pip_value(symbol, lots) * self.spread_tolerance_pips)
         return -abs(_pip_value_usd(symbol, lots) * self.spread_tolerance_pips)
 
     def _check_existing_positions(self, symbol: str, symbol_positions: list) -> tuple[bool, str]:
@@ -181,12 +186,17 @@ class RiskManager:
         """A detailed check verifying global exposure, symbol exposure, and profitability. 
         Atomic daily loss check (wrapped with _loss_lock) prevents concurrent threads from bypassing limit."""
         
-        account = self.broker.getAccountInfo()
+        account = self.cache.get_account() if self.cache is not None else self.broker.getAccountInfo()
+        if account is None:
+            account = self.broker.getAccountInfo()
+
         if not account:
             return False, "Could not fetch account data from broker."
 
-        positions = self.broker.getPositions()
-        
+        positions = self.cache.get_positions() if self.cache is not None else self.broker.getPositions()
+        if positions is None:
+            positions = self.broker.getPositions()
+
         # 1. Global Exposure Limit (Check against max_open_trades, not portfolio_size)
         current_open_trades = len(positions) if positions else 0
         if current_open_trades >= self.max_open_trades:
@@ -243,7 +253,13 @@ class RiskManager:
         if not allowed:
             return {"approved": False, "reason": reason}
 
-        account = self.broker.getAccountInfo()
+        account = self.cache.get_account() if self.cache is not None else self.broker.getAccountInfo()
+        if account is None:
+            account = self.broker.getAccountInfo()
+
+        if account is None:
+            return {"approved": False, "reason": "Account data not available."}
+
         current_equity = account.equity
         trailing_drawdown = self.daily_high_watermark - current_equity
         actual_risk_pct = base_risk_pct
@@ -269,8 +285,8 @@ class RiskManager:
         atr_pips = dynamic_targets.get("atr_pips", stop_loss_pips)
         safe_sl_pips = atr_pips * 1.5 if atr_pips > 0 else stop_loss_pips
         
-        symbol_info = mt5.symbol_info(symbol)
-        if not symbol_info:
+        symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
+        if symbol_info is None:
             return {"approved": False, "reason": "Symbol info missing."}
 
         pip_multiplier = 1.0 if any(x in symbol for x in ["BTC", "ETH"]) else 10.0
@@ -294,9 +310,9 @@ class RiskManager:
     def calculate_micro_lot(self, symbol: Optional[str] = None) -> float:
         """Return the smallest tradable volume for the symbol, falling back to 0.01 if unknown."""
         if symbol:
-            symbol_info = mt5.symbol_info(symbol)
-            if symbol_info is not None and symbol_info.volume_min and symbol_info.volume_min > 0:
-                return round(symbol_info.volume_min, 2)
+            symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
+            if symbol_info is not None and symbol_info.get("volume_min", 0) and symbol_info.get("volume_min", 0) > 0:
+                return round(symbol_info["volume_min"], 2)
 
         return 0.01  # Default micro-lot for MT5 if symbol-specific data is unavailable
 
@@ -309,33 +325,45 @@ class RiskManager:
         :param stop_loss_points: The stop loss distance in POINTS (not pips). 
                                 Points = the smallest price movement (tick_size).
         """
-        symbol_info = mt5.symbol_info(symbol)
+        symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
         if symbol_info is None:
             # [Debug] Failed to get symbol info
             return 0.0
 
-        # 1. Fetch dynamic tick data from the broker
-        tick_value = symbol_info.trade_tick_value 
-        tick_size = symbol_info.trade_tick_size
+        # 1. Fetch dynamic tick data from the broker or cache
+        tick_value = float(symbol_info.get("trade_tick_value", 0.0))
+        tick_size = float(symbol_info.get("trade_tick_size", 0.0))
+        min_lot = float(symbol_info.get("volume_min", 0.0))
+        max_lot = float(symbol_info.get("volume_max", 0.0))
+        step_lot = float(symbol_info.get("volume_step", 0.0))
 
-        if tick_value == 0 or tick_size == 0:
-            # [Debug] Tick value/size is 0; cannot calculate risk
+        if tick_value == 0 or tick_size == 0 or step_lot == 0:
+            # [Debug] Tick value/size/step is invalid; cannot calculate risk
             return 0.0
 
         # 2. Calculate the monetary risk for 1 standard lot
         # If 1 lot moves by the stop loss distance, how much money do we lose?
+        stop_loss_points = abs(stop_loss_points)
+        if stop_loss_points == 0:
+            return 0.0
+
         risk_per_1_lot = stop_loss_points * tick_value
+        if risk_per_1_lot == 0.0:
+            return 0.0
 
         # 3. Calculate exact required lot size to match our target risk
         raw_lot_size = risk_amount_usd / risk_per_1_lot
 
         # 4. Normalize the lot size to broker rules (min, max, and step)
-        min_lot = symbol_info.volume_min
-        max_lot = symbol_info.volume_max
-        step_lot = symbol_info.volume_step
+        min_lot = float(symbol_info.get("volume_min", 0.0))
+        max_lot = float(symbol_info.get("volume_max", 0.0))
+        step_lot = float(symbol_info.get("volume_step", 0.0))
+
+        if step_lot <= 0 or min_lot <= 0:
+            return 0.0
 
         # Round down to the nearest allowed step (e.g., 0.01 micro lots)
-        # Using round() with division and multiplication ensures precision
+        # Using floor with step normalization ensures precision
         clean_lot_size = math.floor(raw_lot_size / step_lot) * step_lot
 
         # 5. Clamp limits to prevent broker rejection errors

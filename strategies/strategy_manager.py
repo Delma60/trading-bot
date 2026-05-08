@@ -157,15 +157,16 @@ class StrategyManager:
         "Arbitrage":          "Arbitrage: Exploits price differences between markets.",
     }
 
-    def __init__(self, broker: Trader, notify_callback=print):
+    def __init__(self, broker: Trader, cache=None, notify_callback=print):
         self.broker  = broker
+        self.cache   = cache
         self.notify  = notify_callback
 
         # ML/DL components — instantiated once and reused across calls
         self.lstm = LSTMPredictor()
         self.meta = MetaScorer()
         self.features = FeatureEngineer()
-        self._ohlcv_cache = OHLCVCache(ttl_seconds=60)
+        self._ohlcv_cache = None if cache is not None else OHLCVCache(ttl_seconds=60)
 
         # Unsupervised learning engine
         try:
@@ -288,14 +289,31 @@ class StrategyManager:
             "strategy_signals": dict,           # only in ensemble mode
         }
         """
-        # 1. Fetch raw OHLCV ──────────────────────────────────────────────────
-        raw_df = self._ohlcv_cache.fetch(self.broker, symbol, timeframe, num_bars=1000)
-        if raw_df is None or raw_df.empty:
-            return {
-                "action": "WAIT",
-                "confidence": 0.0,
-                "reason": f"Could not fetch OHLCV data for {symbol}.",
-            }
+        # 1. Fetch raw OHLCV / pre-computed features from cache if available
+        if self.cache is not None:
+            feat_df = self.cache.get_features(symbol)
+            raw_df = self.cache.get_raw_ohlcv(symbol)
+            if feat_df is None or feat_df.empty:
+                return {
+                    "action": "WAIT",
+                    "confidence": 0.0,
+                    "reason": f"Features for {symbol} are still warming up in cache.",
+                }
+        else:
+            raw_df = self._ohlcv_cache.fetch(self.broker, symbol, timeframe, num_bars=1000)
+            if raw_df is None or raw_df.empty:
+                return {
+                    "action": "WAIT",
+                    "confidence": 0.0,
+                    "reason": f"Could not fetch OHLCV data for {symbol}.",
+                }
+            feat_df = FeatureEngineer.compute(raw_df)
+            if feat_df.empty:
+                return {
+                    "action": "WAIT",
+                    "confidence": 0.0,
+                    "reason": "Feature engineering produced an empty DataFrame.",
+                }
 
         # (NEW) Market Condition Pre-Filter (Feature #2)
         from manager.risk_manager import MarketConditionFilter
@@ -319,14 +337,15 @@ class StrategyManager:
                 strategy = "Mean_Reversion"
             return self.engines[strategy].analyze(raw_df)
 
-        # 3. Engineer features ────────────────────────────────────────────────
-        feat_df = FeatureEngineer.compute(raw_df)
-        if feat_df.empty:
-            return {
-                "action": "WAIT",
-                "confidence": 0.0,
-                "reason": "Feature engineering produced an empty DataFrame.",
-            }
+        # 3. Engineer features if they were not already cached
+        if self.cache is None:
+            feat_df = FeatureEngineer.compute(raw_df)
+            if feat_df.empty:
+                return {
+                    "action": "WAIT",
+                    "confidence": 0.0,
+                    "reason": "Feature engineering produced an empty DataFrame.",
+                }
 
         # 3.5. Feed features to unsupervised learner ──────────────────────────
         if self.learner:
