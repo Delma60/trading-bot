@@ -1135,21 +1135,18 @@ class ActionExecutor:
         self.sm        = strategy_manager
         self.rm        = risk_manager
         self.profile   = profile_path
-        self._cfg_cache = None
 
     def _cfg(self) -> dict:
-        if self._cfg_cache is None:
-            try:
-                self._cfg_cache = json.loads(self.profile.read_text())
-            except Exception:
-                self._cfg_cache = {
-                    "risk_percentage": 1.0,
-                    "stop_loss": 20.0,
-                    "max_daily_loss": 500.0,
-                    "trading_symbols": ["EURUSD"],
-                    "target_profit": 10.0,
-                }
-        return self._cfg_cache
+        try:
+            return json.loads(self.profile.read_text())
+        except Exception:
+            return {
+                "risk_percentage": 1.0,
+                "stop_loss": 20.0,
+                "max_daily_loss": 500.0,
+                "trading_symbols": ["EURUSD"],
+                "target_profit": 10.0,
+            }
 
     # Inside ActionExecutor in chat.py
     

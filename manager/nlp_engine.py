@@ -11,9 +11,10 @@ Upgraded NLP engine:
 import json
 import pickle
 import re
+import threading
 import numpy as np
 import nltk
-from nltk.stem.lancaster import LancasterStemmer
+from nltk.stem.porter import PorterStemmer
 from tensorflow.keras.models import Sequential, load_model  # type: ignore
 from tensorflow.keras.layers import Dense                   # type: ignore
 from pathlib import Path
@@ -67,7 +68,7 @@ class NLPEngine:
     """Handles intent prediction, entity extraction, and text processing."""
 
     def __init__(self, intents_filepath: str, data_dir: str = "data"):
-        self.stemmer      = LancasterStemmer()
+        self.stemmer      = PorterStemmer()
         self.intents_file = Path(intents_filepath)
         self.model_file   = Path(data_dir) / "chatbot_model.keras"
         self.pickle_file  = Path(data_dir) / "data.pickle"
@@ -79,6 +80,10 @@ class NLPEngine:
         self.nlp_model      = None
         self.intents_data: dict = {}
         self.is_training = False
+        self.model_ready = threading.Event()
+        self._training_lock = threading.Lock()
+        self._train_thread = None
+        self._pending_retrain = False
 
         self._initialize()
 
@@ -93,7 +98,9 @@ class NLPEngine:
     def predict_intent(self, text: str) -> tuple[str, float]:
         """Returns (intent_tag, confidence) for the given text."""
         if self.nlp_model is None:
-            return "general", 0.0
+            self.model_ready.wait(timeout=5)
+            if self.nlp_model is None:
+                return "general", 0.0
         bag     = self._bag_of_words(text)
         results = self.nlp_model.predict(bag, verbose=0)[0]
         idx     = int(np.argmax(results))
@@ -137,7 +144,10 @@ class NLPEngine:
                 alias_symbols.append(canonical)
 
         # 2. Extract 6–7 letter uppercase ticker patterns
-        ticker_symbols = re.findall(r'\b[A-Z]{6,7}\b', text_upper)
+        ticker_symbols = [
+            token for token in re.findall(r'\b[A-Z]{6,7}\b', text_upper)
+            if token.endswith(("USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"))
+        ]
 
         # 3. Merge and deduplicate (alias results take priority)
         all_symbols = alias_symbols + [s for s in ticker_symbols if s not in alias_symbols]
@@ -149,11 +159,10 @@ class NLPEngine:
         ))
 
         # ── Dollar amounts ────────────────────────────────────────────────────
-        money = [
-            float(m) for m in
-            re.findall(r'\$?(\d+(?:\.\d+)?)\s*(?:DOLLARS?|BUCKS?|USD)?', text_upper)
-            if float(m) > 0
-        ]
+        money_patterns = []
+        money_patterns.extend(re.findall(r'(?:US\$|\$)\s*(\d+(?:\.\d+)?)\b', text_upper))
+        money_patterns.extend(re.findall(r'\b(\d+(?:\.\d+)?)\s*(?:USD|DOLLARS?|BUCKS?)\b', text_upper))
+        money = [float(amount) for amount in money_patterns if amount and float(amount) > 0]
 
         # ── Explicit lot size ─────────────────────────────────────────────────
         lot_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:LOTS?|LOT)', text_upper)
@@ -207,7 +216,7 @@ class NLPEngine:
             return False
 
         notify_callback(f"🧠 Added '{tag}' to knowledge base. Retraining...", priority="normal")
-        self.background_training()
+        self.background_training(wait=True, timeout=120)
         notify_callback("✅ Retraining complete!", priority="normal")
         return True
 
@@ -221,23 +230,27 @@ class NLPEngine:
                 if not self._save_intents(notify_callback):
                     return False
                 notify_callback("🧠 Learning new phrase. Retraining...", priority="normal")
-                self.background_training()
+                self.background_training(wait=True, timeout=120)
                 notify_callback("✅ Retraining complete!", priority="normal")
                 return True
 
         notify_callback(f"⚠️ Intent '{tag}' not found in intents.json", priority="normal")
         return False
 
-    def background_training(self):
+    def background_training(self, wait: bool = False, timeout: float = 120.0):
         """Wipe cached model/pickle and rebuild from updated intents.json."""
-        try:
-            for path in (self.pickle_file, self.model_file):
-                if path.exists():
-                    path.unlink()
-            self._process_data()
-            self._build_model()
-        except Exception:
-            pass
+        with self._training_lock:
+            if self._train_thread and getattr(self._train_thread, 'is_alive', lambda: False)():
+                self._pending_retrain = True
+            else:
+                for path in (self.pickle_file, self.model_file):
+                    if path.exists():
+                        path.unlink()
+                self._process_data()
+                self._build_model()
+
+        if wait:
+            self.model_ready.wait(timeout=timeout)
 
     def get_response_template(self, tag: str) -> str:
         import random
@@ -260,24 +273,44 @@ class NLPEngine:
     def _build_model(self):
         if self.model_file.exists():
             self.nlp_model = load_model(str(self.model_file))
+            self.model_ready.set()
             return
 
         def train_model():
             self.is_training = True
-            model = Sequential([
-                Dense(128, input_shape=(len(self.training[0]),), activation="relu"),
-                Dense(64, activation="relu"),
-                Dense(len(self.output[0]), activation="softmax"),
-            ])
-            model.compile(
-                optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"]
-            )
-            model.fit(self.training, self.output, epochs=200, batch_size=8, verbose=0)
-            model.save(str(self.model_file))
-            self.nlp_model = model
-            self.is_training = False
+            self.model_ready.clear()
+            try:
+                model = Sequential([
+                    Dense(128, input_shape=(len(self.training[0]),), activation="relu"),
+                    Dense(64, activation="relu"),
+                    Dense(len(self.output[0]), activation="softmax"),
+                ])
+                model.compile(
+                    optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"]
+                )
+                model.fit(self.training, self.output, epochs=200, batch_size=8, verbose=0)
+                model.save(str(self.model_file))
+                self.nlp_model = model
+            finally:
+                self.is_training = False
+                with self._training_lock:
+                    if self._pending_retrain:
+                        self._pending_retrain = False
+                        for path in (self.pickle_file, self.model_file):
+                            if path.exists():
+                                path.unlink()
+                        self._process_data()
+                        self._train_thread = threading.Thread(target=train_model, daemon=True)
+                        self._train_thread.start()
+                        return
+                    self.model_ready.set()
 
-        threading.Thread(target=train_model, daemon=True).start()
+        with self._training_lock:
+            if self._train_thread and getattr(self._train_thread, 'is_alive', lambda: False)():
+                self._pending_retrain = True
+                return
+            self._train_thread = threading.Thread(target=train_model, daemon=True)
+            self._train_thread.start()
 
     def _process_data(self):
         if self.pickle_file.exists():

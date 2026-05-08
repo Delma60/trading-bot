@@ -709,15 +709,33 @@ class ReasoningEngine:
 
     def _get_risk_plan(self, symbol: str) -> dict:
         """Get risk management plan for the symbol."""
-        try:
-            # This would normally call risk_manager.calculate_safe_trade
-            # For now, return a mock plan
+        if not symbol or not self.risk_manager:
             return {
                 "stop_loss_pips": 20,
                 "take_profit_pips": 40,
                 "lot_size": 0.01,
             }
-        except:
+
+        try:
+            safe_trade = self.risk_manager.calculate_safe_trade(
+                symbol=symbol,
+                base_risk_pct=1.0,
+                stop_loss_pips=20.0,
+                max_daily_loss=500.0,
+                portfolio_size=max(1, getattr(self.risk_manager, 'max_open_trades', 1)),
+            )
+
+            stop_loss = float(safe_trade.get("stop_loss_pips", 20.0))
+            take_profit = float(safe_trade.get("take_profit_pips", stop_loss * 2))
+            if take_profit <= 0:
+                take_profit = stop_loss * 2
+
+            return {
+                "stop_loss_pips": stop_loss,
+                "take_profit_pips": take_profit,
+                "lot_size": float(safe_trade.get("lots", 0.01)),
+            }
+        except Exception:
             return {
                 "stop_loss_pips": 20,
                 "take_profit_pips": 40,

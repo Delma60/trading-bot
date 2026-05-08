@@ -114,13 +114,14 @@ class AgentPlanner:
 
     def _plan_trade(self, symbol, entities, memory) -> AgentPlan:
         return AgentPlan(intent="execute_trade", symbol=symbol, steps=[
-            AgentStep("market_regime",   f"Market regime check — {symbol}"),
-            AgentStep("htf_trend_check", f"Higher-timeframe trend — {symbol}"),
-            AgentStep("signal_ensemble", f"Signal validation — {symbol}"),
-            AgentStep("quality_score",   "Signal quality scoring"),
-            AgentStep("risk_check",      "Risk gate validation"),
-            AgentStep("position_sizing", "Position sizing calculation"),
-            AgentStep("anomaly_check",   "Anomaly detection"),
+            AgentStep("market_regime",        f"Market regime check — {symbol}"),
+            AgentStep("htf_trend_check",      f"Higher-timeframe trend — {symbol}"),
+            AgentStep("signal_ensemble",      f"Signal validation — {symbol}"),
+            AgentStep("quality_score",        "Signal quality scoring"),
+            AgentStep("dynamic_risk_targets", "Calculating structural SL/TP targets"),
+            AgentStep("risk_check",           "Risk gate validation"),
+            AgentStep("position_sizing",      "Position sizing calculation"),
+            AgentStep("anomaly_check",        "Anomaly detection"),
         ])
 
     def _plan_portfolio(self, symbol, entities, memory) -> AgentPlan:
