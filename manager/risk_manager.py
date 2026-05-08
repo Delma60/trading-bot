@@ -8,16 +8,44 @@ import time
 import threading
 from collections import Counter
 
+
+def _pip_value_usd(symbol: str, lots: float) -> float:
+    """Return the USD value of exactly one pip for the given symbol and lot size."""
+    try:
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            return 0.10
+
+        tick_value = float(info.trade_tick_value)
+        tick_size = float(info.trade_tick_size)
+        point = float(info.point)
+        digits = int(info.digits)
+
+        if tick_value <= 0 or tick_size <= 0 or point <= 0:
+            return 0.10
+
+        if digits in (5, 3):
+            pip_size = 10.0 * point
+        else:
+            pip_size = point
+
+        pip_value_per_lot = (pip_size / tick_size) * tick_value
+        return max(round(pip_value_per_lot * lots, 5), 1e-5)
+    except Exception:
+        return 0.10
+
+
 class RiskManager:
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
     
-    def __init__(self, broker, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print):
+    def __init__(self, broker, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print,
+                 pyramid_min_pips: float = 1.0, spread_tolerance_pips: float = 1.0):
         self.broker = broker
         self.max_open_trades = max_open_trades
         self.min_margin_level = min_margin_level
         self.notify = notify_callback
-        self.MIN_PROFIT_TO_PYRAMID: float = 0.50   # USD — must be this profitable to pyramid
-        self.SPREAD_TOLERANCE_USD:  float = -0.50  # USD — below this = genuine loser (not just spread noise)
+        self.pyramid_min_pips = pyramid_min_pips
+        self.spread_tolerance_pips = spread_tolerance_pips
         
         self.daily_high_watermark = 0.0 
         self.daily_low_watermark = 0.0
@@ -47,6 +75,36 @@ class RiskManager:
         except Exception as e:
             self.notify(f"[Risk Manager]: Warning - could not fetch realized losses: {e}")
             return 0.0
+
+    def _pyramid_min_usd(self, symbol: str, lots: float) -> float:
+        return _pip_value_usd(symbol, lots) * self.pyramid_min_pips
+
+    def _spread_tolerance_usd(self, symbol: str, lots: float) -> float:
+        return -abs(_pip_value_usd(symbol, lots) * self.spread_tolerance_pips)
+
+    def _check_existing_positions(self, symbol: str, symbol_positions: list) -> tuple[bool, str]:
+        if not symbol_positions:
+            return True, "No existing positions on this symbol."
+
+        for pos in symbol_positions:
+            lots = float(pos.volume)
+            profit = float(pos.profit)
+            spread_tol = self._spread_tolerance_usd(symbol, lots)
+            pyramid_min = self._pyramid_min_usd(symbol, lots)
+
+            if profit < spread_tol:
+                return False, (
+                    f"{symbol} has a losing position (${profit:.2f} < tolerance ${spread_tol:.2f} "
+                    f"= -{self.spread_tolerance_pips} pip on {lots}L). No new entries while in the red."
+                )
+
+            if profit < pyramid_min:
+                return False, (
+                    f"{symbol} not yet profitable enough to pyramid (${profit:.2f} < ${pyramid_min:.2f} "
+                    f"= {self.pyramid_min_pips} pip on {lots}L). Wait for it to prove itself."
+                )
+
+        return True, "Existing positions profitable — pyramiding approved."
 
     def is_trading_allowed(self, symbol: str, max_daily_loss: float, portfolio_size: int) -> tuple[bool, str]:
         """A detailed check verifying global exposure, symbol exposure, and profitability."""
@@ -497,31 +555,33 @@ class ProfitGuard:
         self.profit_guard.start()
     """
 
-    MIN_PROFIT_TO_ACTIVATE: float = 0.30   # $ — guard ignores positions below this
-    BREAKEVEN_TRIGGER: float       = 2.00   # $ peak profit → move SL to entry price
-    DAMAGE_CONTROL_LOSS: float     = -0.50  # $ — close if profit drops below this after big peak
-    DAMAGE_CONTROL_PEAK: float     = 5.00   # $ — peak must have been this high to apply damage control
-    CHECK_INTERVAL: int            = 5      # seconds between scans
+    ACTIVATE_PIPS: float = 0.5
+    BREAKEVEN_PIPS: float = 2.0
+    DAMAGE_CONTROL_PIPS: float = 5.0
+    DAMAGE_LOSS_PIPS: float = 1.0
+    CHECK_INTERVAL: int = 5
 
-    # (peak_ceiling, retracement_threshold)
+    # (peak_pips_ceiling, retracement_threshold)
     TIERS: list[tuple[float, float]] = [
-        (1.00,        0.70),
-        (5.00,        0.55),
-        (20.00,       0.45),
+        (1.0,          0.70),
+        (5.0,          0.55),
+        (20.0,         0.45),
         (float("inf"), 0.35),
     ]
 
     def __init__(self, broker, notify_callback=print):
-        self.broker  = broker
-        self.notify  = notify_callback
+        self.broker = broker
+        self.notify = notify_callback
 
-        self._peak:              dict[int, float] = {}   # ticket → highest seen profit
-        self._breakeven_set:     set[int]         = set() # tickets whose SL is already at BE
-        self._be_attempted:      set[int]         = set() # tickets already attempted for breakeven move
-        self._closed_this_cycle: set[int]         = set() # prevent double-close in one scan
+        self._peak: dict[int, float] = {}
+        self._peak_pips: dict[int, float] = {}
+        self._pip_val: dict[int, float] = {}
+        self._breakeven_set: set[int] = set()
+        self._be_attempted: set[int] = set()
+        self._closed_this_cycle: set[int] = set()
 
-        self.running  = False
-        self._thread  = None
+        self.running = False
+        self._thread = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -558,7 +618,10 @@ class ProfitGuard:
 
         if not positions:
             self._peak.clear()
+            self._peak_pips.clear()
+            self._pip_val.clear()
             self._breakeven_set.clear()
+            self._be_attempted.clear()
             return
 
         open_tickets = {p.ticket for p in positions}
@@ -566,76 +629,70 @@ class ProfitGuard:
         # Purge tracking data for closed positions
         for stale in (set(self._peak) - open_tickets):
             self._peak.pop(stale, None)
+            self._peak_pips.pop(stale, None)
+            self._pip_val.pop(stale, None)
             self._breakeven_set.discard(stale)
+            self._be_attempted.discard(stale)
 
         for pos in positions:
             self._evaluate(pos)
 
-    def _check_existing_positions(self, symbol: str, symbol_positions: list) -> tuple[bool, str]:
-        if not symbol_positions:
-            return True, "No existing positions on this symbol."
-        for pos in symbol_positions:
-            if pos.profit < self.SPREAD_TOLERANCE_USD:
-                return False, (
-                    f"{symbol} has a losing position (${pos.profit:.2f}). "
-                    f"No new entries while in the red."
-                )
-            if pos.profit < self.MIN_PROFIT_TO_PYRAMID:
-                return False, (
-                    f"{symbol} not a confirmed winner yet (${pos.profit:.2f} < "
-                    f"${self.MIN_PROFIT_TO_PYRAMID:.2f}). Wait for it to prove itself."
-                )
-        return True, "Existing positions profitable — pyramiding approved."
 
     # ── Per-position evaluation ───────────────────────────────────────────────
 
     def _evaluate(self, pos):
         ticket = pos.ticket
+        symbol = pos.symbol
+        lots = float(pos.volume)
         profit = float(pos.profit)
 
-        # ── 1. Update peak ───────────────────────────────────────────────────
+        if ticket not in self._pip_val:
+            self._pip_val[ticket] = _pip_value_usd(symbol, lots)
+        pip_val = self._pip_val[ticket]
+
+        activate_usd = pip_val * self.ACTIVATE_PIPS
+        breakeven_usd = pip_val * self.BREAKEVEN_PIPS
+        damage_control_usd = pip_val * self.DAMAGE_CONTROL_PIPS
+        damage_loss_usd = -(pip_val * self.DAMAGE_LOSS_PIPS)
+
         current_peak = self._peak.get(ticket, 0.0)
         if profit > current_peak:
             self._peak[ticket] = profit
-            current_peak        = profit
+            current_peak = profit
 
-        # ── 2. Breakeven lock ────────────────────────────────────────────────
-        if (current_peak >= self.BREAKEVEN_TRIGGER
-                and ticket not in self._breakeven_set):
+        current_peak_pips = current_peak / pip_val if pip_val > 0 else 0.0
+        self._peak_pips[ticket] = current_peak_pips
+
+        if current_peak >= breakeven_usd and ticket not in self._breakeven_set:
             self._set_breakeven(pos)
 
-        # ── 3. Noise filter ──────────────────────────────────────────────────
-        if current_peak < self.MIN_PROFIT_TO_ACTIVATE:
+        if current_peak < activate_usd:
             return
 
-        # ── 4. Damage-control exit ───────────────────────────────────────────
-        #    Trade was a solid winner but has now fallen hard into the red.
-        if (current_peak >= self.DAMAGE_CONTROL_PEAK
-                and profit <= self.DAMAGE_CONTROL_LOSS):
+        if current_peak >= damage_control_usd and profit <= damage_loss_usd:
             self._close(pos, reason=(
-                f"peaked at +${current_peak:.2f}, "
+                f"peaked at +${current_peak:.2f} ({current_peak_pips:.1f} pips), "
                 f"now ${profit:.2f} — damage-control exit"
             ))
             return
 
-        # ── 5. Retracement guard (only while still in profit) ─────────────--
         if profit <= 0:
-            return   # already handled by SL or damage control
+            return
 
         retracement = (current_peak - profit) / current_peak
-        threshold   = self._threshold_for(current_peak)
+        threshold = self._threshold_for(current_peak_pips)
 
         if retracement >= threshold:
             self._close(pos, reason=(
-                f"peaked at +${current_peak:.2f}, "
+                f"peaked at +${current_peak:.2f} ({current_peak_pips:.1f} pips), "
                 f"now +${profit:.2f} ({retracement:.0%} retrace ≥ {threshold:.0%} threshold)"
             ))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _threshold_for(self, peak: float) -> float:
+    def _threshold_for(self, peak_pips: float) -> float:
         for ceiling, threshold in self.TIERS:
-            if peak < ceiling:
+            if peak_pips < ceiling:
                 return threshold
         return 0.35
 
@@ -666,8 +723,10 @@ class ProfitGuard:
         self._be_attempted.add(ticket)
         if ok:
             self._breakeven_set.add(ticket)
+            pip_val = self._pip_val.get(ticket, _pip_value_usd(symbol, float(pos.volume)))
             self.notify(
-                f"🔐 ProfitGuard: {symbol} SL moved to breakeven @ {new_sl}",
+                f"🔐 ProfitGuard: {symbol} SL moved to breakeven @ {new_sl} "
+                f"(triggered at {self.BREAKEVEN_PIPS} pips = ${pip_val * self.BREAKEVEN_PIPS:.2f})",
                 priority="normal",
             )
 
@@ -683,7 +742,10 @@ class ProfitGuard:
         )
         self.broker.close_position(pos.symbol)
         self._peak.pop(ticket, None)
+        self._peak_pips.pop(ticket, None)
+        self._pip_val.pop(ticket, None)
         self._breakeven_set.discard(ticket)
+        self._be_attempted.discard(ticket)
 
     # ── Inspection / chat interface ───────────────────────────────────────────
 
@@ -694,11 +756,13 @@ class ProfitGuard:
 
         lines = ["ProfitGuard tracking:"]
         for ticket, peak in self._peak.items():
-            threshold = self._threshold_for(peak)
+            peak_pips = self._peak_pips.get(ticket, 0.0)
+            pip_val = self._pip_val.get(ticket, 0.0)
+            threshold = self._threshold_for(peak_pips)
             be_locked = "✅ BE locked" if ticket in self._breakeven_set else "⚠️  no BE lock"
             lines.append(
-                f"  #{ticket} | peak +${peak:.2f} | "
-                f"close on {threshold:.0%} retrace | {be_locked}"
+                f"  #{ticket} | peak +${peak:.2f} ({peak_pips:.1f} pips) | "
+                f"1 pip = ${pip_val:.4f} | close on {threshold:.0%} retrace | {be_locked}"
             )
         return "\n".join(lines)
     
@@ -730,7 +794,7 @@ class TradeGatekeeper:
         self.avoid_asian_session = avoid_asian_session
         self.avoid_friday_close  = avoid_friday_close
  
-    def gate(self, symbol: str, broker) -> tuple[bool, str]:
+    def gate(self, symbol: str, broker: Optional[object] = None) -> tuple[bool, str]:
         """
         Returns (allowed: bool, reason: str).
         Call this before submitting any order.
@@ -769,14 +833,22 @@ class TradeGatekeeper:
  
         return True, "OK"
  
-    def _get_spread_pips(self, symbol: str, broker) -> float | None:
+    def _get_spread_pips(self, symbol: str, broker: Optional[object] = None) -> float | None:
         try:
-            tick = mt5.symbol_info_tick(symbol)
+            tick = None
+            if broker is not None and hasattr(broker, "get_tick_data"):
+                tick_data = broker.get_tick_data(symbol)
+                if tick_data and "ask" in tick_data and "bid" in tick_data:
+                    tick = type("Tick", (), tick_data)
+
+            if tick is None:
+                tick = mt5.symbol_info_tick(symbol)
+
             info = mt5.symbol_info(symbol)
             if not tick or not info:
                 return None
+
             spread_points = (tick.ask - tick.bid) / info.point
-            # Convert points → pips (10 points per pip for most forex)
             pip_multiplier = 1.0 if any(
                 t in symbol.upper()
                 for t in ["BTC", "ETH", "XAU", "XAG", "US30", "NAS"]

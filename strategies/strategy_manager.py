@@ -199,6 +199,14 @@ class StrategyManager:
             return
 
         self.lstm.train(feat_df, symbol=symbol, force=True)
+
+        sample_count = len(self.meta._samples)
+        if sample_count < 200:
+            self.notify(
+                f"[StrategyManager] Skipping meta-scorer retrain for {symbol}: only {sample_count} samples available."
+            )
+            return
+
         acc = self.meta.train(force=True)
         if acc > 0:
             self.notify(f"[StrategyManager] Retrained models for {symbol}. Meta accuracy: {acc:.1%}")

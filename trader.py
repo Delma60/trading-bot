@@ -3,6 +3,7 @@ import psutil
 import os
 import pandas as pd
 import csv
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +15,7 @@ class Trader:
         self.server = server
         self.connected = False
         self.notify = notify_callback
+        self._order_lock = threading.Lock()
         
     def is_mt5_running(self):
         """Check if MetaTrader 5 terminal is running"""
@@ -167,7 +169,9 @@ class Trader:
             "magic": 234000,
         }
 
-        result = mt5.order_send(request)
+        with self._order_lock:
+            result = mt5.order_send(request)
+
         if result and getattr(result, 'retcode', None) == mt5.TRADE_RETCODE_DONE:
             return True
         else:
@@ -285,13 +289,13 @@ class Trader:
         }
 
         # 5. Send the order!
-        result = mt5.order_send(request)
-        
+        with self._order_lock:
+            result = mt5.order_send(request)
+
         # 6. Check if it succeeded
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             return {"success": False, "reason": f"Order rejected. MT5 Code: {result.retcode}, {result.comment}"}
 
-        # +++ ADD THIS LINE TO LOG THE TRADE +++
         self._log_trade_history(
             action=action.upper(),
             symbol=symbol,
@@ -367,76 +371,75 @@ class Trader:
         if not self.connected:
             self.notify("Cannot close positions: Not connected to MT5.")
             return
-            
+
         positions = mt5.positions_get()
         if positions is None or len(positions) == 0:
             self.notify("No open positions to close.")
             return
-            
-        self.notify(f"Attempting to close {len(positions)} open positions...")
-        
-        for position in positions:
-            symbol = position.symbol
-            symbol_info = mt5.symbol_info(symbol)
-            
-            if symbol_info is None:
-                self.notify(f"❌ Failed to get symbol info for {symbol}")
-                continue
-                
-            tick = mt5.symbol_info_tick(symbol)
-            if tick is None:
-                self.notify(f"❌ Could not get live tick price for {symbol}, skipping...")
-                continue
-                
-            # To close a BUY, we must SELL at the BID price. To close a SELL, we must BUY at the ASK price.
-            if position.type == mt5.POSITION_TYPE_BUY:
-                order_type = mt5.ORDER_TYPE_SELL
-                price = tick.bid
-            else:
-                order_type = mt5.ORDER_TYPE_BUY
-                price = tick.ask
-            
-            # Determine correct filling mode based on broker limits
-            filling_mode = symbol_info.filling_mode
-            if filling_mode & 1:
-                type_filling = mt5.ORDER_FILLING_FOK
-            elif filling_mode & 2:
-                type_filling = mt5.ORDER_FILLING_IOC
-            else:
-                type_filling = mt5.ORDER_FILLING_RETURN
 
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": symbol,
-                "volume": position.volume,
-                "type": order_type,
-                "position": position.ticket,
-                "price": price,
-                "deviation": 20,
-                "magic": 234000,
-                "comment": "Bot manual close",
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": type_filling,
-            }
-            
-            result = mt5.order_send(request)
-            
-            # Check if MT5 actually closed it
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                self.notify(f"❌ Failed to close {symbol} (Ticket #{position.ticket}). MT5 Code: {result.retcode}, {result.comment}")
-            else:
-                # +++ ADD THIS LINE TO LOG THE CLOSE +++
-                self._log_trade_history(
-                    action="CLOSE",
-                    symbol=symbol,
-                    lots=position.volume,
-                    price=result.price,
-                    ticket=result.order,
-                    comment=f"Profit: {position.profit}",
-                    strategy="Unknown",
-                    profit=position.profit,
-                )
-                self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
+        self.notify(f"Attempting to close {len(positions)} open positions...")
+
+        with self._order_lock:
+            for position in positions:
+                symbol = position.symbol
+                symbol_info = mt5.symbol_info(symbol)
+
+                if symbol_info is None:
+                    self.notify(f"❌ Failed to get symbol info for {symbol}")
+                    continue
+
+                tick = mt5.symbol_info_tick(symbol)
+                if tick is None:
+                    self.notify(f"❌ Could not get live tick price for {symbol}, skipping...")
+                    continue
+
+                # To close a BUY, we must SELL at the BID price. To close a SELL, we must BUY at the ASK price.
+                if position.type == mt5.POSITION_TYPE_BUY:
+                    order_type = mt5.ORDER_TYPE_SELL
+                    price = tick.bid
+                else:
+                    order_type = mt5.ORDER_TYPE_BUY
+                    price = tick.ask
+
+                # Determine correct filling mode based on broker limits
+                filling_mode = symbol_info.filling_mode
+                if filling_mode & 1:
+                    type_filling = mt5.ORDER_FILLING_FOK
+                elif filling_mode & 2:
+                    type_filling = mt5.ORDER_FILLING_IOC
+                else:
+                    type_filling = mt5.ORDER_FILLING_RETURN
+
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": symbol,
+                    "volume": position.volume,
+                    "type": order_type,
+                    "position": position.ticket,
+                    "price": price,
+                    "deviation": 20,
+                    "magic": 234000,
+                    "comment": "Bot manual close",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": type_filling,
+                }
+
+                result = mt5.order_send(request)
+
+                if result.retcode != mt5.TRADE_RETCODE_DONE:
+                    self.notify(f"❌ Failed to close {symbol} (Ticket #{position.ticket}). MT5 Code: {result.retcode}, {result.comment}")
+                else:
+                    self._log_trade_history(
+                        action="CLOSE",
+                        symbol=symbol,
+                        lots=position.volume,
+                        price=result.price,
+                        ticket=result.order,
+                        comment=f"Profit: {position.profit}",
+                        strategy="Unknown",
+                        profit=position.profit,
+                    )
+                    self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
 
     def close_position(self, symbol: str):
         """Close open position for a specific symbol."""
@@ -444,66 +447,70 @@ class Trader:
             self.notify("Cannot close position: Not connected to MT5.")
             return False
 
-        # Only get positions for this specific symbol
         positions = mt5.positions_get(symbol=symbol)
         if positions is None or len(positions) == 0:
             self.notify(f"❌ No open positions found for {symbol}.")
             return False
 
         self.notify(f"Attempting to close {len(positions)} position(s) for {symbol}...")
-        
-        success = True
-        for position in positions:
-            symbol_info = mt5.symbol_info(symbol)
-            tick = mt5.symbol_info_tick(symbol)
-            
-            if position.type == mt5.POSITION_TYPE_BUY:
-                order_type = mt5.ORDER_TYPE_SELL
-                price = tick.bid
-            else:
-                order_type = mt5.ORDER_TYPE_BUY
-                price = tick.ask
-            
-            filling_mode = symbol_info.filling_mode
-            if filling_mode & 1:
-                type_filling = mt5.ORDER_FILLING_FOK
-            elif filling_mode & 2:
-                type_filling = mt5.ORDER_FILLING_IOC
-            else:
-                type_filling = mt5.ORDER_FILLING_RETURN
 
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": symbol,
-                "volume": position.volume,
-                "type": order_type,
-                "position": position.ticket,
-                "price": price,
-                "deviation": 20,
-                "magic": 234000,
-                "comment": "Bot manual close",
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": type_filling,
-            }
-            
-            result = mt5.order_send(request)
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                self.notify(f"❌ Failed to close {symbol} (Ticket #{position.ticket}). MT5 Code: {result.retcode}")
-                success = False
-            else:
-                # +++ ADD THIS LINE TO LOG THE CLOSE +++
-                self._log_trade_history(
-                    action="CLOSE",
-                    symbol=symbol,
-                    lots=position.volume,
-                    price=result.price,
-                    ticket=result.order,
-                    comment=f"Profit: {position.profit}",
-                    strategy="Unknown",
-                    profit=position.profit,
-                )
-                self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
-        
+        success = True
+        with self._order_lock:
+            for position in positions:
+                symbol_info = mt5.symbol_info(symbol)
+                tick = mt5.symbol_info_tick(symbol)
+
+                if tick is None or symbol_info is None:
+                    self.notify(f"❌ Could not close {symbol} due to missing symbol data.")
+                    success = False
+                    continue
+
+                if position.type == mt5.POSITION_TYPE_BUY:
+                    order_type = mt5.ORDER_TYPE_SELL
+                    price = tick.bid
+                else:
+                    order_type = mt5.ORDER_TYPE_BUY
+                    price = tick.ask
+
+                filling_mode = symbol_info.filling_mode
+                if filling_mode & 1:
+                    type_filling = mt5.ORDER_FILLING_FOK
+                elif filling_mode & 2:
+                    type_filling = mt5.ORDER_FILLING_IOC
+                else:
+                    type_filling = mt5.ORDER_FILLING_RETURN
+
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": symbol,
+                    "volume": position.volume,
+                    "type": order_type,
+                    "position": position.ticket,
+                    "price": price,
+                    "deviation": 20,
+                    "magic": 234000,
+                    "comment": "Bot manual close",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": type_filling,
+                }
+
+                result = mt5.order_send(request)
+                if result.retcode != mt5.TRADE_RETCODE_DONE:
+                    self.notify(f"❌ Failed to close {symbol} (Ticket #{position.ticket}). MT5 Code: {result.retcode}")
+                    success = False
+                else:
+                    self._log_trade_history(
+                        action="CLOSE",
+                        symbol=symbol,
+                        lots=position.volume,
+                        price=result.price,
+                        ticket=result.order,
+                        comment=f"Profit: {position.profit}",
+                        strategy="Unknown",
+                        profit=position.profit,
+                    )
+                    self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
+
         return success
 
     def close_profitable_positions(self, symbol: str = None):

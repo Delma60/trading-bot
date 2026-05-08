@@ -42,6 +42,7 @@ class PortfolioManager:
         
         # Thread-safe lock for model predictions (prevents race conditions between main and background threads)
         self._model_lock = threading.Lock()
+        self._temporary_trade_states: dict[int, dict] = {}
         
         # AI Initialization
         self.model = self._load_or_build_model()
@@ -228,6 +229,11 @@ class PortfolioManager:
             signal = self.strategy_manager.check_signals(symbol, use_ensemble=True)
             
             if signal and signal.get('action') != 'WAIT':
+                gate_ok, gate_reason = self.gate.gate(symbol, self.broker)
+                if not gate_ok:
+                    results.append(f"⚠️ {symbol}: Trade gate blocked entry. {gate_reason}")
+                    continue
+
                 trade_plan = self.risk_manager.calculate_safe_trade(
                     symbol=symbol, base_risk_pct=risk_pct, stop_loss_pips=stop_loss, max_daily_loss=max_daily_loss, portfolio_size=portfolio_size
                 )
@@ -239,8 +245,7 @@ class PortfolioManager:
                         )
                         continue
 
-                    # For session-based trading, use micro-lots to prevent large position blowups
-                    lots = self.risk_manager.calculate_micro_lot()  # Returns 0.01
+                    lots = self.risk_manager.calculate_micro_lot()
                     sl_pips = trade_plan["stop_loss_pips"]
                     
                     exec_result = self.broker.execute_trade(
@@ -248,31 +253,27 @@ class PortfolioManager:
                         action=signal['action'],
                         lots=lots,
                         stop_loss_pips=sl_pips,
-                        take_profit_pips=sl_pips * 2.0,  # Example: Setting a 1:2 Risk/Reward ratio
+                        take_profit_pips=sl_pips * 2.0,
                         strategy=signal.get('strategy_used', strategy_name)
                     )
                     
-                    if exec_result["success"]:
-                        ticket = exec_result["ticket"]
-                        fill_price = exec_result["price"]
+                    if exec_result.get("success"):
+                        ticket = exec_result.get("ticket")
+                        fill_price = exec_result.get("price")
                         results.append(f"🟢 EXECUTED -> {symbol}: {signal['action']} | Size: {lots} | Price: {fill_price} | Ticket: #{ticket}")
-                        
-                        # (Optional) If you are using the AI logging, store the state here
-                        self._temporary_trade_states = getattr(self, '_temporary_trade_states', {})
-                        self._temporary_trade_states[symbol] = {
+                        self._temporary_trade_states[ticket] = {
                             "state": current_state.flatten().tolist(),
                             "strategy": strategy_name,
-                            "action":   signal["action"],
+                            "action": signal["action"],
+                            "symbol": symbol,
                         }
-                    elif not exec_result["success"]:
-                        error_reason = exec_result["reason"]
-    
-                        # The bot "Reasons" about the failure
+                    else:
+                        error_reason = exec_result.get("reason", "unknown error")
+
                         if "margin" in error_reason.lower():
-                            new_lots = self.risk_manager.calculate_micro_lot() 
+                            new_lots = self.risk_manager.calculate_micro_lot()
                             self.notify(f"⚠️ [Scanner]: Margin rejection for {symbol}. Attempting recovery execution at {new_lots} micro-lots.")
                             
-                            # Try one more time with the smallest possible size
                             retry_exec = self.broker.execute_trade(
                                 symbol=symbol,
                                 action=signal['action'],
@@ -282,56 +283,44 @@ class PortfolioManager:
                                 strategy=signal.get('strategy_used', strategy_name)
                             )
                             
-                            if retry_exec["success"]:
-                                ticket = retry_exec["ticket"]
+                            if retry_exec.get("success"):
+                                ticket = retry_exec.get("ticket")
                                 results.append(f"🟢 RECOVERY EXECUTED -> {symbol}: {signal['action']} | Size: {new_lots} | Ticket: #{ticket}")
+                                self._temporary_trade_states[ticket] = {
+                                    "state": current_state.flatten().tolist(),
+                                    "strategy": strategy_name,
+                                    "action": signal["action"],
+                                    "symbol": symbol,
+                                }
                             else:
-                                results.append(f"❌ RECOVERY FAILED -> {symbol}: {retry_exec['reason']}")
-                                
+                                results.append(f"❌ RECOVERY FAILED -> {symbol}: {retry_exec.get('reason', 'unknown error')}")
                         elif "market closed" in error_reason.lower():
-                            # self.notify(f"⏳ [Scanner]: Market for {symbol} is closed. Bypassing signal.")
                             results.append(f"⏳ MARKET CLOSED -> {symbol}")
-        
                         else:
                             results.append(f"⚠️ EXECUTION FAILED -> {symbol}: {signal['action']} | Reason: {error_reason}")
-                    else:
-                        reason = exec_result["reason"]
-                        results.append(f"⚠️ EXECUTION FAILED -> {symbol}: {signal['action']} | Reason: {reason}")
                 else:
                     results.append(f"❌ {symbol} [{strategy_name}]: Rejected. {trade_plan['reason']}")
         return results if results else ["⚠️ No high-probability entries found."]
 
-    def log_trade_for_learning(self, symbol: str, profit: float):
+    def log_trade_for_learning(self, ticket: int = None, symbol: str = None, profit: float = None):
         """Call this when a trade CLOSES to log the result."""
-        trade_data = getattr(self, '_temporary_trade_states', {}).pop(symbol, None)
-        if not trade_data:
+        if ticket is not None:
+            trade_data = self._temporary_trade_states.pop(ticket, None)
+        elif symbol is not None:
+            matching = [t for t, data in self._temporary_trade_states.items() if data.get("symbol") == symbol]
+            if len(matching) == 1:
+                trade_data = self._temporary_trade_states.pop(matching[0])
+            else:
+                trade_data = None
+        else:
+            trade_data = None
+
+        if not trade_data or profit is None:
             return
-    
-        fv = np.array(trade_data["state"])   # feature vector saved at open
+
+        fv = np.array(trade_data["state"])
         action = trade_data.get("action", "BUY")
         self.strategy_manager.record_trade_outcome(fv, action, profit)
-    
-        # trade_data = getattr(self, '_temporary_trade_states', {}).pop(symbol, None)
-        # if not trade_data:
-        #     return # We don't have the starting state for this trade
-            
-        # if profit > 0:
-        #     strategy_idx = self.available_strategies.index(trade_data["strategy"])
-        #     label = [1 if i == strategy_idx else 0 for i in range(len(self.available_strategies))]
-            
-        #     entry = {"state": trade_data["state"], "label": label}
-            
-        #     history = self._load_json(self.TRAINING_DATA_PATH, fallback=[])
-        #     history.append(entry)
-            
-        #     with open(self.TRAINING_DATA_PATH, "w") as f:
-        #         json.dump(history, f)
-        #     self.notify(f"[Portfolio AI]: Logged winning trade for {symbol} to memory.")
-            
-        #     # Check if we should wake up the AI
-        #     if not self.is_ai_ready and len(history) >= 50:
-        #         self.is_ai_ready = True
-        #         self.retrain_model()
     def get_portfolio_health(self) -> str:
         """Generates a quick health report for the Chatbot."""
         account = self.broker.getAccountInfo()
