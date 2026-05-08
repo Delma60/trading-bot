@@ -32,6 +32,25 @@ CONTEXT_COLS = [
     "dist_sma50", "dist_sma200", "macd_hist", "di_diff",
 ]
 
+REGIME_WEIGHTS = {
+    "Strong Trend": {
+        "Trend_Following": 3.0, "Momentum": 2.5, "Breakout": 2.0,
+        "Mean_Reversion": 0.3, "Scalping": 0.5, "Arbitrage": 0.8,
+    },
+    "Ranging / Choppy": {
+        "Mean_Reversion": 3.0, "Scalping": 2.5, "Arbitrage": 2.0,
+        "Trend_Following": 0.3, "Momentum": 0.5, "Breakout": 0.5,
+    },
+    "High Volatility Breakout": {
+        "Breakout": 3.0, "Momentum": 2.0, "Trend_Following": 1.5,
+        "Mean_Reversion": 0.2, "Scalping": 0.3,
+    },
+    "Low Volatility Consolidation": {
+        "Mean_Reversion": 2.5, "Scalping": 2.0,
+        "Breakout": 0.2, "Momentum": 0.3,
+    },
+}
+
 
 # ── Public class ─────────────────────────────────────────────────────────────
 
@@ -103,6 +122,7 @@ class MetaScorer:
         strategy_signals: dict,
         lstm_prediction:  dict,
         market_row:       pd.Series,
+        regime:           str = "Unknown",
     ) -> dict:
         """
         Return the final trading decision.
@@ -110,7 +130,7 @@ class MetaScorer:
         """
         if self.model is not None:
             return self._model_score(strategy_signals, lstm_prediction, market_row)
-        return self._weighted_vote(strategy_signals, lstm_prediction)
+        return self._weighted_vote(strategy_signals, lstm_prediction, regime)
 
     # ── Training ─────────────────────────────────────────────────────────────
 
@@ -213,41 +233,36 @@ class MetaScorer:
             "source":        "meta_model",
         }
 
-    def _weighted_vote(self, strategy_signals: dict, lstm_prediction: dict) -> dict:
-        """
-        Calibrated weighted majority vote used before the meta-model is trained.
-
-        Weights
-        -------
-        - Each real strategy (non-Dummy):  1.0 × its own reported confidence
-        - LSTM prediction:                 2.0 × its confidence (higher weight)
-        - Dummy / WAIT strategies:         0.3 × confidence (discounted)
-        """
-        votes: dict[str, float] = {"BUY": 0.0, "SELL": 0.0, "WAIT": 0.0}
-
-        dummy_names = {"News_Trading", "Sentiment_Analysis"}
-
+    def _weighted_vote(self, strategy_signals: dict, lstm_prediction: dict, regime: str = "Unknown") -> dict:
+        votes = {"BUY": 0.0, "SELL": 0.0, "WAIT": 0.0}
+        weights = REGIME_WEIGHTS.get(regime, {})
+        
         for name, sig in strategy_signals.items():
+            if name in ("News_Trading", "Sentiment_Analysis"):
+                continue  # exclude unimplemented strategies
             action = sig.get("action", "WAIT")
-            conf   = float(sig.get("confidence", 0.5))
-            weight = 0.3 if name in dummy_names else 1.0
+            conf = float(sig.get("confidence", 0.0))
+            weight = weights.get(name, 1.0)
             if action in votes:
                 votes[action] += conf * weight
 
-        # LSTM gets double weight — it sees the whole sequence
-        lstm_action = LSTM_TO_ACTION.get(lstm_prediction.get("direction", "NEUTRAL"), "WAIT")
-        lstm_conf   = float(lstm_prediction.get("confidence", 0.5))
-        votes[lstm_action] += lstm_conf * 2.0
+        lstm_action = LSTM_TO_ACTION.get(
+            lstm_prediction.get("direction", "NEUTRAL"), "WAIT"
+        )
+        lstm_conf = float(lstm_prediction.get("confidence", 0.0))
+        
+        lstm_weight = 3.0 if lstm_conf > 0.70 else 0.5
+        votes[lstm_action] += lstm_conf * lstm_weight
 
         total = sum(votes.values()) or 1.0
-        norm  = {k: v / total for k, v in votes.items()}
-
+        norm = {k: v / total for k, v in votes.items()}
         best = max(norm, key=norm.get)
+        
         return {
-            "action":        best,
-            "confidence":    norm[best],
+            "action": best,
+            "confidence": norm[best],
             "probabilities": norm,
-            "source":        "weighted_vote",
+            "source": "regime_weighted_vote",
         }
 
     def _save(self) -> None:

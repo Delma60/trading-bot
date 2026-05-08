@@ -1690,6 +1690,19 @@ class ARIA:
                     f"Force a BUY or SELL? Say 'buy {symbol}' or 'sell {symbol}'."
                 )
 
+        # NEW: Check last plan grade before executing
+        plan = self.agent.last_plan
+        if plan:
+            scored = next(
+                (s.result for s in plan.steps if s.name == "quality_score"), {}
+            ) or {}
+            grade = scored.get("grade", "D")
+            if grade not in ("A", "B"):
+                return (
+                    f"Signal grade is {grade} — not strong enough to execute. "
+                    f"Wait for a Grade A or B setup on {symbol}."
+                )
+
         # Run quick risk check
         cfg = json.loads(self.PROFILE_FILE.read_text()) if self.PROFILE_FILE.exists() else {}
         allowed, reason = self.rm.is_trading_allowed(

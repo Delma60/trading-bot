@@ -872,9 +872,14 @@ class AgentSynthesizer:
         if anomaly.get("is_anomaly"):
             parts.append(f"Anomaly score {anomaly['anomaly_score']:.2f} — unusual conditions, size down.")
  
-        # Suggested action for confirm flow (Bug C fix)
+        # Suggested action for confirm flow (Win Rate Fix #3)
         if action in ("BUY", "SELL") and grade in ("A", "B") and approved and lots:
-            plan.suggested_action = f"{action} {lots} {symbol}"
+            agreements = sum(
+                1 for s in r.get("signal_ensemble", {}).get("strategy_signals", {}).values()
+                if s.get("action") == action and s.get("confidence", 0) > 0.4
+            )
+            if agreements >= 3:  # at least 3 strategies must agree
+                plan.suggested_action = f"{action} {lots} {symbol}"
  
         return " ".join(parts)
  

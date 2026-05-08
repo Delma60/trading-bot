@@ -298,7 +298,11 @@ class StrategyManager:
 
         # 6. Meta-scorer makes the final call ─────────────────────────────────
         market_snapshot = feat_df.iloc[-1]
-        final           = self.meta.score(strategy_signals, lstm_pred, market_snapshot)
+        regime = "Unknown"
+        if self.learner:
+            regime = self.learner.get_current_regime()
+            
+        final = self.meta.score(strategy_signals, lstm_pred, market_snapshot, regime=regime)
 
         # 7. Optionally accumulate a training sample for the meta-model ────────
         fv = self.meta.build_feature_vector(strategy_signals, lstm_pred, market_snapshot)
