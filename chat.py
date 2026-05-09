@@ -298,7 +298,7 @@ class ARIA:
         self._load_or_setup_config()
         self._print_banner()
 
-        greeting = self.process_message("hello")
+        greeting = self._make_session_aware_greeting()
         self._type_print(greeting)
 
         self._run_loop()
@@ -560,7 +560,7 @@ class ARIA:
 
         # Market status queries
         if intent == "market_status":
-            return self._handle_market_status(text, entities)
+            return self._handle_market_status()
 
         # Check notifications
         if intent == "check_notifications":
@@ -574,7 +574,7 @@ class ARIA:
 
         # Add symbols to portfolio (comma-separated or joined)
         if intent == "add_symbols" or any(k in lower for k in ["add to portfolio", "add symbols", "add pairs"]):
-            return self.executor.add_symbols_to_portfolio(text)
+            return self.add_symbols_to_portfolio(text)
 
         return None  # fall through to agent
 
@@ -968,6 +968,7 @@ class ARIA:
     def shutdown(self):
         """Gracefully shutdown ARIA and all background processes."""
         try:
+            self.episodic_memory.flush()
             self.proactive_engine.stop()
             self.trailing_manager.stop()
             self.profit_guard.stop()
@@ -1167,6 +1168,9 @@ class ARIA:
 
     def _broker_login(self):
         """Try saved credentials, then prompt interactively."""
+        if self.broker.connected:
+            return
+        
         data = self.profile_manager.load_credentials()
         login, password, server = (
             data.get("login"), data.get("password"), data.get("server")

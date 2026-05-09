@@ -386,7 +386,7 @@ class AgentExecutor:
         Fetches and classifies recent news through the ML pipeline.
         Returns structured article data with sentiment, confidence, and relevance.
         """
-        news_strategy = self.sm.engines.get("News_Trading") or self.sm.strategies.get("news_trading")
+        news_strategy = self.sm.engines.get("News_Trading")
         if not news_strategy:
             return {"error": "News strategy not loaded.", "articles": []}
         

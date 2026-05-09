@@ -123,7 +123,17 @@ class RiskManager:
         self.daily_high_watermark = 0.0 
         self.daily_low_watermark = 0.0
         self.watermark_date=None
+
+        # Risk calculators — instantiated once to avoid fresh objects on every call
+        self.targeter = DynamicRiskTargeter(broker)
+        self.reentry_system = SmartReEntrySystem()
     
+    def record_stop_out_position(self, symbol: str, close_price: float, position_type: int):
+        """Record a stop-out when a position closes (called from PortfolioManager or chat layer).
+        position_type: 0 = BUY, 1 = SELL (from mt5.POSITION_TYPE_BUY/SELL)"""
+        direction = "BUY" if position_type == 0 else "SELL"
+        self.reentry_system.record_stop_out(symbol, close_price, direction)
+
     def _get_realized_daily_loss(self) -> float:
         """
         Fetches all closed deals for today and calculates realized P&L.
@@ -279,8 +289,7 @@ class RiskManager:
         max_risk_usd = account.balance * (actual_risk_pct / 100)
 
         # --- VOLATILITY-ADJUSTED POSITION SIZING (Feature #6) ---
-        targeter = DynamicRiskTargeter(self.broker)
-        dynamic_targets = targeter.calculate_targets(symbol)
+        dynamic_targets = self.targeter.calculate_targets(symbol)
         
         # Override fixed pip SL with ATR-based SL
         atr_pips = dynamic_targets.get("atr_pips", stop_loss_pips)

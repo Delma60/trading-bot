@@ -520,13 +520,16 @@ class Trader:
             
         # Map your string timeframe to MT5 timeframes
         tf_mapping = {
-            "M15": mt5.TIMEFRAME_M15,
-            "H1": mt5.TIMEFRAME_H1,
-            "H4": mt5.TIMEFRAME_H4,
-            "D1": mt5.TIMEFRAME_D1
+             "M1": mt5.TIMEFRAME_M1,   "M5": mt5.TIMEFRAME_M5,
+    "M15": mt5.TIMEFRAME_M15, "M30": mt5.TIMEFRAME_M30,
+    "H1": mt5.TIMEFRAME_H1,   "H4": mt5.TIMEFRAME_H4,
+    "D1": mt5.TIMEFRAME_D1,   "W1": mt5.TIMEFRAME_W1,
+    "MN": mt5.TIMEFRAME_MN1,
         }
         mt5_tf = tf_mapping.get(timeframe, mt5.TIMEFRAME_H1)
-        
+        if mt5_tf is None:
+            self.notify(f"[Broker] Unknown timeframe '{timeframe}', defaulting to H1")
+            mt5_tf = mt5.TIMEFRAME_H1
         rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 0, count)
         if rates is None:
             self.notify(f"[Broker] Failed to fetch rates for {symbol}")
@@ -731,7 +734,36 @@ class Trader:
                     self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
 
         return success
-
+    def partial_close_position(self, ticket: int, symbol: str,
+        close_ratio: float = 0.5) -> dict:
+        if not 0.1 <= close_ratio <= 0.9:
+            return {"success": False, "reason": "close_ratio must be 0.1–0.9"}
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            return {"success": False, "reason": f"Ticket #{ticket} not found"}
+        pos = positions[0]
+        volume_to_close = round(pos.volume * close_ratio, 2)
+        sym_info = mt5.symbol_info(symbol)
+        if sym_info and volume_to_close < sym_info.volume_min:
+            return {"success": False, "reason": "Volume below broker minimum"}
+        tick = mt5.symbol_info_tick(symbol)
+        price = tick.bid if pos.type == 0 else tick.ask
+        order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol,
+            "volume": volume_to_close, "type": order_type,
+            "position": ticket, "price": price, "deviation": 20,
+            "magic": self.magic, "comment": "Partial close",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        result = mt5.order_send(request)
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
+            self._log_trade_history("PARTIAL_CLOSE", symbol, volume_to_close,
+                                    result.price, result.order, "", profit=None)
+            return {"success": True, "ticket": result.order,
+                    "volume_closed": volume_to_close}
+        return {"success": False, "reason": result.comment}
     def close_profitable_positions(self, symbol: str = None):
         """Close only currently profitable open positions."""
         if not self.connected:
@@ -751,9 +783,10 @@ class Trader:
             return "No profitable positions found to close."
 
         responses = []
-        for position in profitable_positions:
-            pos_symbol = position.symbol
-            symbol_info = mt5.symbol_info(pos_symbol)
+        with self._execution_lock:
+            for position in profitable_positions:
+                pos_symbol = position.symbol
+                symbol_info = mt5.symbol_info(pos_symbol)
             if symbol_info is None:
                 responses.append(f"Failed to close {pos_symbol}: could not fetch symbol info.")
                 continue

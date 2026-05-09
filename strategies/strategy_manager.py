@@ -218,6 +218,11 @@ class StrategyManager:
         # Exclude unimplemented strategies from ensemble voting
         self.active_ensemble_strategies = [k for k in self.engines if k not in ("News_Trading", "Sentiment_Analysis")]
 
+        # Market filters — instantiated once to avoid fresh objects on every call
+        from manager.risk_manager import MarketConditionFilter
+        self._mc_filter = MarketConditionFilter(broker)
+        self._mtf_engine = MTFConfluenceEngine(broker)
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def get_strategy_description(self, strategy_name: str) -> str:
@@ -344,15 +349,12 @@ class StrategyManager:
                 }
 
         # (NEW) Market Condition Pre-Filter (Feature #2)
-        from manager.risk_manager import MarketConditionFilter
-        mc_filter = MarketConditionFilter(self.broker)
-        is_suitable, mc_reason = mc_filter.is_market_suitable(symbol)
+        is_suitable, mc_reason = self._mc_filter.is_market_suitable(symbol)
         if not is_suitable:
             return {"action": "WAIT", "confidence": 0.0, "reason": mc_reason}
 
         # (NEW) Multi-Timeframe Confluence Check (Feature #4)
-        mtf_engine = MTFConfluenceEngine(self.broker)
-        mtf_data = mtf_engine.get_confluence_score(symbol)
+        mtf_data = self._mtf_engine.get_confluence_score(symbol)
         
         # Force WAIT if macro alignment is poor
         if not mtf_data["tradeable"]:
@@ -364,16 +366,6 @@ class StrategyManager:
                 self.notify(f"[StrategyManager] ⚠️ Unknown strategy '{strategy}'. Defaulting to Mean_Reversion.")
                 strategy = "Mean_Reversion"
             return self.engines[strategy].analyze(raw_df)
-
-        # 3. Engineer features if they were not already cached
-        if self.cache is None:
-            feat_df = FeatureEngineer.compute(raw_df)
-            if feat_df.empty:
-                return {
-                    "action": "WAIT",
-                    "confidence": 0.0,
-                    "reason": "Feature engineering produced an empty DataFrame.",
-                }
 
         # 3.5. Feed features to unsupervised learner ──────────────────────────
         if self.learner:

@@ -128,6 +128,10 @@ class NLPEngine:
         self._training_lock = threading.Lock()
         self._train_thread = None
         self._pending_retrain = False
+        
+        import nltk
+        nltk.download("punkt", quiet=True)
+        nltk.download("punkt_tab", quiet=True)
 
         self._initialize()
 

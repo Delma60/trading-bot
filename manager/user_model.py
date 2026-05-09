@@ -75,7 +75,10 @@ class UserModel:
         elif event == "session_start":
             self._model["total_sessions"] = self._model.get("total_sessions", 0) + 1
             self._model["last_seen"] = datetime.now().isoformat()
-
+        elif event == "asked_for_execution":
+            # User requested a trade — mild trust signal
+            self._model["trust_in_bot"] = min(1.0,
+                self._model["trust_in_bot"] + 0.01)
         self._save()
 
     def get_communication_style(self) -> dict:
