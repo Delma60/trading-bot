@@ -298,6 +298,22 @@ class RiskManager:
         # Risk calculators — instantiated once to avoid fresh objects on every call
         self.targeter = DynamicRiskTargeter(broker)
         self.reentry_system = SmartReEntrySystem()
+
+        # ── Balance-based pip sizing & lock balance ───────────────────────
+        cfg = self._load_profile()
+        self.lock_guard = LockBalanceGuard(
+            lock_amount = cfg.get("lock_balance",     0.0),
+            lock_pct    = cfg.get("lock_balance_pct", 0.0),
+        )
+        self.balance_pip_sizer = BalancePipSizer()
+    
+    def _load_profile(self) -> dict:
+        from pathlib import Path
+        import json
+        try:
+            return json.loads(Path("data/profile.json").read_text())
+        except Exception:
+            return {}
     
     def record_stop_out_position(self, symbol: str, close_price: float, position_type: int):
         """Record a stop-out when a position closes (called from PortfolioManager or chat layer).
@@ -379,6 +395,14 @@ class RiskManager:
         if positions is None:
             positions = self.broker.getPositions()
 
+        # Lock balance gate
+        tradeable = self.lock_guard.tradeable_balance(account.balance)
+        if tradeable <= 0:
+            return False, (
+                f"Lock balance (${self.lock_guard.effective_lock(account.balance):,.2f}) "
+                f"consumes the full account — no tradeable balance."
+            )
+
         # 1. Global Exposure Limit (Check against max_open_trades, not portfolio_size)
         current_open_trades = len(positions) if positions else 0
         if current_open_trades >= self.max_open_trades:
@@ -457,14 +481,31 @@ class RiskManager:
                 actual_risk_pct = base_risk_pct * 0.5   # Moderate DD: Cut size by 50%
                 self.notify(f"⚠️ Elevated Drawdown ({dd_ratio:.0%}). Recovery Mode: Risk cut to {actual_risk_pct}%.")
 
-        max_risk_usd = account.balance * (actual_risk_pct / 100)
+        # ── Lock balance: risk only from tradeable portion ────────────────
+        tradeable = self.lock_guard.tradeable_balance(account.balance)
+        if tradeable <= 0:
+            return {
+                "approved": False,
+                "reason": (
+                    f"Lock balance (${self.lock_guard.effective_lock(account.balance):,.2f}) "
+                    f"consumes the entire account. No tradeable balance remaining."
+                )
+            }
 
-        # --- VOLATILITY-ADJUSTED POSITION SIZING (Feature #6) ---
+        max_risk_usd = tradeable * (actual_risk_pct / 100)
+
+        # ── Balance-based pip sizing (replaces raw ATR × 1.5) ─────────────
         dynamic_targets = self.targeter.calculate_targets(symbol)
-        
-        # Override fixed pip SL with ATR-based SL
-        atr_pips = dynamic_targets.get("atr_pips", stop_loss_pips)
-        safe_sl_pips = atr_pips * 1.5 if atr_pips > 0 else stop_loss_pips
+        atr_pips        = dynamic_targets.get("atr_pips", 0.0)
+        safe_sl_pips    = self.balance_pip_sizer.get_sl_pips(
+            tradeable_balance = tradeable,
+            atr_pips          = atr_pips,
+        )
+        self.notify(
+            f"[RiskManager] {self.balance_pip_sizer.describe(tradeable, atr_pips)}",
+            # Remove this notify line in production if it's too verbose.
+            # It's useful during tuning to see exactly what pip was chosen.
+        )
         
         symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
         if symbol_info is None:

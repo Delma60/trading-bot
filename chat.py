@@ -1109,6 +1109,9 @@ class ARIA:
         "stop loss":        ("stop_loss",        "Stop Loss"),
         "sl":               ("stop_loss",        "Stop Loss"),
         "cooldown":         ("cooldown_duration_minutes", "Cooldown Duration"),
+        "lock balance":     ("lock_balance",     "Lock Balance"),
+        "lock":             ("lock_balance",     "Lock Balance"),
+        "lock pct":         ("lock_balance_pct", "Lock Balance %"),
     }
 
     def _try_setting_change(self, text: str) -> Optional[str]:
@@ -1153,6 +1156,12 @@ class ARIA:
             cfg = json.loads(self.PROFILE_FILE.read_text()) if self.PROFILE_FILE.exists() else {}
             cfg[key] = value
             self.PROFILE_FILE.write_text(json.dumps(cfg, indent=4))
+
+            # Sync lock guard at runtime so it takes effect immediately
+            if key == "lock_balance":
+                self.rm.lock_guard.update(lock_amount=value)
+            elif key == "lock_balance_pct":
+                self.rm.lock_guard.update(lock_pct=value / 100)  # user types 30, store as 0.30
         except Exception:
             pass
 
