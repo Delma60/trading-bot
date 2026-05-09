@@ -193,6 +193,9 @@ class StrategyManager:
         self.cache   = cache
         self.notify  = notify_callback
 
+        # Thread safety for ML/DL models
+        self._model_lock = threading.Lock()
+
         # ML/DL components — instantiated once and reused across calls
         self.lstm = LSTMPredictor()
         self.meta = MetaScorer()
@@ -282,7 +285,8 @@ class StrategyManager:
             self.notify(f"[StrategyManager] Feature engineering failed for {symbol} during retraining.")
             return
 
-        self.lstm.train(feat_df, symbol=symbol, force=True)
+        with self._model_lock:
+            self.lstm.train(feat_df, symbol=symbol, force=True)
 
         sample_count = len(self.meta._samples)
         if sample_count < 200:
@@ -291,7 +295,8 @@ class StrategyManager:
             )
             return
 
-        acc = self.meta.train(force=True)
+        with self._model_lock:
+            acc = self.meta.train(force=True)
         if acc > 0:
             self.notify(f"[StrategyManager] Retrained models for {symbol}. Meta accuracy: {acc:.1%}")
 
@@ -393,16 +398,18 @@ class StrategyManager:
                 strategy_signals[name] = {"action": "WAIT", "confidence": 0.0}
 
         # 5. Train LSTM (loads cached weights on subsequent calls) ─────────────
-        self.lstm.train(feat_df, symbol=symbol, force=retrain_lstm)
-        lstm_pred = self.lstm.predict(feat_df, symbol=symbol)
+        with self._model_lock:
+            self.lstm.train(feat_df, symbol=symbol, force=retrain_lstm)
+            lstm_pred = self.lstm.predict(feat_df, symbol=symbol)
 
         # 6. Meta-scorer makes the final call ─────────────────────────────────
         market_snapshot = feat_df.iloc[-1]
         regime = "Unknown"
         if self.learner:
             regime = self.learner.get_current_regime()
-            
-        final = self.meta.score(strategy_signals, lstm_pred, market_snapshot, regime=regime)
+
+        with self._model_lock:
+            final = self.meta.score(strategy_signals, lstm_pred, market_snapshot, regime=regime)
 
         # 7. Optionally accumulate a training sample for the meta-model ────────
         fv = self.meta.build_feature_vector(strategy_signals, lstm_pred, market_snapshot)

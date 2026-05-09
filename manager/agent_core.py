@@ -697,11 +697,17 @@ class AgentExecutor:
             wins = len(df[df['CleanProfit'] > 0])
             win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
             
-            # Group by Strategy
-            strat_group = df.groupby('Strategy')['CleanProfit']
-            strat_stats = strat_group.agg(['count', lambda x: (x>0).mean() * 100]).rename(columns={'<lambda_0>': 'win_rate'})
-            best_strat = strat_stats['win_rate'].idxmax() if not strat_stats.empty else "N/A"
-            worst_strat = strat_stats['win_rate'].idxmin() if not strat_stats.empty else "N/A"
+
+            # Group by Strategy, filter out 'Unknown'
+            strat_df = df[df['Strategy'].notna() & (df['Strategy'] != 'Unknown')]
+            if not strat_df.empty:
+                strat_group = strat_df.groupby('Strategy')['CleanProfit']
+                strat_stats = strat_group.agg(['count', lambda x: (x > 0).mean() * 100]).rename(columns={'<lambda_0>': 'win_rate'})
+                best_strat  = strat_stats['win_rate'].idxmax()
+                worst_strat = strat_stats['win_rate'].idxmin()
+            else:
+                best_strat  = "N/A — execute via scanner to log strategy"
+                worst_strat = "N/A"
 
             # Group by Symbol
             sym_group = df.groupby('Symbol')['CleanProfit'].sum()
@@ -1056,6 +1062,11 @@ class AgentSynthesizer:
         if not perf or "error" in perf:
             return "Not enough closed trade history to generate a performance report yet."
 
+        best_strat  = perf.get('best_strategy',  'N/A')
+        worst_strat = perf.get('worst_strategy', 'N/A')
+        if best_strat  == "Unknown": best_strat  = "N/A — label your strategies"
+        if worst_strat == "Unknown": worst_strat = "N/A — label your strategies"
+
         lines = [
             "📊 ARIA Personal Performance Analytics",
             "──────────────────────────────────────",
@@ -1063,8 +1074,8 @@ class AgentSynthesizer:
             f"Profit Factor:  {perf.get('profit_factor')}",
             f"Avg Win/Loss:   +${perf.get('avg_win')} / -${abs(perf.get('avg_loss'))}",
             "",
-            f"Best Strategy:  {perf.get('best_strategy')} (Highest Win Rate)",
-            f"Worst Strategy: {perf.get('worst_strategy')} (Needs Retraining)",
+            f"Best Strategy:  {best_strat} (Highest Win Rate)",
+            f"Worst Strategy: {worst_strat} (Needs Retraining)",
             f"Best Symbol:    {perf.get('best_symbol')}",
             f"Worst Symbol:   {perf.get('worst_symbol')}",
             "──────────────────────────────────────",

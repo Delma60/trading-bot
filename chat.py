@@ -107,7 +107,8 @@ class ActionExecutor:
         except Exception as e:
             return f"Execution failed: {str(e)}"
 
-    def execute_trade(self, symbol: str, direction: str, lots: Optional[float] = None) -> str:
+
+    def execute_trade(self, symbol: str, direction: str, lots: Optional[float] = None, strategy: str = "Manual") -> str:
         """Execute a trade and return a human-readable outcome."""
         cfg = self._cfg()
 
@@ -130,11 +131,12 @@ class ActionExecutor:
             lots = plan.get("lots", 0.01)
 
         result = self.broker.execute_trade(
-            symbol         = symbol,
-            action         = direction,
-            lots           = lots,
-            stop_loss_pips = cfg.get("stop_loss", 20.0),
+            symbol           = symbol,
+            action           = direction,
+            lots             = lots,
+            stop_loss_pips   = cfg.get("stop_loss", 20.0),
             take_profit_pips = cfg.get("target_profit", 10.0),
+            strategy         = strategy,
         )
 
         if result.get("success"):
@@ -216,7 +218,7 @@ class ARIA:
         )
 
         # Profile manager (credentials / config I/O)
-        self.profile_manager = ProfileManager(data_dir=str(Path("data")))
+        self.profile_manager = ProfileManager(path=Path("data/profile.json"))
 
         # Reasoning + response generation
         self.reasoning = ReasoningEngine(strategy_manager, risk_manager, portfolio_manager)
@@ -1069,12 +1071,6 @@ class ARIA:
         except Exception as e:
             print(f"Error during shutdown: {e}")
 
-    def __del__(self):
-        """Destructor to ensure cleanup."""
-        try:
-            self.shutdown()
-        except Exception:
-            pass
 
     # ─────────────────────────────────────────────────────────────────────────
     # Trade Cooldown Management
