@@ -17,7 +17,7 @@ class PortfolioManager:
     
     MODEL_PATH = Path("data/portfolio_meta_model.keras")
     TRAINING_DATA_PATH = Path("data/trade_history.json")
-    CONFIG_PATH = Path("data/portfolio_config.json")
+    PROFILE_PATH = Path("data/profile.json")  # Single source of truth
     
     def __init__(self, broker, strategy_manager, risk_manager: RiskManager, cache=None, notify_callback=print):
         self.broker = broker
@@ -25,10 +25,12 @@ class PortfolioManager:
         self.risk_manager = risk_manager
         self.notify = notify_callback
         self.gate = TradeGatekeeper(max_spread_pips=3.0)
-        # Load the fallback config
-        self.config = self._load_json(self.CONFIG_PATH, fallback={})
-        self.asset_classes = self.config.get("asset_classes", {"Forex": ["EURUSD"]})
-        self.strategy_mapping = self.config.get("strategy_mapping", {})
+        
+        # Load from profile.json (single source of truth)
+        self.profile = self._load_json(self.PROFILE_PATH, fallback={})
+        self.asset_classes = self.profile.get("asset_classes", {"Forex_USD": ["EURUSD"]})
+        self.strategy_mapping = self.profile.get("strategy_mapping", {})
+        self.allocation_limits = self.profile.get("allocation_limits", {})
         self.corr_guard = CorrelationGuard(max_shared_legs=2)
         
         self.master_watchlist = []

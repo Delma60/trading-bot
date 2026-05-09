@@ -1280,6 +1280,12 @@ class ARIA:
         (["strategy", "how does", "what method"], "strategy_info"),
         (["price", "quote", "rate", "how much is"], "get_price"),
         (["close all", "nuke", "flatten"], "close_all"),
+        (["what symbols", "browse symbols", "search symbols",
+          "what pairs", "what can i trade", "available symbols",
+          "available instruments", "what tickers", "list all",
+          "show all symbols", "what metals", "what crypto",
+          "what indices", "find symbol", "look up symbol",
+          "what is the ticker", "what is the symbol for"], "browse_symbols"),
     ]
 
     def __init__(
@@ -1654,6 +1660,14 @@ class ARIA:
             inbox = self._drain_inbox()
             return  f"{inbox}\n\n{guard}"
 
+        # Browse symbols
+        if intent == "browse_symbols":
+            return self._handle_symbol_browser(text, entities)
+
+        # Add symbols to portfolio (comma-separated or joined)
+        if intent == "add_symbols" or any(k in lower for k in ["add to portfolio", "add symbols", "add pairs"]):
+            return self.executor.add_symbols_to_portfolio(text)
+
         return None  # fall through to agent
 
     def _is_explicit_execute(self, lower: str) -> bool:
@@ -1708,6 +1722,133 @@ class ARIA:
             return f"🛑 Trade blocked: {reason}"
 
         return self.executor.execute_trade(symbol, direction)
+
+    def _handle_symbol_browser(self, text: str, entities: dict) -> str:
+        """
+        Searches the broker for available symbols, optionally filtering by
+        category or keyword, and returns a grouped, human-readable result.
+
+        Understands:
+          "what forex pairs do you have"    → category=forex
+          "what gold symbols are available" → query=XAU
+          "search USD"                      → query=USD
+          "what crypto can I trade"         → category=crypto
+          "find GBPJPY"                     → query=GBP
+        """
+        import re
+        from collections import defaultdict
+
+        lower = text.lower()
+
+        # ── Detect category intent ────────────────────────────────────────
+        category = None
+        if any(w in lower for w in ["forex", "currency", "currencies", "fx", "pair", "pairs"]):
+            category = "forex"
+        elif any(w in lower for w in ["metal", "metals", "gold", "silver", "xau", "xag", "platinum"]):
+            category = "metals"
+        elif any(w in lower for w in ["crypto", "bitcoin", "ethereum", "btc", "eth", "digital"]):
+            category = "crypto"
+        elif any(w in lower for w in ["index", "indices", "stocks", "us30", "nas", "dax", "dow"]):
+            category = "indices"
+        elif any(w in lower for w in ["oil", "commodity", "commodities", "ngas", "energy"]):
+            category = "commodities"
+
+        # ── Detect search keyword ─────────────────────────────────────────
+        # Priority: explicit "search X" or "find X" phrase,
+        # then NLP-extracted symbols, then currency mentions in text.
+        query = None
+
+        search_match = re.search(
+            r"(?:search|find|look\s*up|show\s*me|what\s+is\s+the\s+(?:ticker|symbol)\s+for)\s+([A-Za-z]+)",
+            text, re.IGNORECASE
+        )
+        if search_match:
+            query = search_match.group(1).upper()
+
+        if not query and entities.get("symbols"):
+            # Use first 3 chars of extracted symbol as prefix search
+            query = entities["symbols"][0][:3].upper()
+
+        if not query:
+            # Fall back to any 3-letter currency code mentioned
+            currencies = re.findall(
+                r"\b(USD|EUR|GBP|JPY|AUD|CAD|CHF|NZD|SGD|HKD|NOK|SEK|DKK|ZAR|MXN)\b",
+                text.upper()
+            )
+            if currencies:
+                query = currencies[0]
+
+        # ── Fetch from broker ─────────────────────────────────────────────
+        if not self.broker.connected:
+            return "Not connected to MT5 — can't browse symbols. Connect first."
+
+        symbols = self.broker.search_symbols(
+            query=query,
+            category=category,
+            max_results=60,
+        )
+
+        if not symbols:
+            hint = ""
+            if query:
+                hint = f" No results for '{query}'."
+            if category:
+                hint += f" No {category} symbols found."
+            return (
+                f"Nothing came back from the broker.{hint} "
+                f"Try: 'show forex pairs', 'search EURUSD', "
+                f"'what metals can I trade', or 'what crypto is available'."
+            )
+
+        # ── Format grouped output ─────────────────────────────────────────
+        grouped: defaultdict[str, list] = defaultdict(list)
+        for s in symbols:
+            grouped[s["category"]].append(s)
+
+        header = f"Found {len(symbols)} symbol(s)"
+        if query:
+            header += f" matching '{query}'"
+        if category:
+            header += f" in {category}"
+        header += " on your broker:\n"
+
+        CAT_EMOJI = {
+            "forex":       "💱 FOREX",
+            "metals":      "🥇 METALS",
+            "crypto":      "₿  CRYPTO",
+            "indices":     "📈 INDICES",
+            "commodities": "🛢  COMMODITIES",
+        }
+
+        lines = [header]
+        for cat in ["forex", "metals", "crypto", "indices", "commodities"]:
+            items = grouped.get(cat, [])
+            if not items:
+                continue
+
+            lines.append(f"{CAT_EMOJI.get(cat, cat.upper())} ({len(items)})")
+
+            # Show up to 20 per category to keep the response readable
+            for item in items[:20]:
+                name   = item["name"]
+                desc   = item["description"]
+                spread = item["spread_pips"]
+
+                # Only show description when it adds info beyond the ticker name
+                desc_str   = f"  {desc}" if desc and desc.upper() != name.upper() else ""
+                spread_str = f"  [{spread}p spread]" if spread is not None else ""
+
+                lines.append(f"  {name}{desc_str}{spread_str}")
+
+            if len(items) > 20:
+                lines.append(f"  … and {len(items) - 20} more. "
+                              f"Narrow it down: 'search EUR' or 'search GBP'.")
+            lines.append("")
+
+        lines.append("To add any symbol: 'add EURUSD to portfolio'")
+        lines.append("To search further: 'search USD', 'show me crypto', 'find gold symbol'")
+
+        return "\n".join(lines)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Post-analysis action offer
@@ -1938,6 +2079,79 @@ class ARIA:
             self.PROFILE_FILE.write_text(json.dumps(cfg, indent=4))
         except Exception:
             pass
+
+    def add_symbols_to_portfolio(self, text: str) -> str:
+        """
+        Parse comma-separated or 'and'-joined symbols from user text and add them to profile.
+        
+        Examples:
+          "add USD, EUR and JPY"           → extracts USD, EUR, JPY
+          "add EURUSD, USDJPY and GBPUSD" → adds all three
+          "add USDCHF USDCAD USDSEK"      → adds all three
+        """
+        import re
+        from manager.nlp_engine import SYMBOL_ALIASES
+        
+        # Extract all potential symbols (6-7 letter uppercase words or 3-letter codes)
+        symbols_found = re.findall(r"\b([A-Z]{3,7})\b", text.upper())
+        
+        # Resolve aliases
+        resolved = set()
+        for sym in symbols_found:
+            # Check if it's an alias (like USD → EURUSD, or a 3-letter code like USD)
+            if sym in SYMBOL_ALIASES:
+                resolved.add(SYMBOL_ALIASES[sym])
+            elif len(sym) >= 6:
+                # Likely a direct symbol like EURUSD
+                resolved.add(sym)
+            elif len(sym) == 3:
+                # Single currency code—try common pairs
+                # USD → EURUSD, GBP → GBPUSD, JPY → USDJPY, etc.
+                if sym == "USD":
+                    # User said "USD" — add common USD pairs
+                    resolved.update(["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD"])
+                elif sym == "EUR":
+                    resolved.update(["EURUSD", "EURGBP", "EURCHF", "EURJPY"])
+                elif sym == "GBP":
+                    resolved.update(["GBPUSD", "EURGBP", "GBPJPY", "GBPCHF"])
+                elif sym == "JPY":
+                    resolved.update(["USDJPY", "EURJPY", "GBPJPY", "AUDJPY"])
+                elif sym in SYMBOL_ALIASES:
+                    resolved.add(SYMBOL_ALIASES[sym])
+        
+        if not resolved:
+            return "❌ No symbols recognized. Try: 'add EURUSD, USDJPY' or 'add USD, EUR'."
+        
+        # Load current profile
+        try:
+            cfg = json.loads(self.PROFILE_FILE.read_text()) if self.PROFILE_FILE.exists() else {}
+        except Exception:
+            cfg = {}
+        
+        # Get existing symbols
+        existing = set(cfg.get("trading_symbols", []))
+        
+        # Add new ones (avoiding duplicates)
+        added = resolved - existing
+        if not added:
+            current_list = ", ".join(sorted(existing))
+            return f"ℹ️  All symbols already in portfolio:\n{current_list}"
+        
+        # Update profile
+        updated_symbols = sorted(existing | resolved)
+        cfg["trading_symbols"] = updated_symbols
+        
+        try:
+            self.PROFILE_FILE.parent.mkdir(exist_ok=True)
+            self.PROFILE_FILE.write_text(json.dumps(cfg, indent=4))
+            added_str = ", ".join(sorted(added))
+            total_str = ", ".join(updated_symbols)
+            return (
+                f"✅ Added {len(added)} symbol(s): {added_str}\n"
+                f"📊 Portfolio now tracks ({len(updated_symbols)}): {total_str}"
+            )
+        except Exception as e:
+            return f"❌ Failed to update profile: {e}"
 
     # ─────────────────────────────────────────────────────────────────────────
     # Notification inbox

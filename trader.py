@@ -151,6 +151,101 @@ class Trader:
             return None
         symbols = mt5.symbols_get()
         return symbols
+
+    def search_symbols(
+        self,
+        query: str = None,
+        category: str = None,
+        max_results: int = 50,
+    ) -> list[dict]:
+        """
+        Search and filter all symbols available on the connected broker.
+
+        Parameters
+        ----------
+        query    : Optional string matched against symbol name and description.
+                   e.g. "USD", "GOLD", "BTC"
+        category : Optional category filter — 'forex', 'metals', 'crypto',
+                   'indices', 'commodities'
+        max_results : Hard cap on returned results.
+
+        Returns
+        -------
+        List of dicts: {name, description, category, spread_pips}
+        spread_pips is None when the symbol is not currently quoted (market closed).
+        """
+        if not self.connected:
+            return []
+
+        all_symbols = mt5.symbols_get()
+        if not all_symbols:
+            return []
+
+        # ── Category inference rules ──────────────────────────────────────────
+        def _infer_category(name: str) -> str:
+            n = name.upper()
+            if any(n.startswith(p) for p in ["XAU", "XAG", "XPT", "XPD"]):
+                return "metals"
+            if any(t in n for t in ["BTC", "ETH", "LTC", "XBT", "DOGE", "ADA", "SOL", "XRP"]):
+                return "crypto"
+            if any(t in n for t in ["US30", "US500", "NAS", "GER", "UK100",
+                                      "JPN", "AUS200", "SPX", "NDX", "DAX",
+                                      "FTSE", "CAC", "NIKKEI"]):
+                return "indices"
+            if any(t in n for t in ["OIL", "NGAS", "BRENT", "CORN",
+                                      "WHEAT", "COFFEE", "COCOA", "SUGAR"]):
+                return "commodities"
+            return "forex"
+
+        q   = query.upper().strip()   if query    else None
+        cat = category.lower().strip() if category else None
+
+        results = []
+
+        for sym in all_symbols:
+            name = sym.name
+            desc = getattr(sym, "description", "") or ""
+            sym_cat = _infer_category(name)
+
+            # Category filter
+            if cat and sym_cat != cat:
+                continue
+
+            # Keyword filter — match name OR description
+            if q and q not in name.upper() and q not in desc.upper():
+                continue
+
+            # Live spread (fast: MT5 is local, <1ms per call)
+            spread_pips = None
+            try:
+                tick = mt5.symbol_info_tick(name)
+                info = mt5.symbol_info(name)
+                if tick and info and info.point > 0:
+                    spread_pts = (tick.ask - tick.bid) / info.point
+                    # 5-digit forex: 10 points per pip; everything else: 1:1
+                    pip_mult = 10.0 if info.digits in (5, 3) else 1.0
+                    spread_pips = round(spread_pts / pip_mult, 1)
+            except Exception:
+                pass
+
+            results.append({
+                "name":        name,
+                "description": desc,
+                "category":    sym_cat,
+                "spread_pips": spread_pips,
+            })
+
+            if len(results) >= max_results:
+                break
+
+        # Sort: exact name prefix matches first, then alphabetical within category
+        if q:
+            results.sort(key=lambda r: (0 if r["name"].startswith(q) else 1, r["name"]))
+        else:
+            results.sort(key=lambda r: (r["category"], r["name"]))
+
+        return results
+
     def ohclv_data(self, symbol: str, timeframe: str="H1", num_bars: int=1000) -> pd.DataFrame:
         if not self.connected:
             self.notify("Not connected to MetaTrader 5")

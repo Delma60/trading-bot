@@ -570,6 +570,37 @@
             "responses": [
                 "Sure — let's walk through your settings."
             ]
+        },
+        {
+            "tag": "browse_symbols",
+            "patterns": [
+                "what symbols can I trade",
+                "show available symbols",
+                "show all symbols",
+                "what pairs are available",
+                "what tickers do you have",
+                "what instruments are available",
+                "browse symbols",
+                "search symbols",
+                "what can I trade",
+                "list all pairs",
+                "show me forex pairs",
+                "show forex symbols",
+                "what metals can I trade",
+                "what crypto is available",
+                "what indices can I trade",
+                "search USD pairs",
+                "find EURUSD",
+                "look up gold symbol",
+                "what is the ticker for gold",
+                "what is the symbol for bitcoin",
+                "available instruments",
+                "broker symbols",
+                "show me all available"
+            ],
+            "responses": [
+                "Fetching available symbols from your broker..."
+            ]
         }
     ]
 }

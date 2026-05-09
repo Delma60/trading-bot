@@ -107,7 +107,7 @@ class MTFConfluenceEngine:
             "direction": dominant,
             "alignment": alignment,
             "signals": signals,
-            "tradeable": alignment >= 0.75  # 3 out of 4 must align
+            "tradeable": alignment >= 0.50  # 2 out of 4 must align (reduced from 3/4)
         }
 
 

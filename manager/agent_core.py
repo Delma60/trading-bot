@@ -904,13 +904,16 @@ class AgentSynthesizer:
             parts.append(f"Anomaly score {anomaly['anomaly_score']:.2f} — unusual conditions, size down.")
  
         # Suggested action for confirm flow (Win Rate Fix #3)
-        if action in ("BUY", "SELL") and grade in ("A", "B") and approved and lots:
+        # Now allow Grade C at 50% position size (was A/B only)
+        if action in ("BUY", "SELL") and grade in ("A", "B", "C") and approved and lots:
+            # Reduce size for Grade C trades
+            trade_lots = lots if grade in ("A", "B") else lots * 0.5
             agreements = sum(
                 1 for s in r.get("signal_ensemble", {}).get("strategy_signals", {}).values()
                 if s.get("action") == action and s.get("confidence", 0) > 0.4
             )
-            if agreements >= 3:  # at least 3 strategies must agree
-                plan.suggested_action = f"{action} {lots} {symbol}"
+            if agreements >= 2:  # reduced from 3, since we now accept lower-confidence trades
+                plan.suggested_action = f"{action} {trade_lots:.2f} {symbol}"
  
         return " ".join(parts)
  

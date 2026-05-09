@@ -903,21 +903,25 @@ class TradeGatekeeper:
         hour    = now_utc.hour
         weekday = now_utc.weekday()   # 0=Mon … 4=Fri … 6=Sun
  
+        # Selective Asian session blocking by symbol (was blanket 00:00-07:00 UTC)
         if self.avoid_asian_session and 0 <= hour < 7:
-            return False, (
-                f"Asian session ({hour:02d}:00 UTC) — low liquidity, wide spreads. "
-                f"Waiting for London open."
-            )
- 
+            # Allow USDJPY, AUDUSD, NZDUSD, CADJPY — they're active in Asian session
+            asian_active_pairs = {"USDJPY", "AUDUSD", "NZDUSD", "CADJPY", "CHFJPY", "GBPJPY"}
+            if symbol.upper() not in asian_active_pairs:
+                return False, (
+                    f"Asian session ({hour:02d}:00 UTC) — low liquidity, wide spreads. "
+                    f"Waiting for London open."
+                )
+
         if self.avoid_friday_close and weekday == 4 and hour >= 20:
             return False, (
                 "Friday after 20:00 UTC — weekend gap risk. "
                 "No new positions before market close."
             )
- 
+
         if weekday >= 5:   # Saturday or Sunday
             return False, "Market closed (weekend)."
- 
+
         # ── Spread filter ────────────────────────────────────────────────────
         spread_pips = self._get_spread_pips(symbol, broker)
         if spread_pips is None:

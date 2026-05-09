@@ -126,7 +126,8 @@ class LocalCache:
         try:
             self._get_history_path(symbol).to_parquet(df)
         except Exception as exc:
-            self.notify(f"[LocalCache] Failed to save history for {symbol}: {exc}")
+            pass
+            # self.notify(f"[LocalCache] Failed to save history for {symbol}: {exc}")
 
     def _refresh_features(self):
         if not self.broker.connected:

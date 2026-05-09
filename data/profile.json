@@ -3,16 +3,76 @@
     "password": "2ZUvJu&P",
     "server": "OctaFX-Demo",
     "trading_symbols": [
-        "USDCNH",
-        "AUDCAD",
         "EURUSD",
         "GBPUSD",
+        "USDJPY",
         "USDCHF",
+        "USDCAD",
         "AUDUSD",
         "NZDUSD",
+        "USDCNH",
+        "USDSEK",
+        "USDNOK",
+        "USDSGD",
+        "USDHKD",
+        "USDZAR",
+        "USDMXN",
+        "USDTRY",
         "USDRUB",
-        "USDCAD",
-        "USDSEK"
+        "USDTHB",
+        "USDPHP",
+        "USDIDR",
+        "USDKRW",
+        "USDCLP",
+        "USDPLN",
+        "USDCZE",
+        "USDHUF",
+        "USDRON",
+        "EURGBP",
+        "EURJPY",
+        "EURCHF",
+        "EURCAD",
+        "EURAUD",
+        "EURNZD",
+        "EURSGD",
+        "EURSEK",
+        "EURNOK",
+        "EURPLN",
+        "EURCZK",
+        "EURHUF",
+        "GBPJPY",
+        "GBPCHF",
+        "GBPCAD",
+        "GBPAUD",
+        "GBPNZD",
+        "CHFJPY",
+        "CADJPY",
+        "AUDJPY",
+        "NZDJPY",
+        "BTCUSD",
+        "ETHUSD",
+        "XRPUSD",
+        "LTCUSD",
+        "BCHUSD",
+        "XAUUSD",
+        "XAGUSD",
+        "WTIUSD",
+        "BRENTUSD",
+        "NATGAS",
+        "CORNUSD",
+        "SOYBEANSUSD",
+        "WHEATUSD",
+        "US30",
+        "US100",
+        "US500",
+        "DAX",
+        "FTSE",
+        "CAC40",
+        "AUS200",
+        "HSI",
+        "NIKKEI",
+        "MOEX",
+        "SENSEX"
     ],
     "target_profit": 10.0,
     "stop_loss": 5.0,
@@ -21,5 +81,48 @@
     "preferred_timeframes": [
         "H1"
     ],
-    "daily_goal": 10.0
+    "daily_goal": 10.0,
+    "asset_classes": {
+        "Forex_USD": [
+            "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
+            "USDCNH", "USDSEK", "USDNOK", "USDSGD", "USDHKD", "USDZAR", "USDMXN",
+            "USDTRY", "USDRUB", "USDTHB", "USDPHP", "USDIDR", "USDKRW", "USDCLP",
+            "USDPLN", "USDCZE", "USDHUF", "USDRON"
+        ],
+        "Forex_EUR": [
+            "EURGBP", "EURJPY", "EURCHF", "EURCAD", "EURAUD", "EURNZD", "EURSGD",
+            "EURSEK", "EURNOK", "EURPLN", "EURCZK", "EURHUF"
+        ],
+        "Forex_Other": [
+            "GBPJPY", "GBPCHF", "GBPCAD", "GBPAUD", "GBPNZD", "CHFJPY", "CADJPY",
+            "AUDJPY", "NZDJPY"
+        ],
+        "Crypto": ["BTCUSD", "ETHUSD", "XRPUSD", "LTCUSD", "BCHUSD"],
+        "Commodities": ["XAUUSD", "XAGUSD", "WTIUSD", "BRENTUSD", "NATGAS", "CORNUSD", "SOYBEANSUSD", "WHEATUSD"],
+        "Indices": ["US30", "US100", "US500", "DAX", "FTSE", "CAC40", "AUS200", "HSI", "NIKKEI", "MOEX", "SENSEX"]
+    },
+    "allocation_limits": {
+        "Forex_USD": 3,
+        "Forex_EUR": 2,
+        "Forex_Other": 2,
+        "Crypto": 1,
+        "Commodities": 1,
+        "Indices": 1
+    },
+    "strategy_mapping": {
+        "default": "Mean_Reversion",
+        "asset_class_defaults": {
+            "Forex_USD": "Mean_Reversion",
+            "Forex_EUR": "Mean_Reversion",
+            "Forex_Other": "Trend_Following",
+            "Crypto": "Momentum",
+            "Commodities": "Breakout",
+            "Indices": "Breakout"
+        },
+        "symbol_overrides": {
+            "USDJPY": "Trend_Following",
+            "BTCUSD": "Momentum",
+            "XAUUSD": "Breakout"
+        }
+    }
 }
