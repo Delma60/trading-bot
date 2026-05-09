@@ -14,7 +14,7 @@ from strategies.models.lstm_predictor import LSTMPredictor
 from strategies.models.meta_scorer import MetaScorer
 import threading
 import time
-
+from manager.profile_manager import profile as _profile
 class DummyStrategy:
     """Safe placeholder for strategies not yet implemented."""
     def analyze(self, df: pd.DataFrame) -> dict:
@@ -138,7 +138,7 @@ class MTFConfluenceEngine:
             "direction": dominant,
             "alignment": alignment,
             "signals": signals,
-            "tradeable": alignment >= 0.50  # 2 out of 4 must align (reduced from 3/4)
+            "tradeable": alignment >= _profile.scanner().mtf_min_alignment
         }
 
 

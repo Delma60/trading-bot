@@ -29,6 +29,7 @@ from manager.voice_layer import VoiceLayer
 from manager.proactive_engine import ProactiveEngine
 from strategies.strategy_manager import StrategyManager
 from trader import Trader
+from manager.profile_manager import profile
 
 
 
@@ -75,7 +76,13 @@ class ActionExecutor:
         
         # 3. Extract the Dynamic Targets we built in the reasoning engine
         dynamic_targets = plan.context.get("dynamic_targets", {})
-        gk = TradeGatekeeper()
+        b = profile.broker()
+        s = profile.sessions()
+        gk = TradeGatekeeper(
+            max_spread_pips       = b.spread_tolerance_pips,
+            avoid_asian_session   = s.avoid_asian_session,
+            avoid_friday_close    = s.avoid_friday_close,
+        )
         ok, reason = gk.gate(symbol, None)   # broker not needed; uses mt5 directly
         if not ok:
             return f"Trade blocked by gate: {reason}"
@@ -329,14 +336,7 @@ class ARIA:
             return future.result(timeout=self.message_timeout_seconds)
         except FuturesTimeoutError:
             mgr = MarketSessionManager()
-            cfg = {}
-            try:
-                if self.PROFILE_FILE.exists():
-                    cfg = json.loads(self.PROFILE_FILE.read_text())
-            except Exception:
-                pass
-                
-            portfolio_symbols = cfg.get("trading_symbols", [])
+            portfolio_symbols = profile.symbols()
             open_syms, closed_syms = mgr.filter_tradeable_symbols(portfolio_symbols)
             
             if closed_syms and not open_syms:
@@ -1149,19 +1149,27 @@ class ARIA:
         return None
 
     def _update_config(self, key: str, value: float):
-        try:
-            cfg = json.loads(self.PROFILE_FILE.read_text()) if self.PROFILE_FILE.exists() else {}
-            cfg[key] = value
-            self.PROFILE_FILE.write_text(json.dumps(cfg, indent=4))
-
-            # Sync lock guard at runtime so it takes effect immediately
-            if key == "lock_balance":
-                self.rm.lock_guard.update(lock_amount=value)
-            elif key == "lock_balance_pct":
-                self.rm.lock_guard.update(lock_pct=value / 100)  # user types 30, store as 0.30
-        except Exception:
-            pass
-
+        # Map old flat keys to new structure
+        _RISK_KEYS = {
+            "risk_percentage":  "risk_pct",
+            "stop_loss":        "stop_loss_pips",
+            "target_profit":    "take_profit_pips",
+            "max_daily_loss":   "max_daily_loss",
+            "daily_goal":       "daily_goal",
+            "lock_balance":     "lock_amount",
+            "lock_balance_pct": "lock_pct",
+        }
+        _BROKER_KEYS = {
+            "cooldown_duration_minutes": None,   # handled separately via broker
+        }
+        if key in _RISK_KEYS:
+            profile.update_risk(**{_RISK_KEYS[key]: value})
+            # Keep LockBalanceGuard in sync
+            r = profile.risk()
+            self.rm.lock_guard.update(lock_amount=r.lock_amount, lock_pct=r.lock_pct_decimal)
+        elif key == "cooldown_duration_minutes":
+            self.broker.set_cooldown(int(value * 60))
+        
     def add_symbols_to_portfolio(self, text: str) -> str:
         """
         Parse comma-separated or 'and'-joined symbols from user text and add them to profile.

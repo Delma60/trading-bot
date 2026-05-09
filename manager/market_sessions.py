@@ -68,7 +68,7 @@ class MarketSessionManager:
         open_syms, closed_syms = mgr.filter_tradeable_symbols(["EURUSD", "BTCUSD"])
 
         # What to trade on a Saturday?
-        summary = mgr.get_market_status_summary(["EURUSD", "BTCUSD", "ETHUSD"])
+        suFmary = mgr.get_market_status_summary(["EURUSD", "BTCUSD", "ETHUSD"])
     """
 
     CATEGORY_MAP: dict[str, list[str]] = {

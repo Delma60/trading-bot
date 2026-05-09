@@ -14,6 +14,7 @@ from manager.market_sessions import MarketSessionManager
 from manager.risk_manager import TradeGatekeeper, CorrelationGuard
 from strategies.strategy_manager import OHLCVCache
 from manager.market_sessions import MarketSessionManager
+from manager.profile_manager import profile as _profile
 
 class PortfolioManager:
     """The ML-Driven Offense Engine: Learns which strategies work in which environments."""
@@ -24,19 +25,25 @@ class PortfolioManager:
     
     def __init__(self, broker, strategy_manager, risk_manager: RiskManager, cache=None, notify_callback=print):
         self.broker = broker
+        b = _profile.broker()
+        s = _profile.sessions()
         self.strategy_manager = strategy_manager
         self.risk_manager = risk_manager
         self.notify = notify_callback
-        self.gate = TradeGatekeeper(max_spread_pips=3.0)
+        self.gate = TradeGatekeeper(
+            max_spread_pips       = b.spread_tolerance_pips,
+            avoid_asian_session   = s.avoid_asian_session,
+            avoid_friday_close    = s.avoid_friday_close,
+        )
         
-        # Load from profile.json (single source of truth)
-        self.profile = self._load_json(self.PROFILE_PATH, fallback={})
-        self.asset_classes = self.profile.get("asset_classes", {"Forex_USD": ["EURUSD"]})
-        self.strategy_mapping = self.profile.get("strategy_mapping", {})
         self.allocation_limits = self.profile.get("allocation_limits", {})
         self.corr_guard = CorrelationGuard(max_shared_legs=2)
         
-        self.master_watchlist = []
+        p = _profile.portfolio()
+        self.asset_classes    = p.asset_classes
+        self.strategy_mapping = p.strategy_mapping
+        self.master_watchlist = _profile.symbols()
+
         for symbols in self.asset_classes.values():
             self.master_watchlist.extend(symbols)
             

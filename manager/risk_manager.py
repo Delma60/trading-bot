@@ -8,7 +8,7 @@ import time
 import threading
 from collections import Counter
 from manager.market_sessions import MarketSessionManager
-
+from manager.profile_manager import profile as _profile
 
 def _pip_value_usd(symbol: str, lots: float) -> float:
     """Return the USD value of exactly one pip for the given symbol and lot size."""
@@ -300,10 +300,10 @@ class RiskManager:
         self.reentry_system = SmartReEntrySystem()
 
         # ── Balance-based pip sizing & lock balance ───────────────────────
-        cfg = self._load_profile()
+        r = _profile.risk()
         self.lock_guard = LockBalanceGuard(
-            lock_amount = cfg.get("lock_balance",     0.0),
-            lock_pct    = cfg.get("lock_balance_pct", 0.0) / 100,  # convert 30 → 0.30
+            lock_amount = r.lock_amount,
+            lock_pct    = r.lock_pct_decimal,   # always 0–1, bug fixed
         )
         self.balance_pip_sizer = BalancePipSizer()
     

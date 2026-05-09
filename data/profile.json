@@ -1,13 +1,86 @@
 {
-    "trading_symbols": [
-        "EURUSD"
-    ],
-    "risk_percentage": 1.0,
-    "max_daily_loss": 2.0,
-    "target_profit": 1.0,
-    "stop_loss": 20.0,
-    "daily_goal": 1.0,
-    "preferred_timeframes": [
-        "H1"
-    ]
+    "_version": 2,
+    "_note": "Edit values here. Do NOT rename top-level sections.",
+    "portfolio": {
+        "symbols": [
+            "EURUSD",
+            "GBPUSD",
+            "XAUUSD"
+        ],
+        "preferred_timeframes": [
+            "H1"
+        ],
+        "asset_classes": {
+            "forex": [
+                "EURUSD",
+                "GBPUSD"
+            ],
+            "metals": [
+                "XAUUSD"
+            ],
+            "crypto": []
+        },
+        "strategy_mapping": {
+            "default": "Mean_Reversion",
+            "asset_class_defaults": {
+                "forex": "Mean_Reversion",
+                "metals": "Momentum",
+                "crypto": "Momentum",
+                "indices": "Breakout",
+                "commodities": "Trend_Following"
+            },
+            "symbol_overrides": {}
+        }
+    },
+    "risk": {
+        "defaults": {
+            "risk_pct": 1.0,
+            "stop_loss_pips": 20.0,
+            "take_profit_pips": 40.0,
+            "max_daily_loss": 500.0,
+            "daily_goal": 50.0,
+            "cooldown_minutes": 5,
+            "lock_amount": 0.0,
+            "lock_pct": 0.0
+        },
+        "symbol_overrides": {
+            "XAUUSD": {
+                "risk_pct": 0.5,
+                "stop_loss_pips": 80.0,
+                "take_profit_pips": 160.0
+            }
+        },
+        "drawdown_recovery": {
+            "moderate_threshold": 0.5,
+            "moderate_scale": 0.5,
+            "critical_threshold": 0.8,
+            "critical_scale": 0.25
+        }
+    },
+    "broker": {
+        "max_open_trades": 3,
+        "min_margin_level": 150.0,
+        "spread_tolerance_pips": 3.0,
+        "magic_number": 1000,
+        "slippage_points": 20
+    },
+    "sessions": {
+        "avoid_asian_session": true,
+        "avoid_friday_close": true,
+        "asian_session_pairs": [
+            "USDJPY",
+            "AUDUSD",
+            "NZDUSD",
+            "CADJPY",
+            "CHFJPY",
+            "GBPJPY"
+        ]
+    },
+    "scanner": {
+        "interval_seconds": 3,
+        "dry_run": false,
+        "mtf_min_alignment": 0.5,
+        "volatility_spike_atr": 2.5,
+        "dead_volume_ratio": 0.3
+    }
 }

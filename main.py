@@ -1,4 +1,5 @@
 import os
+import profile
 # Must be set BEFORE any other imports to silence TensorFlow C++ logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -16,6 +17,7 @@ from manager.risk_manager import RiskManager
 from manager.portfolio_manager import PortfolioManager
 from chat import ARIA
 from pathlib import Path
+from manager.profile_manager import profile
 
 # Global shutdown flag for graceful termination
 shutdown_event = threading.Event()
@@ -42,10 +44,20 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
     This runs in the background forever. It wakes up, scans the market, 
     executes trades if it finds any, and goes back to sleep.
     """
+    
+    r  = profile.risk()
+    sc = profile.scanner()
+    risk_pct = r.risk_pct
+    stop_loss = r.stop_loss_pips
+    max_daily_loss = r.max_daily_loss
+    daily_target = r.daily_goal
+    session_target = sc.target_profit * len(symbols)
+    scan_interval_seconds = sc.scan_interval_seconds
+    
+    
     notify(f"🟢 Real-time Market Watch started. Scanning every {scan_interval_seconds} seconds.")
     
-    # Define your global risk rules here (or load them from a config file)
-    profile_path = Path("data/profile.json")
+   
 
     while not shutdown_event.is_set():
         # Prevent overlapping scan cycles — skip if previous scan still running
@@ -55,16 +67,6 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
             continue
         
         try:
-            config = {}
-            if profile_path.exists():
-                with open(profile_path, "r") as f:
-                    config = json.load(f)
-                    
-            risk_pct = config.get("risk_percentage", 1.0)
-            stop_loss = config.get("stop_loss", 20.0)
-            max_daily_loss = config.get("max_daily_loss", 50.0)
-            daily_target = config.get("daily_goal", 10.0)
-            session_target = config.get("target_profit", 1.0) * len(config.get("trading_symbols", []))
             
             # 1. Check total realized profit for today
             today_profit = portfolio_manager.broker.get_daily_realized_profit()
@@ -78,7 +80,7 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
                 portfolio_manager.broker.close_all_positions()
                 
                 # +++ TRIGGER CONTINUOUS LEARNING HERE +++
-                for symbol in config.get("trading_symbols", []):
+                for symbol in symbols:
                     portfolio_manager.strategy_manager.continuous_learning_routine(symbol)
                 
                 notify("💤 Neural Net optimized. Sleeping until tomorrow.")

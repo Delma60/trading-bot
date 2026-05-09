@@ -29,7 +29,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 from manager.risk_manager import DynamicRiskTargeter
-
+from manager.profile_manager import profile
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data structures
@@ -419,7 +419,9 @@ class AgentExecutor:
             return {"error": str(e), "articles": []}
 
     def _risk_check(self, symbol) -> dict:
-        cfg  = self._load_config()
+        r   = profile.risk(symbol)
+        cfg = {"max_daily_loss": r.max_daily_loss, "risk_percentage": r.risk_pct, ...}
+
         account = self.broker.getAccountInfo()
 
         allowed, reason = True, "No symbol."
@@ -443,17 +445,14 @@ class AgentExecutor:
     def _position_sizing(self, symbol) -> dict:
         if not symbol:
             return {}
-        cfg = self._load_config()
-        try:
-            return self.rm.calculate_safe_trade(
-                symbol         = symbol,
-                base_risk_pct  = cfg.get("risk_percentage", 1.0),
-                stop_loss_pips = cfg.get("stop_loss", 20.0),
-                max_daily_loss = cfg.get("max_daily_loss", 500.0),
-                portfolio_size = max(len(cfg.get("trading_symbols", [])), 1),
-            )
-        except Exception as e:
-            return {"approved": False, "reason": str(e)}
+        r = profile.risk(symbol)
+        return self.rm.calculate_safe_trade(
+            symbol         = symbol,
+            base_risk_pct  = r.risk_pct,
+            stop_loss_pips = r.stop_loss_pips,
+            max_daily_loss = r.max_daily_loss,
+            portfolio_size = len(profile.symbols()),
+        )
 
     def _anomaly_check(self, symbol) -> dict:
         try:
@@ -781,16 +780,6 @@ class AgentExecutor:
             pass
         return {"symbol": symbol}
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
-
-    def _load_config(self) -> dict:
-        try:
-            return json.loads(self.PROFILE_FILE.read_text())
-        except Exception:
-            return {
-                "risk_percentage": 1.0, "stop_loss": 20.0,
-                "max_daily_loss": 500.0, "trading_symbols": ["EURUSD"],
-            }
 
     @staticmethod
     def _get_step_result(plan: AgentPlan, name: str) -> Optional[dict]:
