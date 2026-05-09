@@ -73,7 +73,8 @@ class MarketSessionManager:
 
     CATEGORY_MAP: dict[str, list[str]] = {
         "crypto":       ["BTC", "ETH", "LTC", "XBT", "DOGE", "ADA", "SOL",
-                         "XRP", "BNB", "MATIC", "DOT", "LINK", "UNI", "AVAX"],
+                         "XRP", "BNB", "MATIC", "DOT", "LINK", "UNI", "AVAX",
+                         "SHIB", "PEPE", "NEAR", "FET", "INJ"],
         "metals":       ["XAU", "XAG", "XPT", "XPD"],
         "indices_us":   ["US30", "US500", "NAS100", "SPX", "NDX", "DOW",
                          "SP500", "US2000", "VIX"],

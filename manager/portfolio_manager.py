@@ -163,7 +163,7 @@ class PortfolioManager:
             return np.expand_dims(state, axis=0)
         
         except Exception as e:
-            self.notify(f"[Portfolio Manager]: Error getting market state for {symbol}: {e}")
+            # self.notify(f"[Portfolio Manager]: Error getting market state for {symbol}: {e}")
             return np.zeros((1, 4))
 
     def _assign_strategy_fallback(self, symbol: str) -> str:

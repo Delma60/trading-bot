@@ -878,49 +878,57 @@ class ProfitGuard:
 class TradeGatekeeper:
     """
     Pre-trade gate that checks spread and session quality.
- 
+
     Call gate() before any order submission.  Returns (True, "OK") when
     conditions are acceptable, or (False, reason) to block the trade.
- 
+
     Parameters
     ----------
-    max_spread_pips   : Maximum allowed spread in pips.  Signals above this
-                        are likely to be unprofitable after spread cost.
-                        Default 3.0 for major forex pairs.
-    avoid_asian_session: Block trades between 00:00–07:00 UTC, when
-                        majors have wide spreads and thin liquidity.
-    avoid_friday_close: Block new trades after 20:00 UTC on Fridays
-                        (weekend gap risk).
+    max_spread_pips_forex   : Maximum allowed spread for forex/metals (pips).
+    max_spread_pips_crypto  : Maximum allowed spread for crypto (pips).
+                              Crypto spreads are naturally much wider in nominal
+                              pip terms — BTC at $0.50 spread = ~5 pips, not 5000.
+    avoid_asian_session     : Block trades between 00:00–07:00 UTC for non-Asian
+                              forex pairs (wide spreads, thin liquidity).
+    avoid_friday_close      : Block new non-crypto trades after 20:00 UTC Friday
+                              (weekend gap risk).
     """
- 
+
     def __init__(
         self,
-        max_spread_pips:     float = 3.0,
-        avoid_asian_session: bool  = True,
-        avoid_friday_close:  bool  = True,
+        max_spread_pips:        float = 3.0,    # kept for backward compat — used as forex limit
+        max_spread_pips_forex:  float = None,   # overrides max_spread_pips when set
+        max_spread_pips_crypto: float = 50.0,   # crypto-specific limit in pips
+        avoid_asian_session:    bool  = True,
+        avoid_friday_close:     bool  = True,
     ):
-        self.max_spread_pips     = max_spread_pips
+        # Backward-compatible: if someone passes max_spread_pips only, use it for forex
+        self.max_spread_forex   = max_spread_pips_forex if max_spread_pips_forex is not None else max_spread_pips
+        self.max_spread_crypto  = max_spread_pips_crypto
         self.avoid_asian_session = avoid_asian_session
         self.avoid_friday_close  = avoid_friday_close
- 
-    def gate(self, symbol: str, broker: Optional[object] = None) -> tuple[bool, str]:
+
+    def gate(self, symbol: str, broker=None) -> tuple[bool, str]:
         """
         Returns (allowed: bool, reason: str).
         Call this before submitting any order.
         """
-        # ── Session filter ───────────────────────────────────────────────────
+        from datetime import datetime, timezone
+        from manager.market_sessions import MarketSessionManager
+
         now_utc = datetime.now(timezone.utc)
         hour    = now_utc.hour
         weekday = now_utc.weekday()
 
-        # Use the session engine to decide whether the symbol is tradeable right now.
-        mgr = MarketSessionManager()
+        # ── Session filter ───────────────────────────────────────────────────
+        mgr      = MarketSessionManager()
         category = mgr.get_symbol_category(symbol)
         tradeable, session_reason = mgr.is_symbol_tradeable(symbol, now_utc)
+
         if not tradeable:
             next_open = mgr.get_next_open_time(symbol, now_utc)
             return False, f"{session_reason} Opens: {next_open}."
-        
+
         if category != "crypto" and self.avoid_friday_close and weekday == 4 and hour >= 20:
             return False, (
                 "Friday after 20:00 UTC — weekend gap risk. "
@@ -936,33 +944,55 @@ class TradeGatekeeper:
                 )
 
         # ── Spread filter ────────────────────────────────────────────────────
-        spread_pips = self._get_spread_pips(symbol, broker)
+        spread_pips = self._get_spread_pips(symbol, broker, category)
         if spread_pips is None:
             return False, f"Could not fetch tick data for {symbol}."
- 
-        if spread_pips > self.max_spread_pips:
-            return False, (
-                f"Spread too wide: {spread_pips:.1f} pips "
-                f"(limit {self.max_spread_pips} pips). "
-                f"Waiting for tighter conditions."
-            )
-        spread_limit = self.max_spread_pips * 5 if category == "crypto" else self.max_spread_pips
+
+        # Select the appropriate limit for this instrument category
+        if category == "crypto":
+            spread_limit = self.max_spread_crypto
+        else:
+            spread_limit = self.max_spread_forex
+
         if spread_pips > spread_limit:
             return False, (
                 f"Spread too wide: {spread_pips:.1f} pips "
                 f"(limit {spread_limit:.1f} pips for {category}). "
                 f"Waiting for tighter conditions."
             )
- 
+
         return True, "OK"
- 
-    def _get_spread_pips(self, symbol: str, broker: Optional[object] = None) -> float | None:
+
+    def _get_spread_pips(self, symbol: str, broker=None, category: str = None) -> float | None:
+        """
+        Calculate the current spread in pips, correctly normalised per instrument type.
+
+        Pip sizes by category
+        ---------------------
+        Standard forex (5-digit, e.g. EURUSD at 1.08500):
+            point = 0.00001  →  1 pip = 10 points
+        JPY pairs (3-digit, e.g. USDJPY at 155.000):
+            point = 0.001    →  1 pip = 10 points  (same formula)
+        Metals (e.g. XAUUSD at 2300.00):
+            point = 0.01     →  1 pip = 1 point    (digits = 2)
+        Crypto (e.g. BTCUSD at 65000.00):
+            point = 0.01     →  1 pip = 1 point    (digits = 2)
+        Indices (e.g. US30 at 38000.0):
+            point = 0.1      →  1 pip = 1 point
+
+        The rule: digits 5 or 3 → divide raw spread_points by 10.
+                  everything else → spread_points already represents pips.
+        """
+        import MetaTrader5 as mt5
+
         try:
             tick = None
+
+            # Try broker helper first (avoids direct MT5 call in tests)
             if broker is not None and hasattr(broker, "get_tick_data"):
                 tick_data = broker.get_tick_data(symbol)
                 if tick_data and "ask" in tick_data and "bid" in tick_data:
-                    tick = type("Tick", (), tick_data)
+                    tick = type("Tick", (), tick_data)()
 
             if tick is None:
                 tick = mt5.symbol_info_tick(symbol)
@@ -972,11 +1002,14 @@ class TradeGatekeeper:
                 return None
 
             spread_points = (tick.ask - tick.bid) / info.point
-            pip_multiplier = 1.0 if any(
-                t in symbol.upper()
-                for t in ["BTC", "ETH", "XAU", "XAG", "US30", "NAS"]
-            ) else 10.0
-            return spread_points / pip_multiplier
+
+            # 5-digit forex (EURUSD) and 3-digit JPY pairs both have 10 points per pip
+            if info.digits in (5, 3):
+                return spread_points / 10.0
+
+            # Everything else (metals, crypto, indices): 1 point = 1 pip
+            return spread_points
+
         except Exception:
             return None
 

@@ -277,7 +277,7 @@ class Trader:
             if symbol_info is not None:
                 return symbol_info._asdict()
             else:
-                self.notify(f"Failed to get symbol info, error code = {mt5.last_error()}")
+                # self.notify(f"Failed to get symbol info, error code = {mt5.last_error()}")
                 return None
     def get_tick_data(self, symbol: str, num_ticks: int = 10):
         if not self.connected:
@@ -287,7 +287,7 @@ class Trader:
         if tick is not None:
             return tick._asdict()
         else:
-            self.notify(f"Failed to get tick data, error code = {mt5.last_error()}")
+            # self.notify(f"Failed to get tick data, error code = {mt5.last_error()}")
             return None
     def getPositions(self):
         """Get all open positions"""
@@ -787,59 +787,59 @@ class Trader:
             for position in profitable_positions:
                 pos_symbol = position.symbol
                 symbol_info = mt5.symbol_info(pos_symbol)
-            if symbol_info is None:
-                responses.append(f"Failed to close {pos_symbol}: could not fetch symbol info.")
-                continue
+                if symbol_info is None:
+                    responses.append(f"Failed to close {pos_symbol}: could not fetch symbol info.")
+                    continue
 
-            tick = mt5.symbol_info_tick(pos_symbol)
-            if tick is None:
-                responses.append(f"Failed to close {pos_symbol}: could not fetch current tick price.")
-                continue
+                tick = mt5.symbol_info_tick(pos_symbol)
+                if tick is None:
+                    responses.append(f"Failed to close {pos_symbol}: could not fetch current tick price.")
+                    continue
 
-            if position.type == mt5.POSITION_TYPE_BUY:
-                order_type = mt5.ORDER_TYPE_SELL
-                price = tick.bid
-            else:
-                order_type = mt5.ORDER_TYPE_BUY
-                price = tick.ask
+                if position.type == mt5.POSITION_TYPE_BUY:
+                    order_type = mt5.ORDER_TYPE_SELL
+                    price = tick.bid
+                else:
+                    order_type = mt5.ORDER_TYPE_BUY
+                    price = tick.ask
 
-            filling_mode = symbol_info.filling_mode
-            if filling_mode & 1:
-                type_filling = mt5.ORDER_FILLING_FOK
-            elif filling_mode & 2:
-                type_filling = mt5.ORDER_FILLING_IOC
-            else:
-                type_filling = mt5.ORDER_FILLING_RETURN
+                filling_mode = symbol_info.filling_mode
+                if filling_mode & 1:
+                    type_filling = mt5.ORDER_FILLING_FOK
+                elif filling_mode & 2:
+                    type_filling = mt5.ORDER_FILLING_IOC
+                else:
+                    type_filling = mt5.ORDER_FILLING_RETURN
 
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": pos_symbol,
-                "volume": position.volume,
-                "type": order_type,
-                "position": position.ticket,
-                "price": price,
-                "deviation": 20,
-                "magic": 234000,
-                "comment": "Close profitable trade",
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": type_filling,
-            }
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": pos_symbol,
+                    "volume": position.volume,
+                    "type": order_type,
+                    "position": position.ticket,
+                    "price": price,
+                    "deviation": 20,
+                    "magic": 234000,
+                    "comment": "Close profitable trade",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": type_filling,
+                }
 
-            result = mt5.order_send(request)
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                responses.append(f"❌ Failed to close {pos_symbol} (Ticket #{position.ticket}): {result.comment}")
-            else:
-                self._log_trade_history(
-                    action="CLOSE",
-                    symbol=pos_symbol,
-                    lots=position.volume,
-                    price=result.price,
-                    ticket=result.order,
-                    comment=f"Profit: {position.profit}",
-                    strategy=self._strategy_for(position.ticket),
-                    profit=position.profit,
-                )
-                self._mark_cooldown(pos_symbol)
-                responses.append(f"✅ Closed {pos_symbol} (Ticket #{position.ticket}) at {result.price}")
+                result = mt5.order_send(request)
+                if result.retcode != mt5.TRADE_RETCODE_DONE:
+                    responses.append(f"❌ Failed to close {pos_symbol} (Ticket #{position.ticket}): {result.comment}")
+                else:
+                    self._log_trade_history(
+                        action="CLOSE",
+                        symbol=pos_symbol,
+                        lots=position.volume,
+                        price=result.price,
+                        ticket=result.order,
+                        comment=f"Profit: {position.profit}",
+                        strategy=self._strategy_for(position.ticket),
+                        profit=position.profit,
+                    )
+                    self._mark_cooldown(pos_symbol)
+                    responses.append(f"✅ Closed {pos_symbol} (Ticket #{position.ticket}) at {result.price}")
 
         return "\n".join(responses)

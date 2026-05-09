@@ -73,6 +73,7 @@
         "NIKKEI",
         "MOEX",
         "SENSEX"
+
     ],
     "target_profit": 10.0,
     "stop_loss": 5.0,

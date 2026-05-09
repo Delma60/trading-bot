@@ -13,6 +13,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 
+from manager.market_sessions import MarketSessionManager
 from manager.nlp_engine import NLPEngine
 from manager.reasoning_engine import ReasoningEngine
 from manager.response_engine import ResponseEngine
@@ -323,11 +324,34 @@ class ARIA:
             future = self.message_processor.submit(self._process_message_impl, user_input)
             return future.result(timeout=self.message_timeout_seconds)
         except FuturesTimeoutError:
-            msg = f"⏱️ Message processing timed out after {self.message_timeout_seconds}s — broker may be unresponsive. Please try again."
+            mgr = MarketSessionManager()
+            cfg = {}
+            try:
+                if self.PROFILE_FILE.exists():
+                    cfg = json.loads(self.PROFILE_FILE.read_text())
+            except Exception:
+                pass
+                
+            portfolio_symbols = cfg.get("trading_symbols", [])
+            open_syms, closed_syms = mgr.filter_tradeable_symbols(portfolio_symbols)
+            
+            if closed_syms and not open_syms:
+                msg = (
+                    f"⏱️ Data request timed out after {self.message_timeout_seconds}s. "
+                    f"Your entire portfolio ({', '.join(closed_syms[:3])}…) is currently in closed markets, "
+                    f"which typically causes the broker connection to hang. Try again when markets open or switch to crypto!"
+                )
+            elif closed_syms:
+                msg = (
+                    f"⏱️ Message processing timed out after {self.message_timeout_seconds}s. "
+                    f"Note: Some of your symbols ({', '.join(closed_syms[:2])}…) are in closed markets, "
+                    f"which might be causing the broker to freeze on data retrieval."
+                )
+            else:
+                msg = f"🚨 ⏱️ Message processing timed out after {self.message_timeout_seconds}s — broker may be unresponsive. Please try again."
+                
             self.notify(msg, priority="critical")
             return msg
-        except Exception as e:
-            return f"❌ Processing error: {str(e)}"
     
     def _process_message_impl(self, user_input: str) -> str:
         """Internal implementation of message processing (may be called with timeout)."""
