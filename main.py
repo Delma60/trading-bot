@@ -1,3 +1,8 @@
+import os
+# Must be set BEFORE any other imports to silence TensorFlow C++ logs
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
 import json 
 import time
 import threading

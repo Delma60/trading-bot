@@ -175,6 +175,8 @@ class ARIA:
 
     # ── Shortcut keyword → intent overrides (before NLP) ─────────────────────
     _KEYWORD_INTENTS: list[tuple[list[str], str]] = [
+        (["portfolio", "my symbols", "what am i trading", "trading symbols", "what pairs"], "trading_symbols"),
+        (["add to portfolio", "add symbol", "add pair", "add", "add new", "trade new"], "add_symbols"),
         (["scan", "start scanning", "run scan", "go"], "bulk_scan"),
         (["close all profitable", "close profitable", "take profits", "take profit", "close winners", "close good positions"], "close_profitable_positions"),
         (["positions", "open trades", "what am I in", "good positions", "profitable positions", "winning trades", "winners"], "profitable_positions"),
@@ -600,6 +602,73 @@ class ARIA:
         if intent == "add_symbols" or any(k in lower for k in ["add to portfolio", "add symbols", "add pairs"]):
             return self.add_symbols_to_portfolio(text)
 
+        # Show current portfolio symbols (with smart dynamic grouping and filtering)
+        if intent == "trading_symbols" or "portfolio" in lower:
+            try:
+                cfg = json.loads(self.PROFILE_FILE.read_text()) if self.PROFILE_FILE.exists() else {}
+            except Exception:
+                cfg = {}
+                
+            syms = cfg.get("trading_symbols", [])
+            if not syms:
+                return "Your portfolio is currently empty. Say 'add EURUSD' to get started."
+            
+            from manager.market_sessions import MarketSessionManager
+            from collections import defaultdict
+            mgr = MarketSessionManager()
+            
+            # 1. Determine if user asked for a specific category
+            target_category = None
+            if any(w in lower for w in ["crypto", "bitcoin", "coin", "digital"]): 
+                target_category = "crypto"
+            elif any(w in lower for w in ["forex", "currencies", "currency", "fx", "fiat"]): 
+                target_category = "forex"
+            elif any(w in lower for w in ["metal", "metals", "gold", "silver"]): 
+                target_category = "metals"
+            elif any(w in lower for w in ["index", "indices"]): 
+                target_category = "indices"  # matches indices_us, indices_eu, etc.
+            elif any(w in lower for w in ["commodity", "commodities", "oil", "energy"]): 
+                target_category = "commodities"
+            elif any(w in lower for w in ["stock", "stocks", "equity", "equities"]): 
+                target_category = "stocks"
+
+            # 2. Filter for a specific category if requested
+            if target_category:
+                filtered = [s for s in syms if target_category in mgr.get_symbol_category(s)]
+                if not filtered:
+                    return f"You don't have any {target_category} symbols in your portfolio right now."
+                
+                emoji = {"crypto": "₿", "forex": "💱", "metals": "🥇", "indices": "📈", "commodities": "🛢", "stocks": "🏢"}.get(target_category, "📊")
+                return f"{emoji} You have {len(filtered)} {target_category} symbol(s) in your portfolio: {', '.join(filtered)}"
+
+            # 3. Default view: Group ALL symbols cleanly by their category
+            grouped = defaultdict(list)
+            for s in syms:
+                cat = mgr.get_symbol_category(s)
+                grouped[cat].append(s)
+                
+            CAT_EMOJI = {
+                "crypto": "₿", 
+                "forex": "💱", 
+                "metals": "🥇", 
+                "commodities": "🛢", 
+                "stocks": "🏢", 
+                "indices_us": "🇺🇸", 
+                "indices_eu": "🇪🇺", 
+                "indices_asia": "🌏"
+            }
+
+            lines = [f"📊 You are currently tracking {len(syms)} symbol(s) in your portfolio:"]
+            
+            # Sort categories alphabetically so they appear in a consistent order
+            for cat in sorted(grouped.keys()):
+                items = grouped[cat]
+                emoji = CAT_EMOJI.get(cat, "🔹")
+                display_cat = cat.replace("_", " ").title()  # e.g., "indices_us" -> "Indices Us"
+                lines.append(f"  {emoji} {display_cat} ({len(items)}): {', '.join(items)}")
+                
+            return "\n".join(lines)
+        
         return None  # fall through to agent
 
     def _handle_market_status(self) -> str:

@@ -104,6 +104,177 @@ class SmartReEntrySystem:
         return False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LockBalanceGuard
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LockBalanceGuard:
+    """
+    Protects a ring-fenced portion of the account from any trading activity.
+
+    The lock can be specified as:
+        - A fixed dollar amount  (lock_amount=300)
+        - A percentage of balance (lock_pct=0.30 → 30%)
+        - Both — the LARGER of the two is applied
+
+    All downstream risk calculations (position sizing, daily loss limit,
+    drawdown watermarks) must use `tradeable_balance()` instead of the
+    raw account balance.
+    """
+
+    def __init__(
+        self,
+        lock_amount: float = 0.0,   # fixed $ amount to protect
+        lock_pct:    float = 0.0,   # fraction of balance to protect (0.0–1.0)
+    ):
+        self.lock_amount = max(0.0, lock_amount)
+        self.lock_pct    = max(0.0, min(lock_pct, 0.99))   # cap at 99%
+
+    def effective_lock(self, balance: float) -> float:
+        """
+        Returns the actual dollar amount that is locked.
+        If both lock_amount and lock_pct are set, the larger is used.
+        """
+        if balance <= 0:
+            return 0.0
+        pct_lock = balance * self.lock_pct
+        return max(self.lock_amount, pct_lock)
+
+    def tradeable_balance(self, balance: float) -> float:
+        """
+        Returns the portion of balance available for trading.
+        This is what ALL risk calculations must use.
+        """
+        return max(0.0, balance - self.effective_lock(balance))
+
+    def is_locked_out(self, balance: float) -> bool:
+        """True if the lock consumes the entire balance — no trading allowed."""
+        return self.tradeable_balance(balance) <= 0
+
+    def status_str(self, balance: float) -> str:
+        """Human-readable lock status for chat responses."""
+        lock   = self.effective_lock(balance)
+        trade  = self.tradeable_balance(balance)
+        if lock <= 0:
+            return f"No lock balance set. Full balance ${balance:,.2f} is tradeable."
+        pct_of_balance = (lock / balance * 100) if balance > 0 else 0
+        return (
+            f"Lock balance: ${lock:,.2f} ({pct_of_balance:.1f}% of ${balance:,.2f}). "
+            f"Tradeable: ${trade:,.2f}."
+        )
+
+    def update(self, lock_amount: float = None, lock_pct: float = None):
+        """Update lock parameters at runtime (e.g. from chat command)."""
+        if lock_amount is not None:
+            self.lock_amount = max(0.0, lock_amount)
+        if lock_pct is not None:
+            self.lock_pct = max(0.0, min(lock_pct, 0.99))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BalancePipSizer
+# ─────────────────────────────────────────────────────────────────────────────
+
+class BalancePipSizer:
+    """
+    Derives an appropriate SL pip distance from the TRADEABLE account balance.
+
+    Rationale
+    ---------
+    A fixed SL (e.g. "always 20 pips") ignores account size entirely.
+    A $200 account risks ruin on a 50-pip stop; a $5,000 account can
+    absorb wide stops without threatening its daily limit.
+
+    This class computes a balance-tier base pip, then bounds the live
+    ATR within [50%, 150%] of that base — so the stop adapts to
+    volatility but stays within a range appropriate for the account size.
+
+    Tiers (fully tunable via constructor)
+    --------------------------------------
+    tradeable < $200    →  8 pips
+    $200 – $499         → 12 pips
+    $500 – $999         → 18 pips
+    $1,000 – $2,499     → 25 pips
+    $2,500 – $4,999     → 35 pips
+    ≥ $5,000            → 50 pips
+    """
+
+    # Default tiers: (min_balance, pip_base)
+    # Sorted ascending — first match wins.
+    DEFAULT_TIERS = [
+        (0,     8),
+        (200,  12),
+        (500,  18),
+        (1000, 25),
+        (2500, 35),
+        (5000, 50),
+    ]
+
+    def __init__(
+        self,
+        tiers:           list[tuple[float, float]] = None,
+        atr_floor_ratio: float = 0.50,   # ATR must be ≥ base × this
+        atr_ceil_ratio:  float = 1.50,   # ATR must be ≤ base × this
+    ):
+        self.tiers           = sorted(tiers or self.DEFAULT_TIERS, key=lambda t: t[0])
+        self.atr_floor_ratio = atr_floor_ratio
+        self.atr_ceil_ratio  = atr_ceil_ratio
+
+    def base_pips(self, tradeable_balance: float) -> float:
+        """
+        Lookup the balance-tier pip base for this account size.
+        Returns the pip count appropriate for the tradeable balance.
+        """
+        result = self.tiers[0][1]   # default to lowest tier
+        for min_bal, pips in self.tiers:
+            if tradeable_balance >= min_bal:
+                result = pips
+        return float(result)
+
+    def get_sl_pips(self, tradeable_balance: float, atr_pips: float = 0.0) -> float:
+        """
+        Returns the final SL pip distance to use for this trade.
+
+        Logic
+        -----
+        1. Determine the balance-tier base pip.
+        2. Compute the ATR-bounded range: [base × floor, base × ceil].
+        3. Clamp the live ATR within that range.
+        4. If no valid ATR is provided (0 or missing), use the base directly.
+
+        Parameters
+        ----------
+        tradeable_balance : float
+            Account balance minus the lock. NOT the raw balance.
+        atr_pips : float
+            ATR expressed in pips (from DynamicRiskTargeter).
+            Pass 0 if ATR data is unavailable.
+        """
+        base = self.base_pips(tradeable_balance)
+
+        if atr_pips <= 0:
+            # No ATR data — use balance-tier base directly
+            return base
+
+        floor_pips = base * self.atr_floor_ratio
+        ceil_pips  = base * self.atr_ceil_ratio
+
+        # Clamp the live ATR within the balance-appropriate range
+        final = max(floor_pips, min(atr_pips, ceil_pips))
+        return round(final, 1)
+
+    def describe(self, tradeable_balance: float, atr_pips: float = 0.0) -> str:
+        """Human-readable explanation — useful for debug/ARIA responses."""
+        base  = self.base_pips(tradeable_balance)
+        final = self.get_sl_pips(tradeable_balance, atr_pips)
+        atr_str = f", ATR {atr_pips:.1f}p" if atr_pips > 0 else " (no ATR)"
+        return (
+            f"Balance ${tradeable_balance:,.0f} → base {base:.0f}p"
+            f"{atr_str} → SL {final:.1f}p "
+            f"[range {base * self.atr_floor_ratio:.0f}–{base * self.atr_ceil_ratio:.0f}p]"
+        )
+
+
 class RiskManager:
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
     

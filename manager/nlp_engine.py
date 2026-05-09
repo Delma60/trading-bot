@@ -16,7 +16,7 @@ import numpy as np
 import nltk
 from nltk.stem.porter import PorterStemmer
 from tensorflow.keras.models import Sequential, load_model  # type: ignore
-from tensorflow.keras.layers import Dense                   # type: ignore
+from tensorflow.keras.layers import Dense, Input               # type: ignore
 from pathlib import Path
 import os
 
@@ -443,7 +443,8 @@ class NLPEngine:
             self.model_ready.clear()
             try:
                 model = Sequential([
-                    Dense(128, input_shape=(len(self.training[0]),), activation="relu"),
+                    Input(shape=(len(self.training[0]),)),
+                    Dense(128, activation="relu"),
                     Dense(64, activation="relu"),
                     Dense(len(self.output[0]), activation="softmax"),
                 ])
