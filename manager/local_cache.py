@@ -1,10 +1,43 @@
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from strategies.features.feature_engineer import FeatureEngineer
+
+
+class ProgressSpinner:
+    """Reusable progress indicator with spinner animation for terminal output."""
+    
+    def __init__(self, total: int, prefix: str = "Loading", suffix: str = ""):
+        self.total = total
+        self.prefix = prefix
+        self.suffix = suffix
+        self._lock = threading.Lock()
+        self._count = 0
+        self._spinner_chars = ['|', '/', '-', '\\']
+        self._spinner_index = 0
+    
+    def update(self, item_name: str = "") -> None:
+        """Update progress with next item. Thread-safe."""
+        with self._lock:
+            self._count += 1
+            spinner = self._spinner_chars[self._spinner_index % len(self._spinner_chars)]
+            self._spinner_index += 1
+            
+            msg = f"[{self.prefix}] {spinner} {self._count}/{self.total}"
+            if item_name:
+                msg += f" {item_name}"
+            if self.suffix:
+                msg += f" {self.suffix}"
+            
+            print(f"\r{msg}", end="", flush=True)
+    
+    def finish(self, completion_msg: str = "Complete.") -> None:
+        """Clear progress line and show completion message."""
+        print("\r" + " " * 60 + f"\r{completion_msg}", flush=True)
 
 
 class LocalCache:
@@ -41,7 +74,7 @@ class LocalCache:
         self.notify("[LocalCache] Warming up cache...")
         self._refresh_symbol_info()
         self._refresh_snapshot()
-        self._refresh_features()
+        self._refresh_features(is_initial=True)
         self.notify("[LocalCache] Cache warm-up complete.")
 
     def start(self):
@@ -65,7 +98,7 @@ class LocalCache:
             if now - self._last_snapshot_refresh >= 2.0:
                 self._refresh_snapshot()
             if now - self._last_feature_refresh >= 60.0:
-                self._refresh_features()
+                self._refresh_features(is_initial=False)
             time.sleep(0.5)
 
     def _refresh_snapshot(self):
@@ -124,34 +157,50 @@ class LocalCache:
 
     def _save_symbol_history(self, symbol: str, df: pd.DataFrame) -> None:
         try:
-            self._get_history_path(symbol).to_parquet(df)
+            df.to_parquet(self._get_history_path(symbol))
         except Exception as exc:
             pass
             # self.notify(f"[LocalCache] Failed to save history for {symbol}: {exc}")
 
-    def _refresh_features(self):
+    def _refresh_features(self, is_initial: bool = False):
         if not self.broker.connected:
             return
 
-        with self._lock:
-            for symbol in self.symbols:
-                symbol = symbol.upper()
-                df = self._load_symbol_history(symbol)
-                if df is None:
-                    df = self.broker.ohclv_data(symbol, timeframe="H1", num_bars=2000)
-                    if df is None or df.empty:
-                        continue
-                    self._ohlcv[symbol] = df
-                    self._save_symbol_history(symbol, df)
-                else:
-                    self._ohlcv[symbol] = df
+        # Initialize progress spinner only for initial load
+        progress = ProgressSpinner(total=len(self.symbols), prefix="[LocalCache]") if is_initial else None
 
-                if symbol not in self._features or self._features[symbol] is None:
-                    feat_df = FeatureEngineer.compute(df)
-                    if feat_df is not None and not feat_df.empty:
-                        self._features[symbol] = feat_df
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            pool.map(self._load_symbol_features, [(symbol, progress) for symbol in self.symbols])
+        
+        if is_initial and progress:
+            progress.finish("[LocalCache] Cache loading complete.")
+        self._last_feature_refresh = time.time()
 
-            self._last_feature_refresh = time.time()
+    def _load_symbol_features(self, args):
+        symbol, progress = args
+        symbol = symbol.upper()
+        
+        # Update progress with spinner (only if progress object exists)
+        if progress:
+            progress.update(item_name=symbol)
+        
+        df = self._load_symbol_history(symbol)
+        if df is None:
+            df = self.broker.ohclv_data(symbol, timeframe="H1", num_bars=500)
+            if df is None or df.empty:
+                return
+            with self._lock:
+                self._ohlcv[symbol] = df
+            self._save_symbol_history(symbol, df)
+        else:
+            with self._lock:
+                self._ohlcv[symbol] = df
+
+        if symbol not in self._features or self._features[symbol] is None:
+            feat_df = FeatureEngineer.compute(df)
+            if feat_df is not None and not feat_df.empty:
+                with self._lock:
+                    self._features[symbol] = feat_df
 
     def get_raw_ohlcv(self, symbol: str) -> Optional[pd.DataFrame]:
         with self._lock:

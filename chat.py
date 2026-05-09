@@ -1065,6 +1065,7 @@ class ARIA:
             self.proactive_engine.stop()
             self.trailing_manager.stop()
             self.profit_guard.stop()
+            self.message_processor.shutdown(wait=False)
         except Exception as e:
             print(f"Error during shutdown: {e}")
 

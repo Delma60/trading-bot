@@ -80,7 +80,7 @@
     "risk_percentage": 1.0,
     "max_daily_loss": 500.0,
     "lock_balance": 0.0,
-    "lock_balance_pct": 0.0,
+    "lock_balance_pct": 0.30,
     "preferred_timeframes": [
         "H1"
     ],

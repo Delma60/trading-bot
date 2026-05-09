@@ -76,36 +76,39 @@ class MTFConfluenceEngine:
         self.broker = broker
         self.broker_timeout_seconds = 5.0  # Per-call timeout for broker
 
-    def get_confluence_score(self, symbol: str) -> dict:
+    def get_confluence_score(self, symbol: str, cache=None) -> dict:
         """Analyze alignment across timeframes and return a tradeable verdict."""
         signals = {}
         for tf in self.TIMEFRAMES:
             try:
-                # Add timeout to prevent hanging broker calls
-                from threading import Thread
-                result_container = [None]
-                exception_container = [None]
-                
-                def fetch_with_timeout():
-                    try:
-                        result_container[0] = self.broker.get_historical_rates(symbol, tf, 50)
-                    except Exception as e:
-                        exception_container[0] = e
-                
-                thread = Thread(target=fetch_with_timeout, daemon=True)
-                thread.start()
-                thread.join(timeout=self.broker_timeout_seconds)
-                
-                if thread.is_alive():
-                    # Thread still running = broker hung up
-                    signals[tf] = "NEUTRAL"
-                    continue
-                
-                if exception_container[0]:
-                    signals[tf] = "NEUTRAL"
-                    continue
-                
-                df = result_container[0]
+                if cache:
+                    df = cache.get_raw_ohlcv(symbol)  # free, no MT5 call
+                else:
+                    # Add timeout to prevent hanging broker calls
+                    from threading import Thread
+                    result_container = [None]
+                    exception_container = [None]
+                    
+                    def fetch_with_timeout():
+                        try:
+                            result_container[0] = self.broker.get_historical_rates(symbol, tf, 50)
+                        except Exception as e:
+                            exception_container[0] = e
+                    
+                    thread = Thread(target=fetch_with_timeout, daemon=True)
+                    thread.start()
+                    thread.join(timeout=self.broker_timeout_seconds)
+                    
+                    if thread.is_alive():
+                        # Thread still running = broker hung up
+                        signals[tf] = "NEUTRAL"
+                        continue
+                    
+                    if exception_container[0]:
+                        signals[tf] = "NEUTRAL"
+                        continue
+                    
+                    df = result_container[0]
                 if df is None or df.empty or len(df) < 25:
                     signals[tf] = "NEUTRAL"
                     continue
@@ -269,7 +272,7 @@ class StrategyManager:
 
     def continuous_learning_routine(self, symbol: str):
         """Retrain strategy models and meta-scorer for a symbol using recent history."""
-        raw_df = self._ohlcv_cache.fetch(self.broker, symbol, "H1", num_bars=2000)
+        raw_df = self._ohlcv_cache.fetch(self.broker, symbol, "H1", num_bars=500)
         if raw_df is None or raw_df.empty:
             self.notify(f"[StrategyManager] Could not fetch OHLCV for {symbol} to retrain.")
             return

@@ -6,6 +6,7 @@ trading style, and preferences. Built through observation.
 """
 
 import json
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -40,6 +41,7 @@ class UserModel:
 
     def __init__(self):
         self._model = {**self.DEFAULTS}
+        self._lock = threading.Lock()
         self._load()
 
     def observe(self, event: str, context: dict = None):
@@ -49,37 +51,38 @@ class UserModel:
         """
         context = context or {}
 
-        if event == "followed_signal":
-            n = self._model.get("follows_signals", 0.5)
-            self._model["follows_signals"] = round(n * 0.9 + 1.0 * 0.1, 3)
-            self._model["trust_in_bot"] = min(1.0, self._model["trust_in_bot"] + 0.02)
+        with self._lock:
+            if event == "followed_signal":
+                n = self._model.get("follows_signals", 0.5)
+                self._model["follows_signals"] = round(n * 0.9 + 1.0 * 0.1, 3)
+                self._model["trust_in_bot"] = min(1.0, self._model["trust_in_bot"] + 0.02)
 
-        elif event == "overrode_signal":
-            self._model["overrides_bot"] = round(
-                self._model.get("overrides_bot", 0) * 0.9 + 1.0 * 0.1, 3
-            )
-            self._model["trust_in_bot"] = max(0.0, self._model["trust_in_bot"] - 0.01)
+            elif event == "overrode_signal":
+                self._model["overrides_bot"] = round(
+                    self._model.get("overrides_bot", 0) * 0.9 + 1.0 * 0.1, 3
+                )
+                self._model["trust_in_bot"] = max(0.0, self._model["trust_in_bot"] - 0.01)
 
-        elif event == "asked_for_confirmation":
-            self._model["confirmation_seeker"] = True
+            elif event == "asked_for_confirmation":
+                self._model["confirmation_seeker"] = True
 
-        elif event == "frustration_detected":
-            self._model["stress_threshold"] = max(1, self._model["stress_threshold"] - 1)
+            elif event == "frustration_detected":
+                self._model["stress_threshold"] = max(1, self._model["stress_threshold"] - 1)
 
-        elif event == "rapid_decisions":
-            self._model["decision_speed"] = "impulsive"
+            elif event == "rapid_decisions":
+                self._model["decision_speed"] = "impulsive"
 
-        elif event == "requested_detail":
-            self._model["communication_pref"] = "detailed"
+            elif event == "requested_detail":
+                self._model["communication_pref"] = "detailed"
 
-        elif event == "session_start":
-            self._model["total_sessions"] = self._model.get("total_sessions", 0) + 1
-            self._model["last_seen"] = datetime.now().isoformat()
-        elif event == "asked_for_execution":
-            # User requested a trade — mild trust signal
-            self._model["trust_in_bot"] = min(1.0,
-                self._model["trust_in_bot"] + 0.01)
-        self._save()
+            elif event == "session_start":
+                self._model["total_sessions"] = self._model.get("total_sessions", 0) + 1
+                self._model["last_seen"] = datetime.now().isoformat()
+            elif event == "asked_for_execution":
+                # User requested a trade — mild trust signal
+                self._model["trust_in_bot"] = min(1.0,
+                    self._model["trust_in_bot"] + 0.01)
+            self._save()
 
     def get_communication_style(self) -> dict:
         """

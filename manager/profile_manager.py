@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,12 @@ class ProfileManager:
         self._write_json(self.config_file, self.config)
 
     def load_credentials(self) -> dict:
+        if os.getenv("MT5_LOGIN"):
+            return {
+                "login": os.getenv("MT5_LOGIN"),
+                "password": os.getenv("MT5_PASSWORD"),
+                "server": os.getenv("MT5_SERVER", "MetaQuotes-Demo"),
+            }
         return self._read_json(self.credentials_file, {})
 
     def save_credentials(self, login, password, server):

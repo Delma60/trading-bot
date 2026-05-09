@@ -303,7 +303,7 @@ class RiskManager:
         cfg = self._load_profile()
         self.lock_guard = LockBalanceGuard(
             lock_amount = cfg.get("lock_balance",     0.0),
-            lock_pct    = cfg.get("lock_balance_pct", 0.0),
+            lock_pct    = cfg.get("lock_balance_pct", 0.0) / 100,  # convert 30 → 0.30
         )
         self.balance_pip_sizer = BalancePipSizer()
     
