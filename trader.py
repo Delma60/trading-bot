@@ -4,7 +4,7 @@ import os
 import pandas as pd
 import csv
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 class Trader:
@@ -22,6 +22,7 @@ class Trader:
         self._cooldown: dict[str, datetime] = {}
         self._cooldown_lock = threading.Lock()
         self._cooldown_seconds = 5  # default cooldown duration in seconds
+        self._ticket_strategy: dict[int, str] = {}  # maps ticket → strategy name
         # Legacy lock for compatibility
         self._order_lock = self._execution_lock
 
@@ -48,6 +49,10 @@ class Trader:
         with self._cooldown_lock:
             self._cooldown[symbol] = datetime.now() + timedelta(seconds=self._cooldown_seconds)
         
+    def _strategy_for(self, ticket: int) -> str:
+        """Return the strategy that opened this ticket, then forget it."""
+        return self._ticket_strategy.pop(ticket, "Unknown")
+
     def is_mt5_running(self):
         """Check if MetaTrader 5 terminal is running"""
         for proc in psutil.process_iter(['pid', 'name']):
@@ -384,6 +389,7 @@ class Trader:
 
             # 6. Check if it succeeded and handle specific error codes
             if result.retcode == mt5.TRADE_RETCODE_DONE:
+                self._ticket_strategy[result.order] = strategy   # register which strategy opened this ticket
                 self._log_trade_history(
                     action=action.upper(),
                     symbol=symbol,
@@ -540,7 +546,7 @@ class Trader:
                         price=result.price,
                         ticket=result.order,
                         comment=f"Profit: {position.profit}",
-                        strategy="Unknown",
+                        strategy=self._strategy_for(position.ticket),
                         profit=position.profit,
                     )
                     self._mark_cooldown(symbol)
@@ -623,7 +629,7 @@ class Trader:
                         price=result.price,
                         ticket=result.order,
                         comment=f"Profit: {position.profit}",
-                        strategy="Unknown",
+                        strategy=self._strategy_for(position.ticket),
                         profit=position.profit,
                     )
                     self._mark_cooldown(symbol)
@@ -702,7 +708,7 @@ class Trader:
                     price=result.price,
                     ticket=result.order,
                     comment=f"Profit: {position.profit}",
-                    strategy="Unknown",
+                    strategy=self._strategy_for(position.ticket),
                     profit=position.profit,
                 )
                 self._mark_cooldown(pos_symbol)
