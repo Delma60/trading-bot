@@ -10,8 +10,11 @@ from pathlib import Path
 import threading
 from .risk_manager import RiskManager
 from typing import Dict
+from manager.market_sessions import MarketSessionManager
 from manager.risk_manager import TradeGatekeeper, CorrelationGuard
 from strategies.strategy_manager import OHLCVCache
+from manager.market_sessions import MarketSessionManager
+
 class PortfolioManager:
     """The ML-Driven Offense Engine: Learns which strategies work in which environments."""
     
@@ -188,23 +191,38 @@ class PortfolioManager:
 
     def evaluate_portfolio_opportunities(self, risk_pct: float, stop_loss: float, max_daily_loss: float, dry_run: bool = False) -> list:
         results = []
-        portfolio_size = len(self.master_watchlist)
+        session_manager = MarketSessionManager()
+        tradeable_symbols, closed_symbols = session_manager.filter_tradeable_symbols(self.master_watchlist)
+
+        if not tradeable_symbols:
+            return [
+                "⚠️ No tradeable symbols in your portfolio right now. "
+                "Crypto is open 24/7 if you want active exposure."
+            ]
+
+        if closed_symbols:
+            results.append(
+                f"⏳ Skipping {len(closed_symbols)} closed symbols. "
+                f"{len(tradeable_symbols)} symbols remain tradeable."
+            )
+
+        portfolio_size = len(tradeable_symbols)
         
         # Avoid spamming the scan when the broker is unavailable.
         account_info = self.broker.getAccountInfo()
         if account_info is None:
             return results
 
-        # Count open positions for each symbol
+        # Count open positions for each symbol in the tradeable universe
         positions = self.broker.getPositions() or []
-        symbol_counts = {symbol: 0 for symbol in self.master_watchlist}
+        symbol_counts = {symbol: 0 for symbol in tradeable_symbols}
         for p in positions:
             if p.symbol in symbol_counts:
                 symbol_counts[p.symbol] += 1
                 
         # Sort symbols by number of open positions (Ascending)
         # Symbols with 0 open positions get priority!
-        prioritized_symbols = sorted(self.master_watchlist, key=lambda s: symbol_counts[s])
+        prioritized_symbols = sorted(tradeable_symbols, key=lambda s: symbol_counts.get(s, 0))
 
         for symbol in prioritized_symbols:
             # 1. Ask Risk Manager if this specific symbol is allowed to trade right now

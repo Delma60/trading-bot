@@ -7,6 +7,7 @@ import pandas as pd
 import time
 import threading
 from collections import Counter
+from manager.market_sessions import MarketSessionManager
 
 
 def _pip_value_usd(symbol: str, lots: float) -> float:
@@ -901,26 +902,29 @@ class TradeGatekeeper:
         # ── Session filter ───────────────────────────────────────────────────
         now_utc = datetime.now(timezone.utc)
         hour    = now_utc.hour
-        weekday = now_utc.weekday()   # 0=Mon … 4=Fri … 6=Sun
- 
-        # Selective Asian session blocking by symbol (was blanket 00:00-07:00 UTC)
-        if self.avoid_asian_session and 0 <= hour < 7:
-            # Allow USDJPY, AUDUSD, NZDUSD, CADJPY — they're active in Asian session
-            asian_active_pairs = {"USDJPY", "AUDUSD", "NZDUSD", "CADJPY", "CHFJPY", "GBPJPY"}
-            if symbol.upper() not in asian_active_pairs:
-                return False, (
-                    f"Asian session ({hour:02d}:00 UTC) — low liquidity, wide spreads. "
-                    f"Waiting for London open."
-                )
+        weekday = now_utc.weekday()
 
-        if self.avoid_friday_close and weekday == 4 and hour >= 20:
+        # Use the session engine to decide whether the symbol is tradeable right now.
+        mgr = MarketSessionManager()
+        category = mgr.get_symbol_category(symbol)
+        tradeable, session_reason = mgr.is_symbol_tradeable(symbol, now_utc)
+        if not tradeable:
+            next_open = mgr.get_next_open_time(symbol, now_utc)
+            return False, f"{session_reason} Opens: {next_open}."
+        
+        if category != "crypto" and self.avoid_friday_close and weekday == 4 and hour >= 20:
             return False, (
                 "Friday after 20:00 UTC — weekend gap risk. "
-                "No new positions before market close."
+                "No new non-crypto positions before market close."
             )
 
-        if weekday >= 5:   # Saturday or Sunday
-            return False, "Market closed (weekend)."
+        if category == "forex" and self.avoid_asian_session and 0 <= hour < 7:
+            asian_active = {"USDJPY", "AUDUSD", "NZDUSD", "CADJPY", "CHFJPY", "GBPJPY"}
+            if symbol.upper() not in asian_active:
+                return False, (
+                    f"Asian session ({hour:02d}:00 UTC) — low liquidity for {symbol}. "
+                    f"Waiting for London open (07:00 UTC)."
+                )
 
         # ── Spread filter ────────────────────────────────────────────────────
         spread_pips = self._get_spread_pips(symbol, broker)
@@ -931,6 +935,13 @@ class TradeGatekeeper:
             return False, (
                 f"Spread too wide: {spread_pips:.1f} pips "
                 f"(limit {self.max_spread_pips} pips). "
+                f"Waiting for tighter conditions."
+            )
+        spread_limit = self.max_spread_pips * 5 if category == "crypto" else self.max_spread_pips
+        if spread_pips > spread_limit:
+            return False, (
+                f"Spread too wide: {spread_pips:.1f} pips "
+                f"(limit {spread_limit:.1f} pips for {category}). "
                 f"Waiting for tighter conditions."
             )
  

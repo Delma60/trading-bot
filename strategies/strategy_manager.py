@@ -74,26 +74,54 @@ class MTFConfluenceEngine:
     
     def __init__(self, broker):
         self.broker = broker
+        self.broker_timeout_seconds = 5.0  # Per-call timeout for broker
 
     def get_confluence_score(self, symbol: str) -> dict:
         """Analyze alignment across timeframes and return a tradeable verdict."""
         signals = {}
         for tf in self.TIMEFRAMES:
-            df = self.broker.get_historical_rates(symbol, tf, 50)
-            if df is None or df.empty or len(df) < 25:
-                signals[tf] = "NEUTRAL"
-                continue
+            try:
+                # Add timeout to prevent hanging broker calls
+                from threading import Thread
+                result_container = [None]
+                exception_container = [None]
                 
-            closes = df['close'].values
-            sma20 = sum(closes[-20:]) / 20
-            sma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else sma20
-            current = closes[-1]
-            
-            if current > sma20 and sma20 > sma50:
-                signals[tf] = "BUY"
-            elif current < sma20 and sma20 < sma50:
-                signals[tf] = "SELL"
-            else:
+                def fetch_with_timeout():
+                    try:
+                        result_container[0] = self.broker.get_historical_rates(symbol, tf, 50)
+                    except Exception as e:
+                        exception_container[0] = e
+                
+                thread = Thread(target=fetch_with_timeout, daemon=True)
+                thread.start()
+                thread.join(timeout=self.broker_timeout_seconds)
+                
+                if thread.is_alive():
+                    # Thread still running = broker hung up
+                    signals[tf] = "NEUTRAL"
+                    continue
+                
+                if exception_container[0]:
+                    signals[tf] = "NEUTRAL"
+                    continue
+                
+                df = result_container[0]
+                if df is None or df.empty or len(df) < 25:
+                    signals[tf] = "NEUTRAL"
+                    continue
+                    
+                closes = df['close'].values
+                sma20 = sum(closes[-20:]) / 20
+                sma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else sma20
+                current = closes[-1]
+                
+                if current > sma20 and sma20 > sma50:
+                    signals[tf] = "BUY"
+                elif current < sma20 and sma20 < sma50:
+                    signals[tf] = "SELL"
+                else:
+                    signals[tf] = "NEUTRAL"
+            except Exception:
                 signals[tf] = "NEUTRAL"
                 
         directions = list(signals.values())

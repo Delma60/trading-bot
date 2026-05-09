@@ -90,6 +90,38 @@
             ]
         },
         {
+            "tag": "market_status",
+            "patterns": [
+                "what can I trade now",
+                "what can I trade",
+                "what's open",
+                "what markets are open",
+                "what's tradeable",
+                "market status",
+                "market hours",
+                "what's available to trade",
+                "weekend trading",
+                "saturday trading",
+                "sunday trading",
+                "is forex open",
+                "is crypto open",
+                "is the market open",
+                "are markets open",
+                "what market is open",
+                "what's open right now",
+                "what can I trade on the weekend",
+                "can I trade on saturday",
+                "can I trade on sunday",
+                "what instruments are open",
+                "is gold open",
+                "is bitcoin open",
+                "which markets are open today"
+            ],
+            "responses": [
+                "Checking which markets are open right now..."
+            ]
+        },
+        {
             "tag": "execute_trade",
             "patterns": [
                 "trade EURUSD",
