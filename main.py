@@ -51,8 +51,8 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
     stop_loss = r.stop_loss_pips
     max_daily_loss = r.max_daily_loss
     daily_target = r.daily_goal
-    session_target = sc.target_profit * len(symbols)
-    scan_interval_seconds = sc.scan_interval_seconds
+    session_target = r.take_profit_pips  * len(symbols)
+    scan_interval_seconds = sc.interval_seconds
     
     
     notify(f"🟢 Real-time Market Watch started. Scanning every {scan_interval_seconds} seconds.")

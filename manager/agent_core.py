@@ -420,7 +420,11 @@ class AgentExecutor:
 
     def _risk_check(self, symbol) -> dict:
         r   = profile.risk(symbol)
-        cfg = {"max_daily_loss": r.max_daily_loss, "risk_percentage": r.risk_pct, ...}
+        cfg = {
+            "max_daily_loss": r.max_daily_loss, 
+            "risk_percentage": r.risk_pct,
+            "stop_loss_pips": r.stop_loss_pips
+            }
 
         account = self.broker.getAccountInfo()
 

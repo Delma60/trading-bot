@@ -36,7 +36,11 @@ class PortfolioManager:
             avoid_friday_close    = s.avoid_friday_close,
         )
         
-        self.allocation_limits = self.profile.get("allocation_limits", {})
+        self.allocation_limits = {
+            "Forex": 0.5,   # Max 50% of portfolio in Forex
+            "Crypto": 0.3,  # Max 30% of portfolio in Crypto
+            "Metals": 0.2,  # Max 20% of portfolio in Metals
+        }
         self.corr_guard = CorrelationGuard(max_shared_legs=2)
         
         p = _profile.portfolio()
