@@ -1,5 +1,4 @@
 import os
-import profile
 # Must be set BEFORE any other imports to silence TensorFlow C++ logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -17,7 +16,7 @@ from manager.risk_manager import RiskManager
 from manager.portfolio_manager import PortfolioManager
 from chat import ARIA
 from pathlib import Path
-from manager.profile_manager import profile
+from manager.profile_manager import profile as _profile
 
 # Global shutdown flag for graceful termination
 shutdown_event = threading.Event()
@@ -45,14 +44,13 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
     executes trades if it finds any, and goes back to sleep.
     """
     
-    r  = profile.risk()
-    sc = profile.scanner()
+    r  = _profile.risk()
+    sc = _profile.scanner()
     risk_pct = r.risk_pct
     stop_loss = r.stop_loss_pips
     max_daily_loss = r.max_daily_loss
     daily_target = r.daily_goal
     session_target = r.take_profit_pips  * len(symbols)
-    scan_interval_seconds = sc.interval_seconds
     
     
     notify(f"🟢 Real-time Market Watch started. Scanning every {scan_interval_seconds} seconds.")
@@ -135,7 +133,7 @@ def _resolve_symbols(broker, symbols: list[str]) -> list[str]:
  
     Priority
     --------
-    1. profile.json  trading_symbols  — user's explicit configuration.
+    1. _profile.json  trading_symbols  — user's explicit configuration.
     2. Broker query  — if connected and profile is empty, fetch the most
                        liquid forex pairs from the broker itself.
     3. Hardcoded fallback — only if the broker is also unavailable.
@@ -156,7 +154,7 @@ def _resolve_symbols(broker, symbols: list[str]) -> list[str]:
             # Limit to the 10 most liquid (registry returns spread-sorted results).
             if forex:
                 agent_notify(
-                    f"profile.json has no trading_symbols — "
+                    f"_profile.json has no trading_symbols — "
                     f"defaulting to {len(forex[:10])} broker-sourced forex pairs."
                 )
                 return forex[:10]
@@ -165,7 +163,7 @@ def _resolve_symbols(broker, symbols: list[str]) -> list[str]:
  
     # 3. Last resort — conservative single pair.
     agent_notify(
-        "⚠️ Broker unavailable and profile.json has no trading_symbols. "
+        "⚠️ Broker unavailable and _profile.json has no trading_symbols. "
         "Defaulting to EURUSD."
     )
     return ["EURUSD"]
@@ -196,7 +194,7 @@ if __name__ == "__main__":
         agent_notify("⚠️ Broker not connected. LocalCache will still warm up from disk if available.")
 
     
-    symbols = _resolve_symbols(broker, profile.symbols())
+    symbols = _resolve_symbols(broker, _profile.symbols())
     cache = LocalCache(broker, symbols, notify_callback=agent_notify)
     cache.warm_up()
     cache.start()
@@ -212,8 +210,9 @@ if __name__ == "__main__":
     # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
         target=autonomous_scanner,
-        args=(portfolio_manager, 3, agent_notify)
+        args=(portfolio_manager, _profile.scanner().interval_seconds, agent_notify)
     )
+
     scanner_thread.daemon = False
     scanner_thread.start()
 

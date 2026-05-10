@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Optional
 from manager.risk_manager import DynamicRiskTargeter
 from manager.profile_manager import profile
-
+import pandas as pd
 # ─────────────────────────────────────────────────────────────────────────────
 # Data structures
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ class AgentPlanner:
 
     def plan(self, intent: str, entities: dict, memory: dict) -> AgentPlan:
         symbols = entities.get("symbols") or []
-        symbol = symbols[0] if symbols else memory.get("last_symbol", "EURUSD")
+        symbol = symbols[0] if symbols else memory.get("last_symbol", profile.symbols()[0] if profile.symbols() else None)
         direction = entities.get("direction")
 
         plan_builders = {
@@ -423,7 +423,8 @@ class AgentExecutor:
         cfg = {
             "max_daily_loss": r.max_daily_loss, 
             "risk_percentage": r.risk_pct,
-            "stop_loss_pips": r.stop_loss_pips
+            "stop_loss_pips": r.stop_loss_pips,
+            "trading_symbols": profile.symbols(),
             }
 
         account = self.broker.getAccountInfo()
@@ -474,8 +475,7 @@ class AgentExecutor:
         return {"is_anomaly": False, "anomaly_score": 0.0}
 
     def _correlation_hint(self, symbol) -> dict:
-        cfg      = self._load_config()
-        tracked  = cfg.get("trading_symbols", [])
+        tracked = profile.symbols()
         if not symbol or not tracked:
             return {"correlated": []}
         base = symbol[:3].upper()
@@ -491,8 +491,7 @@ class AgentExecutor:
         if not account:
             return {}
 
-        cfg = self._load_config()
-        tracked = cfg.get("trading_symbols", [])
+        tracked = profile.symbols()
         cooldowns = {}
         for symbol in tracked:
             in_cd, remaining = self.broker.is_in_cooldown(symbol)
@@ -535,14 +534,15 @@ class AgentExecutor:
             return {"health_summary": "Unable to assess."}
 
     def _regime_snapshot(self) -> dict:
-        cfg     = self._load_config()
+        
         learner = getattr(self.sm, "learner", None)
         regime  = learner.get_current_regime() if learner else "Unknown"
         best    = learner.get_best_strategies_for_regime(regime) if learner else []
         return {
             "regime":           regime,
             "best_strategies":  best,
-            "tracked_symbols":  cfg.get("trading_symbols", []),
+            "tracked_symbols":  profile.symbols(),
+            
         }
 
     def _drawdown_analysis(self) -> dict:
@@ -565,12 +565,13 @@ class AgentExecutor:
         }
 
     def _portfolio_scan(self) -> dict:
-        cfg = self._load_config()
+        r = profile.risk()
+        
         try:
             results = self.pm.evaluate_portfolio_opportunities(
-                risk_pct       = cfg.get("risk_percentage", 1.0),
-                stop_loss      = cfg.get("stop_loss", 20.0),
-                max_daily_loss = cfg.get("max_daily_loss", 500.0),
+                risk_pct       = r.risk_pct,
+                stop_loss      = r.stop_loss_pips,
+                max_daily_loss = r.max_daily_loss,
                 dry_run        = True,
             )
             return {"scan_results": results}
@@ -596,8 +597,8 @@ class AgentExecutor:
         account = self.broker.getAccountInfo()
         if not account:
             return {"gate_open": False, "reason": "Cannot fetch account data"}
-        cfg      = self._load_config()
-        max_loss = cfg.get("max_daily_loss", 500.0)
+        r = profile.risk()
+        max_loss = r.max_daily_loss
         high     = getattr(self.rm, "daily_high_watermark", account.balance)
         trailing = max(high - account.equity, 0.0)
         gate_open = trailing < max_loss
@@ -1065,7 +1066,7 @@ class AgentSynthesizer:
             "──────────────────────────────────────",
             f"Win Rate:       {perf.get('win_rate')}% ({perf.get('total_trades')} trades)",
             f"Profit Factor:  {perf.get('profit_factor')}",
-            f"Avg Win/Loss:   +${perf.get('avg_win')} / -${abs(perf.get('avg_loss'))}",
+            f"Avg Win/Loss:   +${perf.get('avg_win')} / -${abs(perf.get('avg_loss', pd.isna))}",
             "",
             f"Best Strategy:  {best_strat} (Highest Win Rate)",
             f"Worst Strategy: {worst_strat} (Needs Retraining)",

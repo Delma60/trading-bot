@@ -50,17 +50,7 @@ class ActionExecutor:
         self.rm        = risk_manager
         self.profile   = profile_path
 
-    def _cfg(self) -> dict:
-        try:
-            return json.loads(self.profile.read_text())
-        except Exception:
-            return {
-                "risk_percentage": 1.0,
-                "stop_loss": 20.0,
-                "max_daily_loss": 500.0,
-                "trading_symbols": ["EURUSD"],
-                "target_profit": 10.0,
-            }
+
 
     # Inside ActionExecutor in chat.py
     
@@ -117,21 +107,21 @@ class ActionExecutor:
 
     def execute_trade(self, symbol: str, direction: str, lots: Optional[float] = None, strategy: str = "Manual") -> str:
         """Execute a trade and return a human-readable outcome."""
-        cfg = self._cfg()
 
         # Validate direction
         direction = direction.upper()
         if direction not in ("BUY", "SELL"):
             return f"Invalid direction '{direction}' — must be BUY or SELL."
-
+        r = profile.risk()
+        
         # Position sizing if lots not provided
         if not lots:
             plan = self.rm.calculate_safe_trade(
                 symbol         = symbol,
-                base_risk_pct  = cfg.get("risk_percentage", 1.0),
-                stop_loss_pips = cfg.get("stop_loss", 20.0),
-                max_daily_loss = cfg.get("max_daily_loss", 500.0),
-                portfolio_size = max(len(cfg.get("trading_symbols", [])), 1),
+                base_risk_pct  = r.risk_pct,
+                stop_loss_pips = r.stop_loss_pips,
+                max_daily_loss = r.max_daily_loss,
+                portfolio_size = max(len(profile.symbols()), 1),
             )
             if not plan.get("approved"):
                 return f"Trade blocked — {plan.get('reason', 'risk check failed')}."
@@ -141,8 +131,8 @@ class ActionExecutor:
             symbol           = symbol,
             action           = direction,
             lots             = lots,
-            stop_loss_pips   = cfg.get("stop_loss", 20.0),
-            take_profit_pips = cfg.get("target_profit", 10.0),
+            stop_loss_pips   = r.stop_loss_pips,
+            take_profit_pips = r.take_profit_pips,
             strategy         = strategy,
         )
 
