@@ -167,43 +167,6 @@ class VoiceLayer:
             text = text.replace(f"{word}!", ".")
         return text
 
-    def _vary_sentence_starts(self, text: str) -> str:
-        """
-        Detect if the same sentence opener was used in the last turn.
-        If so, restructure it contextually to maintain natural phrasing.
-        """
-        last_turns = list(self.wm.turns)
-        if not last_turns:
-            return text
-        
-        last_aria = next(
-            (t.text for t in reversed(last_turns) if t.role == "aria"), ""
-        )
-        
-        first_word = text.split()[0] if text.split() else ""
-        last_first_word = last_aria.split()[0] if last_aria.split() else ""
-        
-        # If we're starting the same way as last time, restructure safely
-        if first_word and first_word == last_first_word:
-            if text.startswith("No "):
-                lower_text = text.lower()
-                # 1. Map common synthesizer outputs to distinct, natural alternatives
-                if "open position" in lower_text:
-                    text = "Currently flat — no open positions."
-                elif "edge" in lower_text:
-                    text = text.replace("No clear edge", "Currently lacking a clear edge")
-                elif "setup" in lower_text:
-                    text = "Scanning setups — nothing actionable found this cycle."
-                elif "news" in lower_text:
-                    text = "Market intelligence is quiet — no major news detected."
-                else:
-                    # 2. Safe fallback: prepends a conversational shift rather than slicing negation
-                    text = "At the moment, " + text[0].lower() + text[1:]
-            elif text.startswith("The "):
-                text = text[4:].capitalize()
-        
-        return text
-
     def render_greeting(self, agent_output: str, user_ctx: dict) -> str:
         """
         Greeting is special — it should reference history naturally.
