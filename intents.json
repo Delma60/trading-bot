@@ -3,62 +3,52 @@
         {
             "tag": "acknowledgment",
             "patterns": [
-                "Okay, got it.",
-                "Understood.",
-                "Thanks for the info.",
-                "I see, thanks!",
-                "Alright, noted.",
-                "Got it, thanks!",
-                "Okay, thanks for letting me know.",
-                "Understood, I will keep that in mind.",
-                "Thanks for the update!",
-                "I appreciate the information.",
-                "Okay, I understand now.",
-                "Thanks for clarifying!",
-                "Got it, I'll remember that.",
-                "Understood, I'll take that into account.",
-                "Thanks for sharing that with me!",
-                "I see what you mean now, thanks!",
-                "Alright, I will consider that in my analysis.",
-                "Got it, I will use that information moving forward.",
-                "Thanks for providing that context!",
-                "Understood, I will factor that into my decisions.",
-                "okay"
+                "okay got it",
+                "understood",
+                "thanks for the info",
+                "alright noted",
+                "got it thanks",
+                "makes sense",
+                "fair enough",
+                "right",
+                "cool",
+                "noted",
+                "I see",
+                "I see thanks",
+                "that makes sense",
+                "okay I understand",
+                "okay",
+                "alright",
+                "I get it",
+                "good to know"
             ],
             "responses": [
-                "Got it. Anything else you want me to act on?",
-                "Noted. Let me know when you're ready to move.",
-                "Understood. I'll factor that in going forward."
+                "Got it. What do you want to do next?",
+                "Noted. Ready when you are.",
+                "Understood — anything else on your mind?"
             ]
         },
         {
             "tag": "gratitude",
             "patterns": [
-                "Thanks for the help!",
-                "I appreciate it!",
-                "Great job, bot!",
-                "You're doing awesome!",
-                "Thank you so much!",
-                "That's really helpful!",
-                "I'm grateful for your assistance!",
-                "Thanks a lot, bot!",
-                "I couldn't do this without you!",
-                "You're amazing, thank you!",
-                "Thanks for being there for me!",
-                "I really appreciate your support!",
-                "wow, you're great at this!",
-                "nice work, bot!",
-                "awesome, thanks for the help!",
-                "great, I appreciate it!",
-                "thanks, you're doing a fantastic job!",
-                "thank you, I couldn't ask for a better assistant!",
-                "thanks, you're a lifesaver!",
-                "thank you, I really value your help!"
+                "thanks",
+                "thank you",
+                "cheers",
+                "appreciate it",
+                "nice one",
+                "good job",
+                "well done",
+                "you're great",
+                "thanks a lot",
+                "that was helpful",
+                "you're the best",
+                "great work",
+                "helpful as always"
             ],
             "responses": [
-                "Glad I could help. What's next?",
-                "Anytime. Let's keep the edge sharp.",
-                "Happy to. What do you need now?"
+                "Anytime. What's next?",
+                "Happy to help. What do you need?",
+                "No problem. Anything else?"
             ]
         },
         {
@@ -70,55 +60,49 @@
                 "good morning",
                 "good afternoon",
                 "good evening",
-                "hi there",
-                "hey there",
-                "hello there",
-                "greetings",
-                "what's up",
-                "how are you",
-                "ready to trade?",
-                "ready to check my account?",
-                "ready to place some trades?",
-                "ready to analyze the markets?",
                 "morning",
-                "yo"
+                "yo",
+                "sup",
+                "what's up",
+                "how's it going",
+                "how are you",
+                "how's the market",
+                "ready to trade",
+                "let's get going",
+                "let's do this",
+                "what's the plan today",
+                "what's happening",
+                "anything interesting today"
             ],
             "responses": [
-                "Ready when you are. What's the plan today?",
-                "Online and watching the markets. What do you need?",
-                "Good to go. Scan the portfolio, check positions, or place a trade?"
+                "Ready when you are. What's the plan?",
+                "Online and watching. What do you need?",
+                "Good to go — scan, analyse, or check positions?"
             ]
         },
         {
             "tag": "market_status",
             "patterns": [
                 "what can I trade now",
-                "what can I trade",
                 "what's open",
                 "what markets are open",
-                "what's tradeable",
-                "market status",
-                "market hours",
-                "what's available to trade",
-                "weekend trading",
-                "saturday trading",
-                "sunday trading",
-                "is forex open",
-                "is crypto open",
                 "is the market open",
                 "are markets open",
-                "what market is open",
-                "what's open right now",
-                "what can I trade on the weekend",
-                "can I trade on saturday",
-                "can I trade on sunday",
-                "what instruments are open",
+                "what's tradeable",
+                "can I trade now",
+                "what's live",
+                "is forex open",
+                "is crypto open",
                 "is gold open",
-                "is bitcoin open",
-                "which markets are open today"
+                "what's available to trade",
+                "can I trade on the weekend",
+                "what's open on a Saturday",
+                "what's open on a Sunday",
+                "which markets are live",
+                "what instruments are live right now"
             ],
             "responses": [
-                "Checking which markets are open right now..."
+                "Let me check what's live right now..."
             ]
         },
         {
@@ -138,109 +122,119 @@
                 "get me in",
                 "take the trade",
                 "pull the trigger",
-                "make a trade on EURUSD",
-                "trade it"
+                "trade it",
+                "I want to trade",
+                "let's trade",
+                "I'm ready to trade",
+                "fire it",
+                "take the position"
             ],
             "responses": [
-                "Analysing the market and checking risk rules..."
+                "Checking the signal and risk before we go..."
             ]
         },
         {
             "tag": "open_buy",
             "patterns": [
-                "Buy 0.1 lots of EURUSD",
-                "Go long on GBPUSD",
-                "Open a buy trade for XAUUSD",
-                "Execute a buy order",
-                "Buy BTC",
-                "Place a long position",
-                "Enter a buy on USDJPY",
-                "Open long on silver",
-                "Initiate buy order now",
-                "Start a buy trade",
+                "buy EURUSD",
+                "go long on GBPUSD",
+                "open a buy trade",
                 "buy gold",
                 "long EURUSD",
                 "go long",
-                "buy bitcoin"
+                "get long",
+                "buy bitcoin",
+                "I want to buy",
+                "I'm bullish on this",
+                "I'm thinking long",
+                "looking to go long",
+                "I want to go long",
+                "let's buy",
+                "bullish on gold",
+                "bullish on euro"
             ],
             "responses": [
-                "Going long — checking confluence and risk first."
+                "Going long — checking the setup first."
             ]
         },
         {
             "tag": "open_sell",
             "patterns": [
-                "Sell 0.5 lots of USDJPY",
-                "Go short on Gold",
-                "Open a sell trade for EURUSD",
-                "Execute a sell order",
-                "Sell BTC",
-                "Place a short position",
-                "Enter a sell on GBPUSD",
-                "Open short on silver",
-                "Initiate sell order now",
-                "Start a sell trade",
+                "sell EURUSD",
+                "go short on gold",
+                "open a sell trade",
                 "sell gold",
                 "short EURUSD",
                 "go short",
-                "short bitcoin"
+                "get short",
+                "short bitcoin",
+                "I want to sell",
+                "I'm bearish on this",
+                "I'm thinking short",
+                "looking to go short",
+                "I want to go short",
+                "let's sell",
+                "bearish on gold",
+                "bearish on euro"
             ],
             "responses": [
-                "Going short — checking confluence and risk first."
+                "Going short — checking the setup first."
             ]
         },
         {
             "tag": "close_all",
             "patterns": [
-                "Close all trades",
-                "Shut down all positions",
-                "Liquidate my account",
-                "Close everything",
-                "Exit all markets",
-                "Close every open position",
-                "End all active orders",
-                "Flatten the account",
-                "Close all orders now",
-                "Exit all trades immediately",
+                "close all trades",
+                "close everything",
+                "exit all markets",
+                "flatten the account",
+                "close all positions",
                 "get me out of everything",
                 "nuke all positions",
-                "close all now"
+                "close all now",
+                "I want out of everything",
+                "flat everything",
+                "go flat",
+                "exit everything",
+                "close the whole book",
+                "shut everything down"
             ],
             "responses": [
-                "Closing all positions now."
+                "Closing everything..."
             ]
         },
         {
             "tag": "close_position",
             "patterns": [
-                "Close EURUSD",
-                "Close my trade on BTCUSD",
-                "Exit my GBPUSD position",
-                "Close trade",
-                "Close position",
+                "close EURUSD",
+                "close my trade on BTCUSD",
+                "exit my GBPUSD position",
+                "close trade",
+                "close position",
                 "get out of XAUUSD",
                 "exit gold",
                 "close gold",
-                "exit EURUSD"
+                "exit EURUSD",
+                "I want out",
+                "get me out",
+                "close this one",
+                "exit this trade",
+                "cut the position",
+                "take the loss",
+                "take the profit and close",
+                "book the profit",
+                "enough close it",
+                "done with this trade"
             ],
             "responses": [
-                "Closing that position now."
+                "Let me check the position first..."
             ]
         },
         {
             "tag": "active_positions",
             "patterns": [
-                "Show my open trades",
-                "What positions are running?",
-                "List active orders",
-                "Am I in any trades right now?",
-                "Current positions",
-                "Open positions report",
-                "Show active trades",
-                "What orders are open?",
-                "List my open positions",
-                "Show me current exposure",
-                "whats the trading progress",
+                "show my open trades",
+                "what positions are running",
                 "what am I in right now",
                 "any open trades",
                 "check my trades",
@@ -248,7 +242,15 @@
                 "good positions",
                 "profitable positions",
                 "winning trades",
-                "check good positions"
+                "what's open",
+                "what's running",
+                "what do I have open",
+                "what am I holding",
+                "my exposure",
+                "what's on the book",
+                "how are my trades doing",
+                "where are my trades sitting",
+                "what's live"
             ],
             "responses": [
                 "Pulling your open positions..."
@@ -257,58 +259,62 @@
         {
             "tag": "profitable_positions",
             "patterns": [
-                "Show profitable positions",
-                "List winning trades",
-                "Check good positions",
-                "Check profitable positions",
-                "What positions are winning?",
-                "Which positions are profitable?",
-                "Show my winners",
-                "List all profitable positions"
+                "show profitable positions",
+                "list winning trades",
+                "which positions are in profit",
+                "which trades are green",
+                "show my winners",
+                "what's in profit",
+                "what's making money",
+                "which ones are up",
+                "what's positive",
+                "show me what's winning"
             ],
             "responses": [
-                "Reviewing winning positions and current profits..."
+                "Checking which positions are in profit..."
             ]
         },
         {
             "tag": "close_profitable_positions",
             "patterns": [
-                "Close profitable positions",
-                "Close winning trades",
-                "Take profits on winners",
-                "Close good positions",
-                "Close all profitable positions",
-                "Close profitable trade",
-                "Close profitable position",
-                "Close profitable market",
-                "Take profit on winners",
-                "Take profit now"
+                "close profitable positions",
+                "close winning trades",
+                "take profits on winners",
+                "take profits",
+                "take profit now",
+                "close the winners",
+                "lock in the profits",
+                "cash out the winners",
+                "close what's green",
+                "exit the profitable ones",
+                "bank the profits"
             ],
             "responses": [
-                "Closing only profitable positions now."
+                "Closing profitable positions..."
             ]
         },
         {
             "tag": "account_summary",
             "patterns": [
-                "What is my balance?",
-                "Show my account info",
-                "How much equity do I have?",
-                "Check free margin",
-                "Account status",
-                "Display account summary",
-                "What is my used margin?",
-                "Show balance and equity",
-                "What is my margin level?",
-                "check balance",
-                "how much do I have",
-                "account balance",
+                "what's my balance",
+                "show my account",
+                "how much equity do I have",
+                "check my balance",
+                "account status",
                 "what's my equity",
-                "check my account",
-                "account"
+                "how much do I have",
+                "account",
+                "balance",
+                "how much is in my account",
+                "where's my account at",
+                "what's the account looking like",
+                "am I up or down today",
+                "how's the account doing",
+                "what's my margin level",
+                "check free margin"
             ],
             "responses": [
-                "Fetching live account data..."
+                "Fetching your account..."
             ]
         },
         {
@@ -318,19 +324,24 @@
                 "run a scan",
                 "start scanning",
                 "scan for opportunities",
-                "start the bot",
-                "scan markets",
                 "look for trades",
-                "find opportunities",
+                "find me a trade",
+                "find something to trade",
+                "any good setups",
+                "anything worth trading",
+                "what's worth looking at",
+                "is there anything out there",
                 "hunt for setups",
                 "check all symbols",
-                "run portfolio scan",
+                "go",
+                "start the bot",
                 "scan everything",
-                "start scan",
-                "go"
+                "what should I be trading",
+                "show me what's setting up",
+                "any opportunities today"
             ],
             "responses": [
-                "Running the portfolio scanner now..."
+                "Scanning the portfolio now..."
             ]
         },
         {
@@ -345,70 +356,70 @@
                 "check inbox",
                 "did anything happen",
                 "any updates",
-                "show alerts",
                 "what did I miss",
                 "notifications"
             ],
             "responses": [
-                "Checking your notification inbox..."
+                "Checking your notifications..."
             ]
         },
         {
             "tag": "retrain_model",
             "patterns": [
                 "retrain the model",
-                "retrain model",
                 "update the model",
-                "refresh the AI model",
+                "refresh the AI",
                 "retrain the AI",
-                "train the model again",
-                "update model",
+                "train again",
                 "relearn",
-                "retrain on new data",
-                "train again"
+                "update the neural net",
+                "retrain on new data"
             ],
             "responses": [
-                "Retraining the model for the last symbol in memory..."
+                "Retraining the model on the latest data..."
             ]
         },
         {
             "tag": "get_price",
             "patterns": [
-                "What is the price of EURUSD?",
-                "Check BTCUSD",
-                "Give me the quote for Gold",
-                "How much is GBPUSD right now?",
-                "Price of XAUUSD",
-                "Show the current rate for USDJPY",
-                "What is the bid/ask on AUDUSD?",
-                "Latest price for silver",
-                "Get live quote for NGAS",
-                "Quote USDCHF",
-                "price of gold",
+                "what's the price of EURUSD",
+                "where's gold at",
                 "how much is bitcoin",
-                "whats the rate"
+                "what's GBPUSD at",
+                "price of XAUUSD",
+                "current rate for USDJPY",
+                "what's the rate",
+                "where's it trading",
+                "give me a quote",
+                "what's it at right now",
+                "how much is gold trading at",
+                "where's EURUSD sitting"
             ],
             "responses": [
-                "Fetching the live quote..."
+                "Getting the live quote..."
             ]
         },
         {
             "tag": "trade_history",
             "patterns": [
-                "How much did I make today?",
-                "Show my daily profit",
-                "What is my PnL for this week?",
-                "Trade history",
-                "Did my last trade hit take profit?",
-                "Show past closed trades",
-                "What was yesterday's result?",
-                "Review my trading history",
-                "How did my account perform?",
-                "Show closed orders",
-                "so whats the update",
                 "how did I do today",
-                "my pnl",
-                "daily results"
+                "what's my PnL",
+                "show my daily profit",
+                "what did I make today",
+                "how was the session",
+                "trade history",
+                "my results",
+                "daily results",
+                "how have I performed",
+                "what's my win rate",
+                "show my stats",
+                "how am I doing overall",
+                "how did it go today",
+                "what did I earn today",
+                "how's the P&L looking",
+                "show me my performance",
+                "what did I make this week",
+                "update on my trading"
             ],
             "responses": [
                 "Pulling your trade history..."
@@ -417,190 +428,171 @@
         {
             "tag": "ai_analysis",
             "patterns": [
-                "What does the AI say about EURUSD?",
-                "Analyze Gold for me",
-                "Should I buy or sell BTC?",
-                "Run a prediction on GBPUSD",
-                "Give me a market forecast",
-                "What is the AI signal for AUDUSD?",
-                "What is the trend outlook?",
-                "Do I have a trading opportunity?",
-                "Evaluate the market conditions",
-                "Provide an AI trade recommendation",
-                "analyse EURUSD",
-                "what do you think about gold",
+                "what does the AI say about EURUSD",
+                "analyse gold",
+                "should I buy or sell",
+                "what's the signal",
+                "what do you think about this",
+                "give me your read",
+                "what's your take",
                 "is this a good setup",
-                "what's the signal"
+                "what's the trade here",
+                "what are the indicators saying",
+                "run analysis on GBPUSD",
+                "what's the outlook",
+                "what's setting up",
+                "what does the data say",
+                "what's your view on gold",
+                "is EURUSD bullish or bearish",
+                "what does the chart say",
+                "what's the setup on GBPUSD"
             ],
             "responses": [
-                "Running analysis through the strategy engine..."
+                "Running through the analysis now..."
             ]
         },
         {
-            "tag": "bot_control_pause",
+            "tag": "analyze_symbol",
             "patterns": [
-                "Stop trading",
-                "Pause the bot",
-                "Halt all automated trades",
-                "Turn off AI trading",
-                "Sleep mode",
-                "Suspend trading",
-                "Disable auto trading",
-                "Stop the robot",
-                "Turn trading off",
-                "Pause strategy execution",
-                "stop",
-                "halt"
+                "analyze EURUSD",
+                "have a look at gold",
+                "check GBPUSD",
+                "look into XAUUSD",
+                "what about bitcoin",
+                "thoughts on USDJPY",
+                "what's happening with gold",
+                "how does EURUSD look",
+                "is gold worth watching",
+                "pull up GBPUSD",
+                "EURUSD setup",
+                "how's gold looking",
+                "GBPUSD signal",
+                "tell me about EURUSD",
+                "what's going on with gold",
+                "read on EURUSD",
+                "EURUSD chart",
+                "gold analysis",
+                "what about GBPUSD",
+                "any setup on XAUUSD",
+                "check the signal on EURUSD"
             ],
             "responses": [
-                "Trading paused. I won't open new positions until you resume."
-            ]
-        },
-        {
-            "tag": "bot_control_resume",
-            "patterns": [
-                "Start trading again",
-                "Resume the bot",
-                "Turn on AI trading",
-                "Activate auto trading",
-                "Wake up",
-                "Restart trading",
-                "Enable the bot",
-                "Begin automated trading",
-                "Reactivate strategy",
-                "Continue trading",
-                "resume",
-                "go again"
-            ],
-            "responses": [
-                "Back online. Scanning the markets."
+                "Taking a look at that now..."
             ]
         },
         {
             "tag": "risk_management",
             "patterns": [
-                "What is my risk exposure?",
-                "Check account risk",
-                "Show my drawdown",
-                "What is my max risk?",
-                "Analyze my risk level",
-                "How much am I risking?",
-                "Risk summary",
-                "Show leverage and risk",
-                "Is my account overexposed?",
-                "Evaluate risk management",
-                "how risky is my account",
+                "what's my risk exposure",
+                "check my drawdown",
+                "how much am I risking",
+                "am I overexposed",
+                "risk check",
+                "what's my drawdown",
+                "how's my risk looking",
                 "am I over-leveraged",
-                "risk check"
+                "how much can I lose today",
+                "what's my max risk",
+                "is my risk okay",
+                "what's my margin level",
+                "am I at risk"
             ],
             "responses": [
-                "Reviewing your risk metrics..."
+                "Reviewing your risk position..."
             ]
         },
         {
             "tag": "news_update",
             "patterns": [
-                "What market news do you have?",
-                "Show trading headlines",
-                "Any economic events today?",
-                "News affecting EURUSD",
-                "Get latest market news",
-                "Is there an upcoming announcement?",
-                "What news should I watch?",
-                "Show economic calendar",
-                "Market news summary",
-                "Are there any news risks?",
-                "any news today",
+                "any news",
+                "what's in the news",
+                "any events today",
+                "economic calendar",
+                "news affecting EURUSD",
+                "any market-moving news",
+                "what should I watch out for",
+                "any big releases today",
+                "what's on the calendar",
                 "upcoming events",
-                "economic calendar"
+                "any news risks today",
+                "news trading",
+                "economic events this week"
             ],
             "responses": [
-                "Checking the economic calendar for relevant events..."
+                "Scanning for recent market news..."
             ]
         },
         {
             "tag": "strategy_info",
             "patterns": [
-                "What strategy are we using?",
-                "Describe the trading plan",
-                "How does the bot trade?",
-                "What is the current setup?",
-                "Explain the strategy",
-                "What are the entry rules?",
-                "How do you decide trades?",
-                "Show strategy summary",
-                "What indicators are active?",
-                "Give me the strategy details",
-                "how does the strategy work",
-                "what's the method"
+                "what strategy are we using",
+                "how does the bot trade",
+                "explain the strategy",
+                "what are the entry rules",
+                "how do you decide trades",
+                "what's the trading method",
+                "how does the AI work",
+                "what indicators do you use",
+                "explain how you trade",
+                "what's your approach"
             ],
             "responses": [
-                "Here's how the current strategy works..."
+                "Happy to walk you through it..."
             ]
         },
         {
             "tag": "trading_symbols",
             "patterns": [
-                "What symbols do I trade?",
-                "Show my trading symbols",
-                "What pairs am I configured for?",
-                "List my symbols",
-                "What instruments do I trade?",
-                "Show configured symbols",
-                "What currencies do I trade?",
-                "My trading pairs",
-                "What assets am I set up for?",
-                "Display trading symbols",
-                "what am I tracking"
+                "what symbols do I trade",
+                "show my trading symbols",
+                "what pairs am I on",
+                "my portfolio",
+                "what am I tracking",
+                "what's in my portfolio",
+                "show my watchlist",
+                "what symbols am I watching",
+                "list my pairs",
+                "what am I set up for"
             ],
             "responses": [
-                "Your configured symbols are: {symbols}"
+                "Here's your current portfolio..."
             ]
         },
         {
             "tag": "trading_settings",
             "patterns": [
-                "Show my trading settings",
-                "What are my trading parameters?",
-                "Display configuration",
-                "Show my risk settings",
-                "What is my trading setup?",
-                "Show target and stop loss",
-                "Display trading config",
-                "What are my trade settings?",
-                "Show my trading preferences",
-                "What is my risk management setup?",
-                "status report",
-                "trading status",
-                "account summary",
+                "show my settings",
+                "what are my trading parameters",
+                "show config",
+                "what's my risk setup",
+                "display my settings",
+                "what's my stop loss set to",
+                "what's my target",
+                "show my risk settings",
                 "status",
-                "what are my settings",
-                "show config"
+                "trading status",
+                "what's my current setup"
             ],
             "responses": [
-                "Here's your current setup: {symbols} | TP: {target_profit} | SL: {stop_loss} | Risk: {risk_percentage}% | Max Loss: {max_daily_loss}"
+                "Here are your current settings..."
             ]
         },
         {
             "tag": "update_config",
             "patterns": [
-                "Change my settings",
-                "Update trading configuration",
-                "Modify my trading setup",
-                "Change risk settings",
-                "Update my parameters",
-                "Modify trading config",
-                "Change my targets",
-                "Update stop loss",
-                "Modify risk management",
-                "Change trading preferences",
-                "update trading settings",
-                "change trading settings",
-                "let me change my settings",
+                "change my settings",
+                "update my trading setup",
+                "change risk settings",
+                "I want to change the risk",
+                "update my parameters",
+                "modify my stop loss",
+                "change my target",
+                "I want to adjust the settings",
+                "tweak the settings",
                 "reconfigure"
             ],
             "responses": [
-                "Sure — let's walk through your settings."
+                "Sure — what do you want to change?"
             ]
         },
         {
@@ -608,30 +600,42 @@
             "patterns": [
                 "what symbols can I trade",
                 "show available symbols",
-                "show all symbols",
                 "what pairs are available",
-                "what tickers do you have",
                 "what instruments are available",
                 "browse symbols",
                 "search symbols",
-                "what can I trade",
-                "list all pairs",
                 "show me forex pairs",
-                "show forex symbols",
-                "what metals can I trade",
                 "what crypto is available",
-                "what indices can I trade",
-                "search USD pairs",
+                "what metals can I trade",
+                "what indices are available",
+                "what's on the broker",
                 "find EURUSD",
                 "look up gold symbol",
-                "what is the ticker for gold",
                 "what is the symbol for bitcoin",
                 "available instruments",
-                "broker symbols",
-                "show me all available"
+                "show me all available pairs"
             ],
             "responses": [
-                "Fetching available symbols from your broker..."
+                "Fetching available symbols from the broker..."
+            ]
+        },
+        {
+            "tag": "add_symbols",
+            "patterns": [
+                "add EURUSD to portfolio",
+                "add gold",
+                "add bitcoin",
+                "I want to trade GBPUSD",
+                "start tracking EURUSD",
+                "add this pair",
+                "track XAUUSD",
+                "add to my watchlist",
+                "include GBPUSD",
+                "add new symbol",
+                "put EURUSD on my list"
+            ],
+            "responses": [
+                "Adding that to your portfolio..."
             ]
         }
     ]
