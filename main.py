@@ -127,6 +127,50 @@ def signal_handler(signum, frame):
     agent_notify("🛑 Shutdown signal received (Ctrl+C or termination).", priority="critical")
     shutdown_event.set()
 
+
+        
+def _resolve_symbols(broker, symbols: list[str]) -> list[str]:
+    """
+    Determine the trading universe for this session.
+ 
+    Priority
+    --------
+    1. profile.json  trading_symbols  — user's explicit configuration.
+    2. Broker query  — if connected and profile is empty, fetch the most
+                       liquid forex pairs from the broker itself.
+    3. Hardcoded fallback — only if the broker is also unavailable.
+ 
+    This replaces the previous `cfg.get("trading_symbols", ["EURUSD"])`
+    one-liner that silently dropped to a single hardcoded symbol.
+    """
+    from manager.symbol_registry import SymbolRegistry
+
+    if symbols:
+        return symbols
+ 
+    # 2. Ask the broker for liquid forex pairs.
+    if broker.connected:
+        try:
+            registry = SymbolRegistry(broker)
+            forex    = registry.get_universe("forex")
+            # Limit to the 10 most liquid (registry returns spread-sorted results).
+            if forex:
+                agent_notify(
+                    f"profile.json has no trading_symbols — "
+                    f"defaulting to {len(forex[:10])} broker-sourced forex pairs."
+                )
+                return forex[:10]
+        except Exception as exc:
+            agent_notify(f"⚠️ Could not query broker for default symbols: {exc}")
+ 
+    # 3. Last resort — conservative single pair.
+    agent_notify(
+        "⚠️ Broker unavailable and profile.json has no trading_symbols. "
+        "Defaulting to EURUSD."
+    )
+    return ["EURUSD"]
+ 
+ 
 if __name__ == "__main__":
     agent_notify("Initializing Quantitative Trading System...")
 
@@ -151,16 +195,8 @@ if __name__ == "__main__":
     if not connected:
         agent_notify("⚠️ Broker not connected. LocalCache will still warm up from disk if available.")
 
-    # 2. Load profile symbols and initialize shared cache
-    profile_path = Path("data/profile.json")
-    cfg = {}
-    if profile_path.exists():
-        try:
-            cfg = json.loads(profile_path.read_text())
-        except Exception as exc:
-            agent_notify(f"⚠️ Failed to read profile config: {exc}")
-
-    symbols = cfg.get("trading_symbols", ["EURUSD"])
+    
+    symbols = _resolve_symbols(broker, profile.symbols())
     cache = LocalCache(broker, symbols, notify_callback=agent_notify)
     cache.warm_up()
     cache.start()

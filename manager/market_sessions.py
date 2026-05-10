@@ -15,7 +15,7 @@ so the bot never wastes time analysing instruments that can't be traded.
 
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-
+from manager.symbol_registry import SymbolRegistry
 
 class MarketSession:
     """Single session with an open/close rule."""
@@ -219,7 +219,7 @@ class MarketSessionManager:
 
     def suggest_always_open(self) -> list[str]:
         """Return a short list of commonly available crypto pairs."""
-        return ["BTCUSD", "ETHUSD", "LTCUSD", "XRPUSD", "ADAUSD"]
+        return SymbolRegistry().get_always_open()
 
     def get_next_open_time(self, symbol: str, now_utc: datetime = None) -> str:
         """Return a human-friendly string for when a closed market reopens."""

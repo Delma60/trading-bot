@@ -4,7 +4,7 @@ import sys
 import time
 import getpass
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -606,70 +606,7 @@ class ARIA:
 
         # Show current portfolio symbols (with smart dynamic grouping and filtering)
         if intent == "trading_symbols" or "portfolio" in lower:
-            try:
-                cfg = json.loads(self.PROFILE_FILE.read_text()) if self.PROFILE_FILE.exists() else {}
-            except Exception:
-                cfg = {}
-                
-            syms = cfg.get("trading_symbols", [])
-            if not syms:
-                return "Your portfolio is currently empty. Say 'add EURUSD' to get started."
-            
-            from manager.market_sessions import MarketSessionManager
-            from collections import defaultdict
-            mgr = MarketSessionManager()
-            
-            # 1. Determine if user asked for a specific category
-            target_category = None
-            if any(w in lower for w in ["crypto", "bitcoin", "coin", "digital"]): 
-                target_category = "crypto"
-            elif any(w in lower for w in ["forex", "currencies", "currency", "fx", "fiat"]): 
-                target_category = "forex"
-            elif any(w in lower for w in ["metal", "metals", "gold", "silver"]): 
-                target_category = "metals"
-            elif any(w in lower for w in ["index", "indices"]): 
-                target_category = "indices"  # matches indices_us, indices_eu, etc.
-            elif any(w in lower for w in ["commodity", "commodities", "oil", "energy"]): 
-                target_category = "commodities"
-            elif any(w in lower for w in ["stock", "stocks", "equity", "equities"]): 
-                target_category = "stocks"
-
-            # 2. Filter for a specific category if requested
-            if target_category:
-                filtered = [s for s in syms if target_category in mgr.get_symbol_category(s)]
-                if not filtered:
-                    return f"You don't have any {target_category} symbols in your portfolio right now."
-                
-                emoji = {"crypto": "₿", "forex": "💱", "metals": "🥇", "indices": "📈", "commodities": "🛢", "stocks": "🏢"}.get(target_category, "📊")
-                return f"{emoji} You have {len(filtered)} {target_category} symbol(s) in your portfolio: {', '.join(filtered)}"
-
-            # 3. Default view: Group ALL symbols cleanly by their category
-            grouped = defaultdict(list)
-            for s in syms:
-                cat = mgr.get_symbol_category(s)
-                grouped[cat].append(s)
-                
-            CAT_EMOJI = {
-                "crypto": "₿", 
-                "forex": "💱", 
-                "metals": "🥇", 
-                "commodities": "🛢", 
-                "stocks": "🏢", 
-                "indices_us": "🇺🇸", 
-                "indices_eu": "🇪🇺", 
-                "indices_asia": "🌏"
-            }
-
-            lines = [f"📊 You are currently tracking {len(syms)} symbol(s) in your portfolio:"]
-            
-            # Sort categories alphabetically so they appear in a consistent order
-            for cat in sorted(grouped.keys()):
-                items = grouped[cat]
-                emoji = CAT_EMOJI.get(cat, "🔹")
-                display_cat = cat.replace("_", " ").title()  # e.g., "indices_us" -> "Indices Us"
-                lines.append(f"  {emoji} {display_cat} ({len(items)}): {', '.join(items)}")
-                
-            return "\n".join(lines)
+            return self._handle_trading_symbols_intent(lower)
         
         return None  # fall through to agent
 
@@ -683,25 +620,16 @@ class ARIA:
         - Suggests crypto pairs if the portfolio has none
         - Offers to scan crypto immediately
         """
-        from manager.market_sessions import MarketSessionManager
-        from datetime import datetime, timezone
     
         mgr = MarketSessionManager()
         now_utc = datetime.now(timezone.utc)
     
-        cfg = {}
-        try:
-            import json
-            if self.PROFILE_FILE.exists():
-                cfg = json.loads(self.PROFILE_FILE.read_text())
-        except Exception:
-            pass
-    
-        portfolio_symbols = cfg.get("trading_symbols", [])
+        
+        portfolio_symbols = profile.symbols()
     
         summary = mgr.get_market_status_summary(portfolio_symbols, now_utc)
     
-        open_syms, closed_syms = mgr.filter_tradeable_symbols(portfolio_symbols, now_utc)
+        open_syms, _ = mgr.filter_tradeable_symbols(portfolio_symbols, now_utc)
     
         lines = [summary]
     
@@ -722,6 +650,58 @@ class ARIA:
                 f"Say 'add BTCUSD to portfolio' to get started."
             )
     
+        return "\n".join(lines)
+    
+    
+    def _handle_trading_symbols_intent(self, lower: str) -> str:
+        """Return grouped portfolio display. Called from _handle_quick_action."""
+        from manager.profile_manager import profile as _p
+        from manager.market_sessions import MarketSessionManager
+        from collections import defaultdict
+    
+        syms = _p.symbols()
+        if not syms:
+            return "Your portfolio is currently empty. Say 'add EURUSD' to get started."
+    
+        mgr = MarketSessionManager()
+    
+        # Specific category filter?
+        target_category = None
+        if any(w in lower for w in ["crypto", "bitcoin", "coin", "digital"]):
+            target_category = "crypto"
+        elif any(w in lower for w in ["forex", "currencies", "currency", "fx", "fiat"]):
+            target_category = "forex"
+        elif any(w in lower for w in ["metal", "metals", "gold", "silver"]):
+            target_category = "metals"
+        elif any(w in lower for w in ["index", "indices"]):
+            target_category = "indices"
+        elif any(w in lower for w in ["commodity", "commodities", "oil", "energy"]):
+            target_category = "commodities"
+        elif any(w in lower for w in ["stock", "stocks", "equity", "equities"]):
+            target_category = "stocks"
+    
+        if target_category:
+            filtered = [s for s in syms if target_category in mgr.get_symbol_category(s)]
+            if not filtered:
+                return f"You don't have any {target_category} symbols in your portfolio right now."
+            emoji = {"crypto": "₿", "forex": "💱", "metals": "🥇",
+                    "indices": "📈", "commodities": "🛢", "stocks": "🏢"}.get(target_category, "📊")
+            return f"{emoji} You have {len(filtered)} {target_category} symbol(s): {', '.join(filtered)}"
+    
+        grouped: defaultdict[str, list] = defaultdict(list)
+        for s in syms:
+            grouped[mgr.get_symbol_category(s)].append(s)
+    
+        CAT_EMOJI = {
+            "crypto": "₿", "forex": "💱", "metals": "🥇", "commodities": "🛢",
+            "stocks": "🏢", "indices_us": "🇺🇸", "indices_eu": "🇪🇺", "indices_asia": "🌏"
+        }
+        lines = [f"📊 You are currently tracking {len(syms)} symbol(s):"]
+        for cat in sorted(grouped):
+            items = grouped[cat]
+            emoji = CAT_EMOJI.get(cat, "🔹")
+            display = cat.replace("_", " ").title()
+            lines.append(f"  {emoji} {display} ({len(items)}): {', '.join(items)}")
         return "\n".join(lines)
     
     def _make_session_aware_greeting(self) -> str:
@@ -1212,36 +1192,23 @@ class ARIA:
         if not resolved:
             return "❌ No symbols recognized. Try: 'add EURUSD, USDJPY' or 'add USD, EUR'."
         
-        # Load current profile
-        try:
-            cfg = json.loads(self.PROFILE_FILE.read_text()) if self.PROFILE_FILE.exists() else {}
-        except Exception:
-            cfg = {}
+        
         
         # Get existing symbols
-        existing = set(cfg.get("trading_symbols", []))
-        
-        # Add new ones (avoiding duplicates)
-        added = resolved - existing
+        existing = set(profile.symbols())
+        added = set()
+        for sym in resolved:
+            if profile.add_symbol(sym):
+                added.add(sym)
         if not added:
-            current_list = ", ".join(sorted(existing))
-            return f"ℹ️  All symbols already in portfolio:\n{current_list}"
+            return f"ℹ️  All symbols already in portfolio: {', '.join(sorted(existing))}"
         
-        # Update profile
-        updated_symbols = sorted(existing | resolved)
-        cfg["trading_symbols"] = updated_symbols
-        
-        try:
-            self.PROFILE_FILE.parent.mkdir(exist_ok=True)
-            self.PROFILE_FILE.write_text(json.dumps(cfg, indent=4))
-            added_str = ", ".join(sorted(added))
-            total_str = ", ".join(updated_symbols)
-            return (
-                f"✅ Added {len(added)} symbol(s): {added_str}\n"
-                f"📊 Portfolio now tracks ({len(updated_symbols)}): {total_str}"
-            )
-        except Exception as e:
-            return f"❌ Failed to update profile: {e}"
+        updated = profile.symbols()
+        return (
+            f"✅ Added {len(added)} symbol(s): {', '.join(sorted(added))}\n"
+            f"📊 Portfolio now tracks ({len(updated)}): {', '.join(updated)}"
+        )
+       
 
     # ─────────────────────────────────────────────────────────────────────────
     # Notification inbox
@@ -1315,10 +1282,15 @@ class ARIA:
                 self._type_print("Connection failed — verify credentials and check MT5 is running.")
 
     def _load_or_setup_config(self):
-        """Load trading config or guide through setup."""
-        cfg = json.loads(self.PROFILE_FILE.read_text()) if self.PROFILE_FILE.exists() else {}
-        if "trading_symbols" not in cfg:
-            self._setup_config()
+        if self.PROFILE_FILE.exists():
+            try:
+                raw = json.loads(self.PROFILE_FILE.read_text())
+                if "portfolio" in raw and raw["portfolio"].get("symbols"):
+                    return  # new structured format already in place — nothing to do
+                
+            except Exception:
+                pass
+            
 
     def _setup_config(self):
         """Interactive first-time setup."""
@@ -1334,19 +1306,70 @@ class ARIA:
         profit_m= re.search(r"\$?(\d+(?:\.\d+)?)\s*(?:daily|per day)?", user_input)
 
         symbols       = symbols or ["EURUSD"]
-        risk_pct      = float(risk_m.group(1)) if risk_m else 1.0
-        daily_goal    = float(profit_m.group(1)) if profit_m else 10.0
         target_profit = round(daily_goal / max(len(symbols), 1), 2)
+        
+        risk_pct   = float(risk_m.group(1))   if risk_m   else 1.0
+        daily_goal = float(profit_m.group(1)) if profit_m else 10.0
+        tp_pips    = round(daily_goal / max(len(symbols), 1), 2)
+    
 
         cfg = {
-            "trading_symbols":  symbols,
-            "risk_percentage":  risk_pct,
-            "max_daily_loss":   daily_goal * 2,
-            "target_profit":    target_profit,
-            "stop_loss":        20.0,
-            "daily_goal":       daily_goal,
+        "_version": 2,
+        "_note": "Edit values here. Do NOT rename top-level sections.",
+        "portfolio": {
+            "symbols": symbols,
             "preferred_timeframes": ["H1"],
+            "asset_classes": {},
+            "strategy_mapping": {
+                "default": "Mean_Reversion",
+                "asset_class_defaults": {
+                    "forex":  "Mean_Reversion",
+                    "metals": "Momentum",
+                    "crypto": "Momentum",
+                    "indices": "Breakout",
+                },
+                "symbol_overrides": {}
+            }
+        },
+        "risk": {
+            "defaults": {
+                "risk_pct":         risk_pct,
+                "stop_loss_pips":   20.0,
+                "take_profit_pips": tp_pips,
+                "max_daily_loss":   daily_goal * 2,
+                "daily_goal":       daily_goal,
+                "cooldown_minutes": 5,
+                "lock_amount":      0.0,
+                "lock_pct":         0.0,
+            },
+            "symbol_overrides": {},
+            "drawdown_recovery": {
+                "moderate_threshold": 0.5,
+                "moderate_scale":     0.5,
+                "critical_threshold": 0.8,
+                "critical_scale":     0.25
+            }
+        },
+        "broker": {
+            "max_open_trades":       3,
+            "min_margin_level":      150.0,
+            "spread_tolerance_pips": 3.0,
+            "magic_number":          1000,
+            "slippage_points":       20
+        },
+        "sessions": {
+            "avoid_asian_session":  True,
+            "avoid_friday_close":   True,
+            "asian_session_pairs":  ["USDJPY", "AUDUSD", "NZDUSD", "CADJPY", "CHFJPY", "GBPJPY"]
+        },
+        "scanner": {
+            "interval_seconds":     3,
+            "dry_run":              False,
+            "mtf_min_alignment":    0.50,
+            "volatility_spike_atr": 2.5,
+            "dead_volume_ratio":    0.3
         }
+    }
         self.PROFILE_FILE.parent.mkdir(exist_ok=True)
         self.PROFILE_FILE.write_text(json.dumps(cfg, indent=4))
         self._type_print(
@@ -1355,15 +1378,15 @@ class ARIA:
         )
 
     def _print_banner(self):
-        cfg = json.loads(self.PROFILE_FILE.read_text()) if self.PROFILE_FILE.exists() else {}
-        symbols = cfg.get("trading_symbols", [])
-        risk    = cfg.get("risk_percentage", 1.0)
-        tp      = cfg.get("target_profit", 0.0)
-        sl      = cfg.get("stop_loss", 20.0)
+        syms = profile.symbols()
+        r    = profile.risk()
         print("\n" + "=" * 60)
-        print(f"🤖  ARIA ONLINE | Risk: {risk}% | TP: ${tp} | SL: {sl} pips")
-        if symbols:
-            print(f"📊  Tracking ({len(symbols)}): {', '.join(symbols)}")
+        print(
+            f"🤖  ARIA ONLINE | Risk: {r.risk_pct}% | "
+            f"TP: ${r.take_profit_pips} | SL: {r.stop_loss_pips} pips"
+        )
+        if syms:
+            print(f"📊  Tracking ({len(syms)}): {', '.join(syms)}")
         print("=" * 60)
 
     # ─────────────────────────────────────────────────────────────────────────
