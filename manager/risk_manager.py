@@ -1624,7 +1624,7 @@ class RiskManager:
     def _load_profile(self) -> dict:
         from pathlib import Path
         import json
-        try:*
+        try:
             return json.loads(Path("data/profile.json").read_text())
         except Exception:
             return {}

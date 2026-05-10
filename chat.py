@@ -32,7 +32,7 @@ from manager.conversational_parser import ConversationalParser
 from strategies.strategy_manager import StrategyManager
 from trader import Trader
 from manager.profile_manager import profile
-
+from manager.position_monitor import PositionMonitor
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ActionExecutor — handles broker operations recommended by the agent
@@ -219,6 +219,12 @@ class ARIA:
 
         self.proactive_engine.start()
         self.user_model.observe("session_start")
+        self.position_monitor = PositionMonitor(
+            broker=self.broker,
+            on_external_close=self._on_external_close,
+        )
+        self.broker.register_position_monitor(self.position_monitor)
+        self.position_monitor.start()
 
         # Multi-turn state
         self.pending_action: Optional[str] = None
@@ -239,6 +245,72 @@ class ARIA:
     # Public API
     # ─────────────────────────────────────────────────────────────────────────
 
+    # chat.py — add this method to ARIA class
+
+    def _on_external_close(
+        self,
+        ticket: int,
+        symbol: str,
+        profit: float,
+        close_price: float,
+        direction: str,
+        lots: float,
+        open_price: float,
+    ) -> None:
+        """
+        Fired when a position closes outside the bot — SL/TP hit,
+        manual close from the MT5 app, margin call, etc.
+        Keeps all internal state consistent.
+        """
+        sign   = "+" if profit >= 0 else ""
+        reason = "TP hit" if profit > 0 else "SL hit" if profit < 0 else "break-even close"
+
+        # 1. Notify the user
+        self.receive_system_alert(
+            f"📱 External close — {symbol} {direction} {lots}L "
+            f"@ {close_price} ({reason}): {sign}${profit:.2f}",
+            priority="trade_executed",
+        )
+
+        # 2. Log to trade history CSV (same format as bot closes)
+        strategy = self.broker._strategy_for(ticket)
+        self.broker._log_trade_history(
+            action="CLOSE",
+            symbol=symbol,
+            lots=lots,
+            price=close_price,
+            ticket=ticket,
+            comment=f"External close — {reason}",
+            strategy=strategy,
+            profit=profit,
+        )
+
+        # 3. Apply cooldown so the scanner doesn't immediately re-enter
+        self.broker._mark_cooldown(symbol)
+
+        # 4. Update loss-streak tracker (from previous win-rate fix)
+        if hasattr(self.rm, "record_win") and hasattr(self.rm, "record_loss"):
+            if profit >= 0:
+                self.rm.record_win(symbol)
+            else:
+                self.rm.record_loss(symbol)
+
+        # 5. Feed ML learning pipeline with the outcome
+        self.pm.log_trade_for_learning(ticket=ticket, profit=profit)
+
+        # 6. Episodic memory — remember this for future context
+        self.episodic_memory.store(Episode(
+            timestamp=datetime.now().isoformat(),
+            episode_type="trade",
+            symbol=symbol,
+            summary=f"{symbol} {direction} closed externally ({reason})",
+            outcome=f"{sign}${profit:.2f}",
+            emotional_tag=None,
+            tags=["external_close", "sl_hit" if profit < 0 else "tp_hit", symbol],
+        ))
+
+        # 7. Update working memory so ARIA knows what just happened
+        self.working_memory.remember_symbol(symbol)
     def receive_system_alert(self, msg: str, priority: str = "normal"):
         with self.inbox_lock:
             self.notification_inbox.append({"msg": msg, "priority": priority})
@@ -918,6 +990,7 @@ class ARIA:
             self.proactive_engine.stop()
             self.trailing_manager.stop()
             self.profit_guard.stop()
+            self.position_monitor.stop()
             self.message_processor.shutdown(wait=False)
         except Exception as e:
             print(f"Error during shutdown: {e}")

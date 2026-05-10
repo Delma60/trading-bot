@@ -16,6 +16,7 @@ class Trader:
         self.connected = False
         self.notify = notify_callback
         self.magic = magic
+        self.risk_manager = None
         # Centralized Execution Lock (prevents race conditions across all threads)
         self._execution_lock = threading.Lock()
         self._pending_orders = set()  # Tracks in-flight orders to avoid duplicates
@@ -25,6 +26,7 @@ class Trader:
         self._ticket_strategy: dict[int, str] = {}  # maps ticket → strategy name
         # Legacy lock for compatibility
         self._order_lock = self._execution_lock
+        
 
     def set_cooldown(self, seconds: int):
         """Adjust cooldown duration in seconds."""
@@ -664,6 +666,11 @@ class Trader:
                         profit=position.profit,
                     )
                     self._mark_cooldown(symbol)
+                    if getattr(self, 'risk_manager', None) is not None:
+                        if position.profit is not None and position.profit < 0:
+                            self.risk_manager.record_loss(symbol)
+                        else:
+                            self.risk_manager.record_win(symbol)
                     self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
 
     def close_position(self, symbol: str):
@@ -748,8 +755,18 @@ class Trader:
                     )
                     self._mark_cooldown(symbol)
                     self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
+                    if hasattr(self, '_position_monitor'):
+                        self._position_monitor.mark_bot_closed(position.ticket)
 
+                    # In close_all_positions(), same place inside the per-position loop:
+                    if hasattr(self, '_position_monitor'):
+                        self._position_monitor.mark_bot_closed(position.ticket)
         return success
+    
+    def register_position_monitor(self, monitor) -> None:
+        """Wire up the position monitor so bot-closes are excluded from external-close callbacks."""
+        self._position_monitor = monitor
+    
     def partial_close_position(self, ticket: int, symbol: str,
         close_ratio: float = 0.5) -> dict:
         if not 0.1 <= close_ratio <= 0.9:
@@ -856,6 +873,11 @@ class Trader:
                         profit=position.profit,
                     )
                     self._mark_cooldown(pos_symbol)
+                    if getattr(self, 'risk_manager', None) is not None:
+                        if position.profit is not None and position.profit < 0:
+                            self.risk_manager.record_loss(pos_symbol)
+                        else:
+                            self.risk_manager.record_win(pos_symbol)
                     responses.append(f"✅ Closed {pos_symbol} (Ticket #{position.ticket}) at {result.price}")
 
         return "\n".join(responses)
