@@ -358,3 +358,40 @@ class StrategyManager:
             "strategy_signals": strategy_signals,
             "feature_vector":   fv,
         }
+        
+
+class OHLCVCache(LocalCache):
+    """
+    Thread-safe time-to-live cache for OHLCV DataFrames.
+    Prevents redundant MT5 calls when multiple strategies analyse the
+    same symbol in the same scan cycle.
+    """
+
+    def __init__(self, ttl_seconds: int = 60):
+        self._store: dict[tuple, tuple[float, object]] = {}
+        self._ttl   = ttl_seconds
+        self._lock  = threading.Lock()
+
+    def fetch(self, broker, symbol: str, timeframe: str, num_bars: int = 1000):
+        key = (symbol.upper(), timeframe)
+        with self._lock:
+            entry = self._store.get(key)
+            if entry and (time.monotonic() - entry[0]) < self._ttl:
+                return entry[1]
+
+        df = broker.ohclv_data(symbol, timeframe=timeframe, num_bars=num_bars)
+
+        if df is not None and not df.empty:
+            with self._lock:
+                self._store[key] = (time.monotonic(), df)
+
+        return df
+
+    def invalidate(self, symbol: str = None, timeframe: str = None):
+        with self._lock:
+            if symbol is None:
+                self._store.clear()
+            else:
+                key = (symbol.upper(), timeframe or "H1")
+                self._store.pop(key, None)
+

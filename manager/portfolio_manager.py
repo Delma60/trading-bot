@@ -276,7 +276,7 @@ class PortfolioManager:
                         )
                         continue
 
-                    lots = self.risk_manager.calculate_micro_lot()
+                    lots = trade_plan["lots"] #self.risk_manager.calculate_micro_lot()
                     sl_pips = trade_plan["stop_loss_pips"]
                     
                     exec_result = self.broker.execute_trade(
