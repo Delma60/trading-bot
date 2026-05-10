@@ -167,6 +167,39 @@ class VoiceLayer:
             text = text.replace(f"{word}!", ".")
         return text
 
+    def _vary_sentence_starts(self, text: str) -> str:
+        """
+        Detect if the same sentence opener was used in the last ARIA turn.
+        If so, restructure it to maintain natural phrasing.
+        """
+        last_turns = list(self.wm.turns)  # ConversationTurn objects, not tuples
+        if not last_turns:
+            return text
+
+        last_aria_text = next(
+            (t.text for t in reversed(last_turns) if t.role == "aria"), ""
+        )
+
+        first_word = text.split()[0] if text.split() else ""
+        last_first_word = last_aria_text.split()[0] if last_aria_text.split() else ""
+
+        if first_word and first_word == last_first_word:
+            if text.startswith("No "):
+                lower_text = text.lower()
+                if "open position" in lower_text:
+                    text = "Currently flat — no open positions."
+                elif "edge" in lower_text:
+                    text = text.replace("No clear edge", "Currently lacking a clear edge")
+                elif "setup" in lower_text:
+                    text = "Scanning setups — nothing actionable found this cycle."
+                elif "news" in lower_text:
+                    text = "Market intelligence is quiet — no major news detected."
+                else:
+                    text = "At the moment, " + text[0].lower() + text[1:]
+            elif text.startswith("The "):
+                text = text[4:].capitalize()
+
+        return text
     def render_greeting(self, agent_output: str, user_ctx: dict) -> str:
         """
         Greeting is special — it should reference history naturally.
