@@ -139,9 +139,24 @@ class LocalCache:
                 if tick_data is not None:
                     self._ticks[symbol] = tick_data
 
-    def _get_history_path(self, symbol: str) -> Path:
-        return self.history_dir / f"{symbol.upper()}_ohlcv.parquet"
+    import re
 
+    def _get_history_path(self, symbol: str) -> Path:
+        # 1. Strip out any dangerous characters (allow only uppercase A-Z and 0-9)
+        safe_symbol = re.sub(r'[^A-Z0-9]', '', symbol.upper())
+        if not safe_symbol:
+            raise ValueError("Invalid symbol provided for caching.")
+            
+        target_path = self.history_dir / f"{safe_symbol}_ohlcv.parquet"
+        
+        # 2. Enforce absolute path boundary resolution
+        resolved_base = self.history_dir.resolve()
+        resolved_target = target_path.resolve()
+        
+        if not resolved_target.is_relative_to(resolved_base):
+            raise PermissionError("Path traversal attempt detected.")
+            
+        return target_path
     def _load_symbol_history(self, symbol: str) -> Optional[pd.DataFrame]:
         path = self._get_history_path(symbol)
         if not path.exists():

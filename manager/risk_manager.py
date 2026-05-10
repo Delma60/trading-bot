@@ -1596,11 +1596,35 @@ class RiskManager:
             lock_pct    = r.lock_pct_decimal,
         )
         self.balance_pip_sizer = BalancePipSizer()
+        
+        # risk_manager.py  — add to RiskManager.__init__
+        self._consecutive_losses: dict[str, int] = {}
+        self._loss_cooldown_until: dict[str, datetime] = {}
+        LOSS_STREAK_LIMIT = 2
+        LOSS_STREAK_PAUSE_MINUTES = 60
+
+        # add new method
+        def record_loss(self, symbol: str):
+            self._consecutive_losses[symbol] = self._consecutive_losses.get(symbol, 0) + 1
+            if self._consecutive_losses[symbol] >= self.LOSS_STREAK_LIMIT:
+                pause_until = datetime.now() + timedelta(minutes=self.LOSS_STREAK_PAUSE_MINUTES)
+                self._loss_cooldown_until[symbol] = pause_until
+                self._consecutive_losses[symbol] = 0
+                self.notify(f"⏸ {symbol}: {self.LOSS_STREAK_LIMIT} consecutive losses — paused for {self.LOSS_STREAK_PAUSE_MINUTES}m")
+
+        def record_win(self, symbol: str):
+            self._consecutive_losses[symbol] = 0
+
+        def is_loss_paused(self, symbol: str) -> bool:
+            until = self._loss_cooldown_until.get(symbol)
+            if until and datetime.now() < until:
+                return True
+            return False
     
     def _load_profile(self) -> dict:
         from pathlib import Path
         import json
-        try:
+        try:*
             return json.loads(Path("data/profile.json").read_text())
         except Exception:
             return {}

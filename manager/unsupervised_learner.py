@@ -31,6 +31,7 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+import skops.io as sio
 
 try:
     from sklearn.cluster import KMeans, DBSCAN
@@ -422,20 +423,19 @@ class UnsupervisedLearner:
         except Exception:
             pass
 
+
     def _load_models(self):
         try:
+            # Define trusted types allowlist if custom classes are used, or use default safe types
+            unknown_types = sio.get_untrusted_types(file=self.MODEL_FILE)
             if self.MODEL_FILE.exists():
-                with self.MODEL_FILE.open("rb") as f:
-                    self._kmeans = pickle.load(f)
+                self._kmeans = sio.load(self.MODEL_FILE, trusted=unknown_types)
             if self.SCALER_FILE.exists():
-                with self.SCALER_FILE.open("rb") as f:
-                    self._scaler = pickle.load(f)
+                self._scaler = sio.load(self.SCALER_FILE, trusted=sio.get_untrusted_types(file=self.SCALER_FILE))
             if self.ANOMALY_FILE.exists():
-                with self.ANOMALY_FILE.open("rb") as f:
-                    self._anomaly = pickle.load(f)
-        except Exception:
+                self._anomaly = sio.load(self.ANOMALY_FILE, trusted=sio.get_untrusted_types(file=self.ANOMALY_FILE))
+        except Exception as exc:
             pass
-
     def _load_history(self) -> list:
         if self.HISTORY_FILE.exists():
             try:

@@ -178,8 +178,8 @@ class TradeReasoner:
             pts += lstm_pts
             notes.append(f"LSTM confirms ({lstm_dir} @ {lstm_conf:.0%}) → +{lstm_pts} pts")
         elif lstm_dir == "NEUTRAL":
-            pts += 7
-            notes.append("LSTM neutral → +7 pts")
+            pts += 0
+            notes.append("LSTM neutral → +0 pts")
         else:
             notes.append(f"LSTM disagrees ({lstm_dir}) → +0 pts")
 

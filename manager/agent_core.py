@@ -911,15 +911,15 @@ class AgentSynthesizer:
         
         if (plan.intent in trade_intents and 
             action in ("BUY", "SELL") and 
-            grade in ("A", "B", "C") and 
+            grade in ("A", "B") and 
             approved and lots):
             
             trade_lots = lots if grade in ("A", "B") else lots * 0.5
             agreements = sum(
                 1 for s in r.get("signal_ensemble", {}).get("strategy_signals", {}).values()
-                if s.get("action") == action and s.get("confidence", 0) > 0.4
+                if s.get("action") == action and s.get("confidence", 0) > 0.55
             )
-            if agreements >= 2:  
+            if agreements >= 3:  
                 plan.suggested_action = f"{action} {trade_lots:.2f} {symbol}"
         return " ".join(parts)
  

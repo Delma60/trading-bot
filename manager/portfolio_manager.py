@@ -262,13 +262,18 @@ class PortfolioManager:
             if not ok:
                 results.append(f"⚠️ {symbol}: {corr_reason}")
                 continue
+            if self.risk_manager.is_loss_paused(symbol):
+                results.append(f"⏸ {symbol}: loss-streak pause active, skipping.")
+                continue
             # Get the state to feed the AI (and to log it if we take a trade!)
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
-            # Removed spammy strategy assignment notification
-            signal = self.strategy_manager.check_signals(symbol, use_ensemble=True)
             
-            if signal and signal.get('action') != 'WAIT':
+            MIN_SIGNAL_CONFIDENCE = 0.65   # add this constant at class level
+            signal = self.strategy_manager.check_signals(symbol, use_ensemble=True)
+            if (signal
+                    and signal.get('action') != 'WAIT'
+                    and signal.get('confidence', 0.0) >= MIN_SIGNAL_CONFIDENCE):
                 gate_ok, gate_reason = self.gate.gate(symbol, self.broker)
                 if not gate_ok:
                     results.append(f"⚠️ {symbol}: Trade gate blocked entry. {gate_reason}")
