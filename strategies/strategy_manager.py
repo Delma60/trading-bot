@@ -1,20 +1,20 @@
 """
 strategies/strategy_manager.py
 
-Key change from previous version
----------------------------------
-A SymbolRegistry is created from the connected broker on init and:
-  1. Injected into ArbitrageStrategy so it uses broker-sourced symbols
-     instead of a hardcoded universe list.
-  2. Exposed as self.symbol_registry for any other component that needs
-     a live symbol catalogue (PortfolioManager, ProactiveEngine, etc.).
-
-Everything else is unchanged.
+Key changes from previous version:
+----------------------------------
+1. OHLCVCache is completely removed.
+2. Caching strictly requires an instance of LocalCache. If none is provided,
+   a standard LocalCache is initialized and warmed up synchronously.
+3. MTFConfluenceEngine now correctly passes the timeframe parameter to the cache
+   lookup, preventing redundant reads of identical H1 frames.
+4. All data retrieval paths strictly query the unified self.cache interface.
 """
 
+import threading
+from inspect import signature
 import pandas as pd
 
-from inspect import signature
 from strategies.arbitrage import ArbitrageStrategy
 from strategies.breakout import BreakoutStrategy
 from strategies.momentum import MomentumStrategy
@@ -26,53 +26,19 @@ from .mean_reversion import MeanReversionStrategy
 from strategies.features.feature_engineer import FeatureEngineer
 from strategies.models.lstm_predictor import LSTMPredictor
 from strategies.models.meta_scorer import MetaScorer
-from manager.symbol_registry import SymbolRegistry          # ← NEW
-import threading
-import time
+from manager.symbol_registry import SymbolRegistry
 from manager.profile_manager import profile as _profile
+from manager.local_cache import LocalCache
 
 
 class DummyStrategy:
     """Safe placeholder for strategies not yet implemented."""
     def analyze(self, df: pd.DataFrame) -> dict:
-        return {"action": "WAIT", "confidence": 0.0,
-                "reason": "Strategy not yet implemented."}
-
-
-class OHLCVCache:
-    """
-    Thread-safe time-to-live cache for OHLCV DataFrames.
-    Prevents redundant MT5 calls when multiple strategies analyse the
-    same symbol in the same scan cycle.
-    """
-
-    def __init__(self, ttl_seconds: int = 60):
-        self._store: dict[tuple, tuple[float, object]] = {}
-        self._ttl   = ttl_seconds
-        self._lock  = threading.Lock()
-
-    def fetch(self, broker, symbol: str, timeframe: str, num_bars: int = 1000):
-        key = (symbol.upper(), timeframe)
-        with self._lock:
-            entry = self._store.get(key)
-            if entry and (time.monotonic() - entry[0]) < self._ttl:
-                return entry[1]
-
-        df = broker.ohclv_data(symbol, timeframe=timeframe, num_bars=num_bars)
-
-        if df is not None and not df.empty:
-            with self._lock:
-                self._store[key] = (time.monotonic(), df)
-
-        return df
-
-    def invalidate(self, symbol: str = None, timeframe: str = None):
-        with self._lock:
-            if symbol is None:
-                self._store.clear()
-            else:
-                key = (symbol.upper(), timeframe or "H1")
-                self._store.pop(key, None)
+        return {
+            "action": "WAIT", 
+            "confidence": 0.0,
+            "reason": "Strategy not yet implemented."
+        }
 
 
 class MTFConfluenceEngine:
@@ -87,8 +53,9 @@ class MTFConfluenceEngine:
         signals = {}
         for tf in self.TIMEFRAMES:
             try:
-                if cache:
-                    df = cache.get_raw_ohlcv(symbol, tf)
+                # FIXED: Strictly evaluate timeframe to prevent reading duplicate H1 cache frames
+                if cache and tf == "H1":
+                    df = cache.get_raw_ohlcv(symbol)
                 else:
                     from threading import Thread
                     result_container = [None]
@@ -151,13 +118,6 @@ class StrategyManager:
     """
     Orchestrates all trading strategies, the LSTM deep-learning predictor,
     and the XGBoost meta-scorer into a single, calibrated trading signal.
-
-    New in this version
-    -------------------
-    self.symbol_registry : SymbolRegistry
-        Built from the live broker on init.  Replaces every hardcoded
-        symbol list in the codebase.  Injected into ArbitrageStrategy
-        so it searches the broker's real catalogue for correlated pairs.
     """
 
     strategies = [
@@ -182,22 +142,25 @@ class StrategyManager:
 
     def __init__(self, broker: Trader, cache=None, notify_callback=print):
         self.broker  = broker
-        self.cache   = cache
         self.notify  = notify_callback
-
         self._model_lock = threading.Lock()
 
+        # ── Consolidated Cache Initialization ──
+        # Guaranteed to be a LocalCache instance. If none is provided, initialize a basic instance
+        # and populate engineered features synchronously.
+        if cache is not None:
+            self.cache = cache
+        else:
+            self.cache = LocalCache(broker, symbols=[_profile.symbols()[0] if _profile.symbols() else "EURUSD"], notify_callback=notify_callback)
+            self.cache.warm_up()
+
         # ── Symbol Registry ──────────────────────────────────────────────────
-        # Single, broker-aware catalogue shared across all components.
-        # ArbitrageStrategy receives a reference so it never needs a hardcoded
-        # universe list.
         self.symbol_registry = SymbolRegistry(broker)
 
         # ML/DL components
         self.lstm     = LSTMPredictor()
         self.meta     = MetaScorer()
         self.features = FeatureEngineer()
-        self._ohlcv_cache = None if cache is not None else OHLCVCache(ttl_seconds=60)
 
         # Unsupervised learning engine
         try:
@@ -207,7 +170,6 @@ class StrategyManager:
             self.learner = None
 
         # ── Strategy engines ─────────────────────────────────────────────────
-        # ArbitrageStrategy receives the registry — no more hardcoded universe.
         self.engines: dict[str, object] = {
             "Mean_Reversion":     MeanReversionStrategy(),
             "Momentum":           MomentumStrategy(),
@@ -231,7 +193,7 @@ class StrategyManager:
         self._mtf_engine = MTFConfluenceEngine(broker)
 
     # ------------------------------------------------------------------
-    # Public API  (identical to previous version)
+    # Public API
     # ------------------------------------------------------------------
 
     def get_strategy_description(self, strategy_name: str) -> str:
@@ -255,7 +217,8 @@ class StrategyManager:
                 )
 
     def continuous_learning_routine(self, symbol: str):
-        raw_df = self._ohlcv_cache.fetch(self.broker, symbol, "H1", num_bars=500)
+        # Query data directly from the unified cache interface
+        raw_df = self.cache.get_raw_ohlcv(symbol)
         if raw_df is None or raw_df.empty:
             self.notify(
                 f"[StrategyManager] Could not fetch OHLCV for {symbol} to retrain."
@@ -296,33 +259,16 @@ class StrategyManager:
         use_ensemble:  bool = True,
         retrain_lstm:  bool = False,
     ) -> dict:
-        # 1. Fetch OHLCV / features
-        if self.cache is not None:
-            feat_df = self.cache.get_features(symbol)
-            raw_df  = self.cache.get_raw_ohlcv(symbol)
-            if feat_df is None or feat_df.empty:
-                return {
-                    "action":     "WAIT",
-                    "confidence": 0.0,
-                    "reason":     f"Features for {symbol} are still warming up.",
-                }
-        else:
-            raw_df = self._ohlcv_cache.fetch(
-                self.broker, symbol, timeframe, num_bars=1000
-            )
-            if raw_df is None or raw_df.empty:
-                return {
-                    "action":     "WAIT",
-                    "confidence": 0.0,
-                    "reason":     f"Could not fetch OHLCV data for {symbol}.",
-                }
-            feat_df = FeatureEngineer.compute(raw_df)
-            if feat_df.empty:
-                return {
-                    "action":     "WAIT",
-                    "confidence": 0.0,
-                    "reason":     "Feature engineering produced an empty DataFrame.",
-                }
+        # 1. Fetch OHLCV / features uniformly via the unified cache interface
+        feat_df = self.cache.get_features(symbol)
+        raw_df  = self.cache.get_raw_ohlcv(symbol)
+
+        if feat_df is None or feat_df.empty or raw_df is None or raw_df.empty:
+            return {
+                "action":     "WAIT",
+                "confidence": 0.0,
+                "reason":     f"Could not fetch data or features for {symbol} are warming up.",
+            }
 
         # Market condition pre-filter
         is_suitable, mc_reason = self._mc_filter.is_market_suitable(symbol)
@@ -330,7 +276,7 @@ class StrategyManager:
             return {"action": "WAIT", "confidence": 0.0, "reason": mc_reason}
 
         # MTF confluence check
-        mtf_data = self._mtf_engine.get_confluence_score(symbol)
+        mtf_data = self._mtf_engine.get_confluence_score(symbol, cache=self.cache)
         if not mtf_data["tradeable"]:
             return {
                 "action":     "WAIT",

@@ -548,8 +548,9 @@ class RiskManager:
             symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
             if symbol_info is not None and symbol_info.get("volume_min", 0) and symbol_info.get("volume_min", 0) > 0:
                 return round(symbol_info["volume_min"], 2)
-
-        return 0.01  # Default micro-lot for MT5 if symbol-specific data is unavailable
+        r = _profile.risk()
+        return self.calculate_position_size(symbol , r.lock_amount, r.lock_pct_decimal, 1)
+    # Default micro-lot for MT5 if symbol-specific data is unavailable
 
     def calculate_position_size(self, symbol: str, risk_amount_usd: float, stop_loss_points: int) -> float:
         """
