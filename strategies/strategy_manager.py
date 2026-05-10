@@ -88,7 +88,7 @@ class MTFConfluenceEngine:
         for tf in self.TIMEFRAMES:
             try:
                 if cache:
-                    df = cache.get_raw_ohlcv(symbol)
+                    df = cache.get_raw_ohlcv(symbol, tf)
                 else:
                     from threading import Thread
                     result_container = [None]

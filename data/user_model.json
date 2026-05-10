@@ -5,12 +5,12 @@
   "communication_pref": "concise",
   "stress_threshold": 3,
   "decision_speed": "deliberate",
-  "trust_in_bot": 0.51,
+  "trust_in_bot": 0.53,
   "preferred_session": "unknown",
   "loss_aversion": "normal",
   "confirmation_seeker": false,
   "follows_signals": 0.5,
   "overrides_bot": 0.0,
-  "total_sessions": 29,
-  "last_seen": "2026-05-10T01:39:23.097200"
+  "total_sessions": 30,
+  "last_seen": "2026-05-10T09:13:49.805541"
 }

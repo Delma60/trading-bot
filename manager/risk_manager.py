@@ -431,10 +431,25 @@ class RiskManager:
             current_equity = account.equity
             today = datetime.now().date()
             
-            # Reset watermark at midnight, or initialize on first run
+            # Reset watermark at midnight, or initialize securely on mid-session restart
             if self.watermark_date != today:
-                self.daily_high_watermark = max(account.balance, current_equity)
-                self.daily_low_watermark = min(account.balance, current_equity)
+                # Reconstruct start-of-day balance from today's deal history
+                today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+                today_end = int(datetime.now().timestamp())
+                deals = mt5.history_deals_get(today_start, today_end)
+                
+                net_today_pnl = 0.0
+                if deals:
+                    for deal in deals:
+                        # Include profit, commission, and fee to capture the full net balance change
+                        net_today_pnl += deal.profit + getattr(deal, 'commission', 0.0) + getattr(deal, 'fee', 0.0)
+                
+                # Subtracting a net loss (negative number) adds it back to determine the starting balance
+                start_of_day_balance = account.balance - net_today_pnl
+                
+                # Initialize watermarks incorporating the true start-of-day baseline
+                self.daily_high_watermark = max(start_of_day_balance, account.balance, current_equity)
+                self.daily_low_watermark = min(start_of_day_balance, account.balance, current_equity)
                 self.watermark_date = today
             elif current_equity > self.daily_high_watermark:
                 # Update the high watermark as the portfolio grows!
@@ -448,7 +463,7 @@ class RiskManager:
             
             if max_daily_loss > 0 and trailing_drawdown >= max_daily_loss:
                 return False, f"FATAL: Trailing drawdown limit hit! Peak: ${self.daily_high_watermark:,.2f}, Dropped: ${trailing_drawdown:.2f} (Limit: ${max_daily_loss})"
-
+            
         return True, "System healthy."
     
     def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float, portfolio_size: int) -> Dict[str, Any]:
@@ -502,9 +517,7 @@ class RiskManager:
             atr_pips          = atr_pips,
         )
         self.notify(
-            f"[RiskManager] {self.balance_pip_sizer.describe(tradeable, atr_pips)}",
-            # Remove this notify line in production if it's too verbose.
-            # It's useful during tuning to see exactly what pip was chosen.
+            f"[RiskManager] {self.balance_pip_sizer.describe(tradeable, atr_pips)}"
         )
         
         symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)

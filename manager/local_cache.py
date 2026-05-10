@@ -202,9 +202,9 @@ class LocalCache:
                 with self._lock:
                     self._features[symbol] = feat_df
 
-    def get_raw_ohlcv(self, symbol: str) -> Optional[pd.DataFrame]:
+    def get_raw_ohlcv(self, symbol: str, timeframe: str = "H1") -> Optional[pd.DataFrame]:
         with self._lock:
-            return self._ohlcv.get(symbol.upper())
+            return self._ohlcv.get((symbol.upper(), timeframe), )
 
     def get_features(self, symbol: str) -> Optional[pd.DataFrame]:
         with self._lock:

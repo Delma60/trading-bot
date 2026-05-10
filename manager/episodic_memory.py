@@ -59,7 +59,7 @@ class EpisodicMemory:
             self._episodes = self._episodes[-self.MAX_EPISODES:]
         
         # Flush to disk every BATCH_SAVE_INTERVAL episodes or when max is exceeded
-        if self._unsaved_count >= self.BATCH_SAVE_INTERVAL or len(self._episodes) > self.MAX_EPISODES:
+        if self._unsaved_count >= self.BATCH_SAVE_INTERVAL or len(self._episodes) >= self.MAX_EPISODES:
             self.flush()
 
     def flush(self):

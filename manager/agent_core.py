@@ -224,7 +224,7 @@ class AgentExecutor:
     All methods return plain dicts — never raise unless catastrophically broken.
     """
 
-    PROFILE_FILE = Path("data/profile.json")
+    # PROFILE_FILE = Path("data/profile.json")
     TRADE_HISTORY = Path("data/trade_history.csv")
 
     def __init__(self, broker, strategy_manager, risk_manager, portfolio_manager, reasoning):
@@ -905,16 +905,22 @@ class AgentSynthesizer:
  
         # Suggested action for confirm flow (Win Rate Fix #3)
         # Now allow Grade C at 50% position size (was A/B only)
-        if action in ("BUY", "SELL") and grade in ("A", "B", "C") and approved and lots:
-            # Reduce size for Grade C trades
+        # Suggested action for confirm flow (Win Rate Fix #3)
+        # GATED: Only propose an actionable execution payload if the original intent requests trading.
+        trade_intents = ("execute_trade", "open_buy", "open_sell", "trade_execution")
+        
+        if (plan.intent in trade_intents and 
+            action in ("BUY", "SELL") and 
+            grade in ("A", "B", "C") and 
+            approved and lots):
+            
             trade_lots = lots if grade in ("A", "B") else lots * 0.5
             agreements = sum(
                 1 for s in r.get("signal_ensemble", {}).get("strategy_signals", {}).values()
                 if s.get("action") == action and s.get("confidence", 0) > 0.4
             )
-            if agreements >= 2:  # reduced from 3, since we now accept lower-confidence trades
+            if agreements >= 2:  
                 plan.suggested_action = f"{action} {trade_lots:.2f} {symbol}"
- 
         return " ".join(parts)
  
     def _greeting(self, plan, r) -> str:
@@ -1236,7 +1242,7 @@ class AgentCore:
             if step.name == "dynamic_risk_targets" and step.result:
                 plan.context["dynamic_targets"] = step.result
                 break
-
+        
         response = self.synthesizer.synthesize(plan)
         plan.final_response = response
         self.last_plan = plan

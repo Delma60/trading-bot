@@ -434,14 +434,7 @@ class ARIA:
         return natural_response
     
     def notify(self, msg: str, priority: str = "normal"):
-        """Receive system alerts (for compatibility with background scanner)."""
-        with self.inbox_lock:
-            self.notification_inbox.append({"msg": msg, "priority": priority})
-
-        if priority in ("critical", "trade_executed"):
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            prefix = "🚨" if priority == "critical" else "✅"
-            print(f"\n[{timestamp}] [ARIA]: {prefix} {msg}")
+       return self.receive_system_alert(msg, priority)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Classification
@@ -1296,11 +1289,10 @@ class ARIA:
         profit_m= re.search(r"\$?(\d+(?:\.\d+)?)\s*(?:daily|per day)?", user_input)
 
         symbols       = symbols or ["EURUSD"]
+        daily_goal = float(profit_m.group(1)) if profit_m else 10.0
         target_profit = round(daily_goal / max(len(symbols), 1), 2)
         
         risk_pct   = float(risk_m.group(1))   if risk_m   else 1.0
-        daily_goal = float(profit_m.group(1)) if profit_m else 10.0
-        tp_pips    = round(daily_goal / max(len(symbols), 1), 2)
     
 
         cfg = {
@@ -1325,7 +1317,7 @@ class ARIA:
             "defaults": {
                 "risk_pct":         risk_pct,
                 "stop_loss_pips":   20.0,
-                "take_profit_pips": tp_pips,
+                "take_profit_pips": target_profit,
                 "max_daily_loss":   daily_goal * 2,
                 "daily_goal":       daily_goal,
                 "cooldown_minutes": 5,

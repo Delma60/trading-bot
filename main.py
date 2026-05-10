@@ -45,7 +45,7 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
     """
     
     r  = _profile.risk()
-    sc = _profile.scanner()
+    symbols = _profile.symbols()
     risk_pct = r.risk_pct
     stop_loss = r.stop_loss_pips
     max_daily_loss = r.max_daily_loss

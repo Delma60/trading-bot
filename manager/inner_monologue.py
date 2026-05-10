@@ -8,6 +8,8 @@ The monologue shapes what gets said, how it gets said, and what gets held back.
 from dataclasses import dataclass
 from typing import Optional, List
 
+from manager.working_memory import WorkingMemory
+
 
 @dataclass
 class Thought:
@@ -33,7 +35,7 @@ class InnerMonologue:
     showing the setup you were waiting for."
     """
 
-    def __init__(self, working_memory, episodic_memory, user_model):
+    def __init__(self, working_memory:WorkingMemory, episodic_memory, user_model):
         self.wm = working_memory
         self.em = episodic_memory
         self.um = user_model
@@ -164,9 +166,10 @@ class InnerMonologue:
         """Active suppression of unhelpful content."""
         
         # Don't repeat what was just said
+        recent_turns = self.wm.get_turns_text(limit=5)
         if len(self.wm.turns) >= 2:
             last_aria = next(
-                (t for t in reversed(list(self.wm.turns)) if t.role == "aria"), None
+                (t for t in reversed(recent_turns) if t.role == "aria"), None
             )
             if last_aria and "Grade" in last_aria.text:
                 self._think("observation",
