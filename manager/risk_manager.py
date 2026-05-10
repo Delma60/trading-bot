@@ -88,6 +88,11 @@ class SmartReEntrySystem:
             "re_entered": False
         }
 
+    def mark_reentered(self, symbol: str):
+        """Mark a stopped-out trade as successfully re-entered to prevent duplicate entries."""
+        if symbol in self.stopped_out_trades:
+            self.stopped_out_trades[symbol]["re_entered"] = True
+    
     def check_reentry_validity(self, symbol: str, current_price: float, new_signal_direction: str) -> bool:
         """Check if re-entry conditions are met after a stop-out."""
         record = self.stopped_out_trades.get(symbol)

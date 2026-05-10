@@ -273,6 +273,26 @@ class PortfolioManager:
                 if not gate_ok:
                     results.append(f"⚠️ {symbol}: Trade gate blocked entry. {gate_reason}")
                     continue
+                
+                action = signal['action']
+
+                # FIX: Intercept signals on stopped-out symbols and enforce Smart Re-Entry rules
+                reentry_sys = getattr(self.risk_manager, 'reentry_system', None)
+                if reentry_sys and symbol in reentry_sys.stopped_out_trades:
+                    record = reentry_sys.stopped_out_trades[symbol]
+                    time_elapsed = (datetime.now() - record["time"]).total_seconds() / 3600
+                    
+                    # Only enforce if inside the active 4-hour monitoring window and not yet re-entered
+                    if not record["re_entered"] and time_elapsed <= 4.0:
+                        tick = self.broker.get_tick_data(symbol)
+                        if tick:
+                            current_price = tick.get("ask") if action == "BUY" else tick.get("bid")
+                            if current_price:
+                                if not reentry_sys.check_reentry_validity(symbol, current_price, action):
+                                    results.append(f"⚠️ {symbol}: Blocked by Smart Re-Entry rules (price hasn't swept SL/recovered or wrong direction).")
+                                    continue
+                                else:
+                                    self.notify(f"🔄 Smart Re-Entry approved for {symbol}! Price swept liquidity and recovered.")
 
                 trade_plan = self.risk_manager.calculate_safe_trade(
                     symbol=symbol, base_risk_pct=risk_pct, stop_loss_pips=stop_loss, max_daily_loss=max_daily_loss, portfolio_size=portfolio_size
@@ -301,6 +321,8 @@ class PortfolioManager:
                         ticket = exec_result.get("ticket")
                         fill_price = exec_result.get("price")
                         results.append(f"🟢 EXECUTED -> {symbol}: {signal['action']} | Size: {lots} | Price: {fill_price} | Ticket: #{ticket}")
+                        if reentry_sys:
+                            reentry_sys.mark_reentered(symbol)
                         self._temporary_trade_states[ticket] = {
                             "state": current_state.flatten().tolist(),
                             "strategy": strategy_name,
@@ -328,6 +350,8 @@ class PortfolioManager:
                             if retry_exec.get("success"):
                                 ticket = retry_exec.get("ticket")
                                 results.append(f"🟢 RECOVERY EXECUTED -> {symbol}: {signal['action']} | Size: {new_lots} | Ticket: #{ticket}")
+                                if reentry_sys:
+                                    reentry_sys.mark_reentered(symbol)
                                 self._temporary_trade_states[ticket] = {
                                     "state": current_state.flatten().tolist(),
                                     "strategy": strategy_name,
@@ -381,7 +405,14 @@ class PortfolioManager:
                             self.evaluate_news_impact(article_id, entry_price, current_price, action)
             except:
                 pass  # Silently fail if price fetch doesn't work
-
+            
+            if not close_price:
+                close_price = trade_data.get("entry_price", 0.0)
+                
+            # Map action to mt5 position type constants (0 = BUY, 1 = SELL)
+            pos_type = 0 if action.upper() == "BUY" else 1
+            self.risk_manager.record_stop_out_position(symbol, close_price, pos_type)
+        
     def evaluate_news_impact(self, article_id: str, entry_price: float, current_price: float, action: str = "BUY"):
         """
         Evaluates the impact of news on price movement and feeds back to the news classifier.
