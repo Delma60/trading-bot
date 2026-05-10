@@ -106,22 +106,31 @@ class PortfolioManager:
         except Exception as e:
             self.notify(f"[Portfolio Manager]: Failed to save config: {e}")
 
+    # def add_symbol(self, symbol: str, asset_class: str = None) -> bool:
+    #     symbol = symbol.upper()
+    #     if not asset_class:
+    #         asset_class = self._infer_asset_class(symbol)
+
+    #     if asset_class not in self.asset_classes:
+    #         self.asset_classes[asset_class] = []
+
+    #     if symbol in self.asset_classes[asset_class]:
+    #         return False
+
+    #     self.asset_classes[asset_class].append(symbol)
+    #     self.master_watchlist.append(symbol)
+    #     self.config["asset_classes"] = self.asset_classes
+    #     self._save_config()
+    #     return True
+    
     def add_symbol(self, symbol: str, asset_class: str = None) -> bool:
         symbol = symbol.upper()
-        if not asset_class:
-            asset_class = self._infer_asset_class(symbol)
-
-        if asset_class not in self.asset_classes:
-            self.asset_classes[asset_class] = []
-
-        if symbol in self.asset_classes[asset_class]:
-            return False
-
-        self.asset_classes[asset_class].append(symbol)
-        self.master_watchlist.append(symbol)
-        self.config["asset_classes"] = self.asset_classes
-        self._save_config()
-        return True
+        # FIX: Delegate persistence directly to the single source of truth
+        if _profile.add_symbol(symbol):
+            if symbol not in self.master_watchlist:
+                self.master_watchlist.append(symbol)
+            return True
+        return False
 
     def _infer_asset_class(self, symbol: str) -> str:
         symbol = symbol.upper()
@@ -324,6 +333,8 @@ class PortfolioManager:
                                     "strategy": strategy_name,
                                     "action": signal["action"],
                                     "symbol": symbol,
+                                    "article_ids": [signal.get("article_id")] if signal.get("article_id") else signal.get("article_ids", []),
+                                    "entry_price": fill_price,
                                 }
                             else:
                                 results.append(f"❌ RECOVERY FAILED -> {symbol}: {retry_exec.get('reason', 'unknown error')}")

@@ -458,11 +458,11 @@ class RiskManager:
                 # Update the low watermark as the portfolio shrinks!
                 self.daily_low_watermark = current_equity
 
-            # Calculate the drawdown from the PEAK, not the starting balance
-            trailing_drawdown = self.daily_high_watermark - current_equity
+            start_of_day_baseline = self.daily_low_watermark if self.daily_low_watermark > 0 else account.balance
+            daily_loss_realized = start_of_day_baseline - current_equity
             
-            if max_daily_loss > 0 and trailing_drawdown >= max_daily_loss:
-                return False, f"FATAL: Trailing drawdown limit hit! Peak: ${self.daily_high_watermark:,.2f}, Dropped: ${trailing_drawdown:.2f} (Limit: ${max_daily_loss})"
+            if max_daily_loss > 0 and daily_loss_realized >= max_daily_loss:
+                return False, f"FATAL: Daily loss limit hit! Baseline: ${start_of_day_baseline:,.2f}, Current: ${current_equity:,.2f} (Limit: ${max_daily_loss})"
             
         return True, "System healthy."
     
@@ -974,8 +974,8 @@ class ProfitGuard:
         # Daily reset: clear peak tracking at midnight so thresholds reset daily
         today = datetime.now().date()
         if self._peak_date.get(ticket) != today:
-            self._peak.pop(ticket, None)
-            self._peak_pips.pop(ticket, None)
+            # self._peak.pop(ticket, None)
+            # self._peak_pips.pop(ticket, None)
             self._breakeven_set.discard(ticket)
             self._be_attempted.discard(ticket)
             self._peak_date[ticket] = today
@@ -1270,7 +1270,8 @@ class CorrelationGuard:
         # Extract legs from all open positions
         open_legs: list[str] = []
         for pos in positions:
-            open_legs.extend(self._legs(pos.symbol))
+            if pos.symbol.upper() != symbol.upper():
+                open_legs.extend(self._legs(pos.symbol))
  
         leg_counts = Counter(open_legs)
  
