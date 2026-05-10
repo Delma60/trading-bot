@@ -50,8 +50,24 @@ class Trader:
             self._cooldown[symbol] = datetime.now() + timedelta(seconds=self._cooldown_seconds)
         
     def _strategy_for(self, ticket: int) -> str:
-        """Return the strategy that opened this ticket, then forget it."""
-        return self._ticket_strategy.pop(ticket, "Unknown")
+        """Return the strategy that opened this ticket from memory, or fallback to trade_history.csv."""
+        strat = self._ticket_strategy.pop(ticket, None)
+        if strat is not None and strat != "Unknown":
+            return strat
+        
+        # Persistent fallback: scan the logged CSV history across bot restarts
+        file_path = Path("data/trade_history.csv")
+        if file_path.exists():
+            try:
+                with open(file_path, mode='r', newline='', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        if row.get("Ticket") == str(ticket) and row.get("Action") in ("BUY", "SELL"):
+                            return row.get("Strategy", "Unknown")
+            except Exception:
+                pass
+                
+        return "Unknown"
 
     def is_mt5_running(self):
         """Check if MetaTrader 5 terminal is running"""

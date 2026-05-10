@@ -164,12 +164,10 @@ class InnerMonologue:
 
     def _consider_what_not_to_say(self):
         """Active suppression of unhelpful content."""
-        
-        # Don't repeat what was just said
-        recent_turns = self.wm.get_turns_text(limit=5)
+    
         if len(self.wm.turns) >= 2:
             last_aria = next(
-                (t for t in reversed(recent_turns) if t.role == "aria"), None
+                (t for t in reversed(self.wm.turns) if t.role == "aria"), None
             )
             if last_aria and "Grade" in last_aria.text:
                 self._think("observation",
