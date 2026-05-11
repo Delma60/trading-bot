@@ -1482,7 +1482,6 @@ class LockBalanceGuard:
         if lock_pct is not None:
             self.lock_pct = max(0.0, min(lock_pct, 0.99))
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # BalancePipSizer
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1490,30 +1489,12 @@ class LockBalanceGuard:
 class BalancePipSizer:
     """
     Derives an appropriate SL pip distance from the TRADEABLE account balance.
-
-    Rationale
-    ---------
-    A fixed SL (e.g. "always 20 pips") ignores account size entirely.
-    A $200 account risks ruin on a 50-pip stop; a $5,000 account can
-    absorb wide stops without threatening its daily limit.
-
-    This class computes a balance-tier base pip, then bounds the live
-    ATR within [50%, 150%] of that base — so the stop adapts to
-    volatility but stays within a range appropriate for the account size.
-
-    Tiers (fully tunable via constructor)
-    --------------------------------------
-    tradeable < $200    →  8 pips
-    $200 – $499         → 12 pips
-    $500 – $999         → 18 pips
-    $1,000 – $2,499     → 25 pips
-    $2,500 – $4,999     → 35 pips
-    ≥ $5,000            → 50 pips
+    Slightly increased lower tiers to prevent premature stop-outs and lot rejection.
     """
 
     DEFAULT_TIERS: List[Tuple[float, float]] = [
-        (0,     8),
-        (200,  12),
+        (0,    12),  # Increased from 8 to 12 pips for accounts < $200
+        (200,  15),  # Increased from 12 to 15 pips
         (500,  18),
         (1000, 25),
         (2500, 35),
@@ -1523,30 +1504,22 @@ class BalancePipSizer:
     def __init__(
         self,
         tiers:           Optional[List[Tuple[float, float]]] = None,
-        atr_floor_ratio: float = 0.50,   # ATR must be ≥ base × this
-        atr_ceil_ratio:  float = 1.50,   # ATR must be ≤ base × this
+        atr_floor_ratio: float = 0.50,
+        atr_ceil_ratio:  float = 1.50,
     ):
         self.tiers           = sorted(tiers or self.DEFAULT_TIERS, key=lambda t: t[0])
         self.atr_floor_ratio = atr_floor_ratio
         self.atr_ceil_ratio  = atr_ceil_ratio
 
     def base_pips(self, tradeable_balance: float) -> float:
-        """
-        Lookup the balance-tier pip base for this account size.
-        Returns the pip count appropriate for the tradeable balance.
-        """
-        result = self.tiers[0][1]   # default to lowest tier
+        result = self.tiers[0][1]
         for min_bal, pips in self.tiers:
             if tradeable_balance >= min_bal:
                 result = pips
         return float(result)
 
     def get_sl_pips(self, tradeable_balance: float, atr_pips: float = 0.0) -> float:
-        """
-        Returns the final SL pip distance to use for this trade.
-        """
         base = self.base_pips(tradeable_balance)
-
         if atr_pips <= 0:
             return base
 
@@ -1557,7 +1530,6 @@ class BalancePipSizer:
         return round(final, 1)
 
     def describe(self, tradeable_balance: float, atr_pips: float = 0.0) -> str:
-        """Human-readable explanation — useful for debug/ARIA responses."""
         base  = self.base_pips(tradeable_balance)
         final = self.get_sl_pips(tradeable_balance, atr_pips)
         atr_str = f", ATR {atr_pips:.1f}p" if atr_pips > 0 else " (no ATR)"
@@ -1569,16 +1541,14 @@ class BalancePipSizer:
 
 
 class RiskManager:
+    """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
+    
     LOSS_STREAK_LIMIT = 2
     LOSS_STREAK_PAUSE_MINUTES = 60
     _consecutive_losses = {}
     _loss_cooldown_until = {}
 
     def compute_correlation_matrix(self, symbol_registry, window: int = 100) -> dict:
-        """
-        Compute real-time correlation matrix for all symbols in the registry using recent price data.
-        Returns a dict of {(sym1, sym2): correlation}.
-        """
         import numpy as np
         import pandas as pd
         symbols = symbol_registry.get_all_symbols()
@@ -1599,11 +1569,6 @@ class RiskManager:
         return result
 
     def is_correlation_safe(self, symbol, direction, open_positions, symbol_registry, threshold=0.85) -> tuple:
-        """
-        Prevents opening a new position if it would create highly correlated directional risk.
-        open_positions: list of dicts with 'symbol' and 'direction'.
-        Returns (allowed: bool, reason: str)
-        """
         corr_matrix = self.compute_correlation_matrix(symbol_registry)
         for pos in open_positions:
             if pos['direction'] == direction:
@@ -1611,8 +1576,6 @@ class RiskManager:
                 if pair in corr_matrix and abs(corr_matrix[pair]) >= threshold:
                     return (False, f"{symbol} and {pos['symbol']} are highly correlated ({corr_matrix[pair]:.2f}) in the same direction.")
         return (True, "OK")
-    """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
-    
 
     def __init__(self, broker, cache=None, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print,
                  pyramid_min_pips: float = 1.0, spread_tolerance_pips: float = 1.0):
@@ -1792,6 +1755,7 @@ class RiskManager:
         return True, "System healthy."
     
     def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float, portfolio_size: int) -> Dict[str, Any]:
+        """Calculates exact lot size securely without redefining class state."""
         allowed, reason = self.is_trading_allowed(symbol, max_daily_loss, portfolio_size)
         if not allowed:
             return {"approved": False, "reason": reason}
@@ -1841,46 +1805,42 @@ class RiskManager:
         symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
         if symbol_info is None:
             return {"approved": False, "reason": "Symbol info missing."}
-        # Loss streak logic (class-level constants and state)
-        LOSS_STREAK_LIMIT = 2
-        LOSS_STREAK_PAUSE_MINUTES = 60
-        _consecutive_losses = {}
-        _loss_cooldown_until = {}
+
+        pip_multiplier = 1.0 if any(x in symbol for x in ["BTC", "ETH"]) else 10.0
+        safe_sl_points = int(safe_sl_pips * pip_multiplier)
         
-        self._loss_lock = threading.Lock()
+        optimal_lots = self.calculate_position_size(symbol, max_risk_usd, safe_sl_points)
         
-        self.daily_high_watermark = 0.0 
-        self.daily_low_watermark = 0.0
-        self.watermark_date = None
-        
-        self.targeter = DynamicRiskTargeter(broker)
-        self.reentry_system = SmartReEntrySystem()
-        
-        # ── Balance-based pip sizing & lock balance ───────────────────────
-        r = _profile.risk()
-        self.lock_guard = LockBalanceGuard(
-            lock_amount = r.lock_amount,
-            lock_pct    = r.lock_pct_decimal,   # always 0–1, bug fixed
-        )
-        self.balance_pip_sizer = BalancePipSizer()
-        
-    @classmethod
-    def record_loss(cls, symbol: str, notify_callback=print):
-        cls._consecutive_losses[symbol] = cls._consecutive_losses.get(symbol, 0) + 1
-        if cls._consecutive_losses[symbol] >= cls.LOSS_STREAK_LIMIT:
-            pause_until = datetime.now() + timedelta(minutes=cls.LOSS_STREAK_PAUSE_MINUTES)
-            cls._loss_cooldown_until[symbol] = pause_until
-            cls._consecutive_losses[symbol] = 0
-            notify_callback(f"⏸ {symbol}: {cls.LOSS_STREAK_LIMIT} consecutive losses — paused for {cls.LOSS_STREAK_PAUSE_MINUTES}m")
-    
-    @classmethod
-    def record_win(cls, symbol: str):
-        cls._consecutive_losses[symbol] = 0
-    
-    @classmethod
-    def is_loss_paused(cls, symbol: str) -> bool:
-        until = cls._loss_cooldown_until.get(symbol)
-        return bool(until and datetime.now() < until)
+        if optimal_lots == 0.0:
+             return {"approved": False, "reason": "Volatility/Spread too high for minimum lot size."}
+
+        return {
+            "approved": True,
+            "reason": "Clearance granted.",
+            "symbol": symbol,
+            "lots": optimal_lots,
+            "risk_usd": max_risk_usd,
+            "applied_risk_pct": actual_risk_pct,
+            "stop_loss_pips": safe_sl_pips
+        }
+
+    def calculate_micro_lot(self, symbol: Optional[str] = None) -> float:
+        if symbol:
+            symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
+            if symbol_info is not None and symbol_info.get("volume_min", 0) and symbol_info.get("volume_min", 0) > 0:
+                return round(symbol_info["volume_min"], 2)
+        return 0.01
+
+    def calculate_position_size(self, symbol: str, risk_amount_usd: float, stop_loss_points: int) -> float:
+        symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
+        if symbol_info is None:
+            return 0.0
+
+        tick_value = float(symbol_info.get("trade_tick_value", 0.0))
+        tick_size  = float(symbol_info.get("trade_tick_size", 0.0))
+        min_lot    = float(symbol_info.get("volume_min", 0.0))
+        max_lot    = float(symbol_info.get("volume_max", 0.0))
+        step_lot   = float(symbol_info.get("volume_step", 0.0))
 
         if tick_value == 0 or tick_size == 0 or step_lot == 0:
             return 0.0
@@ -1895,24 +1855,19 @@ class RiskManager:
 
         raw_lot_size = risk_amount_usd / risk_per_1_lot
 
-        min_lot = float(symbol_info.get("volume_min", 0.0))
-        max_lot = float(symbol_info.get("volume_max", 0.0))
-        step_lot = float(symbol_info.get("volume_step", 0.0))
-
         if step_lot <= 0 or min_lot <= 0:
             return 0.0
 
         clean_lot_size = math.floor(raw_lot_size / step_lot) * step_lot
 
+        # Fallback to minimum lot size instead of dropping the trade entirely
         if clean_lot_size < min_lot:
-            return 0.0 
+            return min_lot 
             
         if clean_lot_size > max_lot:
             return max_lot
 
         return round(clean_lot_size, 2)
-
-
 class DynamicRiskTargeter:
     """
     An independent engine that calculates structural Stop Loss and Take Profit

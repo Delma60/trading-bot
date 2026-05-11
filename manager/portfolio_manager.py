@@ -229,24 +229,19 @@ class PortfolioManager:
 
         portfolio_size = len(tradeable_symbols)
         
-        # Avoid spamming the scan when the broker is unavailable.
         account_info = self.broker.getAccountInfo()
         if account_info is None:
             return results
 
-        # Count open positions for each symbol in the tradeable universe
         positions = self.broker.getPositions() or []
         symbol_counts = {symbol: 0 for symbol in tradeable_symbols}
         for p in positions:
             if p.symbol in symbol_counts:
                 symbol_counts[p.symbol] += 1
                 
-        # Sort symbols by number of open positions (Ascending)
-        # Symbols with 0 open positions get priority!
         prioritized_symbols = sorted(tradeable_symbols, key=lambda s: symbol_counts.get(s, 0))
 
         for symbol in prioritized_symbols:
-            # 1. Ask Risk Manager if this specific symbol is allowed to trade right now
             allowed, reason = self.risk_manager.is_trading_allowed(
                 symbol=symbol, 
                 max_daily_loss=max_daily_loss,
@@ -254,7 +249,6 @@ class PortfolioManager:
             )
 
             if not allowed:
-                # Skip this symbol and move to the next one in the queue
                 results.append(f"⚠️ {symbol}: Skipped. {reason}")
                 continue
             
@@ -266,11 +260,12 @@ class PortfolioManager:
             if self.risk_manager.is_loss_paused(symbol):
                 results.append(f"⏸ {symbol}: loss-streak pause active, skipping.")
                 continue
-            # Get the state to feed the AI (and to log it if we take a trade!)
+            
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
             
-            MIN_SIGNAL_CONFIDENCE = 0.65   # add this constant at class level
+            # Reduced threshold from 0.65 to 0.50 to allow valid multi-timeframe signals
+            MIN_SIGNAL_CONFIDENCE = 0.50   
             signal = self.strategy_manager.check_signals(symbol, use_ensemble=True)
             if (signal
                     and signal.get('action') != 'WAIT'
@@ -282,7 +277,6 @@ class PortfolioManager:
                 
                 action = signal['action']
 
-                # FIX: Intercept signals on stopped-out symbols and enforce Smart Re-Entry rules
                 reentry_sys = getattr(self.risk_manager, 'reentry_system', None)
                 if reentry_sys and symbol in reentry_sys.stopped_out_trades:
                     record = reentry_sys.stopped_out_trades[symbol]
@@ -291,11 +285,10 @@ class PortfolioManager:
                     self.heat_check = PortfolioHeatCheck(
                         cache            = self._ohlcv_cache,
                         lookback         = 100,
-                        max_correlation  = 0.80,   # tune via profile.json or chat command
+                        max_correlation  = 0.80,
                         ttl_seconds      = 60,
                     )
                     
-                    # Only enforce if inside the active 4-hour monitoring window and not yet re-entered
                     if not record["re_entered"] and time_elapsed <= 4.0:
                         tick = self.broker.get_tick_data(symbol)
                         if tick:
@@ -318,7 +311,7 @@ class PortfolioManager:
                         )
                         continue
 
-                    lots = trade_plan["lots"] #self.risk_manager.calculate_micro_lot()
+                    lots = trade_plan["lots"]
                     sl_pips = trade_plan["stop_loss_pips"]
                     
                     exec_result = self.broker.execute_trade(
@@ -382,7 +375,7 @@ class PortfolioManager:
                 else:
                     results.append(f"❌ {symbol} [{strategy_name}]: Rejected. {trade_plan['reason']}")
         return results if results else ["⚠️ No high-probability entries found."]
-
+    
     def log_trade_for_learning(self, ticket: int = None, symbol: str = None, profit: float = None):
         """Call this when a trade CLOSES to log the result."""
         if ticket is not None:
