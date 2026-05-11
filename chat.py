@@ -605,7 +605,7 @@ class ARIA:
 
     def _handle_backtest(self, text: str, entities: dict) -> str:
         import re
-        from manager.backtester import run_backtest
+        from backtester import run_backtest
 
         symbol = (entities.get("symbols") or [self.memory.get("last_symbol")])[0]
         if not symbol:

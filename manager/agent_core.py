@@ -929,7 +929,7 @@ class AgentSynthesizer:
         
         if (plan.intent in trade_intents and 
             action in ("BUY", "SELL") and 
-            grade in ("A", "B") and 
+            grade in ("A", "B", "c") and 
             approved and lots):
             
             trade_lots = lots if grade in ("A", "B") else lots * 0.5
