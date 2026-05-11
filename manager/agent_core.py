@@ -148,6 +148,7 @@ class AgentPlanner:
             AgentStep("overtrading_check", "Overtrading pattern detection"),
             AgentStep("margin_check",      "Margin level assessment"),
             AgentStep("open_positions",    "Current exposure review"),
+            AgentStep("correlation_heat",  "Portfolio correlation heat check"),
         ])
 
     def _plan_account(self, symbol, entities, memory) -> AgentPlan:
@@ -278,11 +279,28 @@ class AgentExecutor:
             "risk_per_pos":      lambda: self._risk_per_pos(),
             "context_snapshot":  lambda: self._context_snapshot(),
             "live_price":        lambda: self._live_price(sym),
-            "htf_trend_check": lambda: self._htf_trend_check(sym),
+            "htf_trend_check":   lambda: self._htf_trend_check(sym),
             "fetch_news":        lambda: self._fetch_news(sym),
+            "correlation_heat":  lambda: self._correlation_heat(),
         }
         fn = handlers.get(step.name)
         return fn() if fn else {}
+
+    def _correlation_heat(self) -> dict:
+        try:
+            positions = self.broker.getPositions() or []
+            if not positions:
+                return {"report": "No open positions — no correlation heat."}
+            open_syms = list({p.symbol for p in positions})
+            from manager.correlation_matrix import PortfolioHeatCheck
+            checker = PortfolioHeatCheck(
+                cache   = getattr(self.pm, '_ohlcv_cache', None),
+                lookback= 100,
+            )
+            report = checker.portfolio_heat_report(open_syms)
+            return {"report": report, "symbols": open_syms}
+        except Exception as exc:
+            return {"report": f"Correlation heat unavailable: {exc}"}
 
     # ── Step implementations ──────────────────────────────────────────────────
 
@@ -1026,13 +1044,13 @@ class AgentSynthesizer:
         mg   = r.get("margin_check", {})
         ot   = r.get("overtrading_check", {})
         pos  = r.get("open_positions", {})
- 
+
         parts = []
         if acct:
             bal = acct.get("balance", 0)
             eq  = acct.get("equity", 0)
             parts.append(f"Balance ${bal:,.2f} | Equity ${eq:,.2f}.")
- 
+
         if dd:
             dd_v = dd.get("trailing_drawdown", 0)
             dd_p = dd.get("drawdown_pct", 0)
@@ -1041,19 +1059,25 @@ class AgentSynthesizer:
                 f"Peak equity today ${hi:,.2f}. "
                 f"Trailing drawdown ${dd_v:,.2f} ({dd_p:.1f}%)."
             )
- 
+
         ml = mg.get("margin_level")
         if ml:
             severity = "critical" if ml < 150 else "healthy" if ml > 300 else "moderate"
             parts.append(f"Margin level {ml:.0f}% — {severity}.")
- 
+
         n_pos = pos.get("count", 0)
         parts.append(f"{n_pos} open position(s).")
- 
+
         ot_warn = ot.get("warning")
         if ot_warn:
             parts.append(f"Concentration warning: {ot_warn}")
- 
+
+        # Append correlation heat report if available
+        heat_r = r.get("correlation_heat", {})
+        if heat_r.get("report"):
+            parts.append("")
+            parts.append(heat_r["report"])
+
         return " ".join(parts) if parts else "Unable to retrieve risk metrics."
  
     def _history(self, plan, r) -> str:

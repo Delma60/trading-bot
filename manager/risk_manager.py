@@ -1569,6 +1569,44 @@ class BalancePipSizer:
 
 
 class RiskManager:
+
+        def compute_correlation_matrix(self, symbol_registry, window: int = 100) -> dict:
+            """
+            Compute real-time correlation matrix for all symbols in the registry using recent price data.
+            Returns a dict of {(sym1, sym2): correlation}.
+            """
+            import numpy as np
+            import pandas as pd
+            symbols = symbol_registry.get_all_symbols()
+            price_data = {}
+            for sym in symbols:
+                df = symbol_registry.get_ohlcv(sym, limit=window)
+                if df is not None and 'close' in df.columns:
+                    price_data[sym] = df['close'].values[-window:]
+            if len(price_data) < 2:
+                return {}
+            df_prices = pd.DataFrame(price_data)
+            corr = df_prices.corr()
+            result = {}
+            for s1 in symbols:
+                for s2 in symbols:
+                    if s1 != s2:
+                        result[(s1, s2)] = corr.loc[s1, s2]
+            return result
+
+        def is_correlation_safe(self, symbol, direction, open_positions, symbol_registry, threshold=0.85) -> tuple:
+            """
+            Prevents opening a new position if it would create highly correlated directional risk.
+            open_positions: list of dicts with 'symbol' and 'direction'.
+            Returns (allowed: bool, reason: str)
+            """
+            corr_matrix = self.compute_correlation_matrix(symbol_registry)
+            for pos in open_positions:
+                if pos['direction'] == direction:
+                    pair = (symbol, pos['symbol'])
+                    if pair in corr_matrix and abs(corr_matrix[pair]) >= threshold:
+                        return (False, f"{symbol} and {pos['symbol']} are highly correlated ({corr_matrix[pair]:.2f}) in the same direction.")
+            return (True, "OK")
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
     
     def __init__(self, broker, cache=None, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print,

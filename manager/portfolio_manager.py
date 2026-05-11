@@ -286,6 +286,13 @@ class PortfolioManager:
                 if reentry_sys and symbol in reentry_sys.stopped_out_trades:
                     record = reentry_sys.stopped_out_trades[symbol]
                     time_elapsed = (datetime.now() - record["time"]).total_seconds() / 3600
+                        from manager.correlation_matrix import PortfolioHeatCheck
+                        self.heat_check = PortfolioHeatCheck(
+                            cache            = self._ohlcv_cache,
+                            lookback         = 100,
+                            max_correlation  = 0.80,   # tune via profile.json or chat command
+                            ttl_seconds      = 60,
+                        )
                     
                     # Only enforce if inside the active 4-hour monitoring window and not yet re-entered
                     if not record["re_entered"] and time_elapsed <= 4.0:

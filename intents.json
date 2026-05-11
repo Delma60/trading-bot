@@ -637,6 +637,23 @@
             "responses": [
                 "Adding that to your portfolio..."
             ]
+        },
+        {
+            "tag": "backtest",
+            "patterns": [
+                "backtest EURUSD",
+                "run a backtest",
+                "test the strategy on GBPUSD",
+                "how would this strategy have done",
+                "historical performance test",
+                "simulate the strategy",
+                "paper backtest",
+                "what's the win rate historically",
+                "run the numbers on XAUUSD"
+            ],
+            "responses": [
+                "Running the backtest now — this may take a moment..."
+            ]
         }
     ]
 }
