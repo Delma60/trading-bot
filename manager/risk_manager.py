@@ -1313,7 +1313,7 @@
  # risk_manager.py
 from typing import Dict, Any, Optional, List, Tuple
 import MetaTrader5 as mt5
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import math
 import pandas as pd
 import time
@@ -1604,22 +1604,22 @@ class RiskManager:
         LOSS_STREAK_PAUSE_MINUTES = 60
 
         # add new method
-        def record_loss(self, symbol: str):
-            self._consecutive_losses[symbol] = self._consecutive_losses.get(symbol, 0) + 1
-            if self._consecutive_losses[symbol] >= self.LOSS_STREAK_LIMIT:
-                pause_until = datetime.now() + timedelta(minutes=self.LOSS_STREAK_PAUSE_MINUTES)
-                self._loss_cooldown_until[symbol] = pause_until
-                self._consecutive_losses[symbol] = 0
-                self.notify(f"⏸ {symbol}: {self.LOSS_STREAK_LIMIT} consecutive losses — paused for {self.LOSS_STREAK_PAUSE_MINUTES}m")
-
-        def record_win(self, symbol: str):
+    def record_loss(self, symbol: str):
+        self._consecutive_losses[symbol] = self._consecutive_losses.get(symbol, 0) + 1
+        if self._consecutive_losses[symbol] >= self.LOSS_STREAK_LIMIT:
+            pause_until = datetime.now() + timedelta(minutes=self.LOSS_STREAK_PAUSE_MINUTES)
+            self._loss_cooldown_until[symbol] = pause_until
             self._consecutive_losses[symbol] = 0
+            self.notify(f"⏸ {symbol}: {self.LOSS_STREAK_LIMIT} consecutive losses — paused for {self.LOSS_STREAK_PAUSE_MINUTES}m")
 
-        def is_loss_paused(self, symbol: str) -> bool:
-            until = self._loss_cooldown_until.get(symbol)
-            if until and datetime.now() < until:
-                return True
-            return False
+    def record_win(self, symbol: str):
+        self._consecutive_losses[symbol] = 0
+
+    def is_loss_paused(self, symbol: str) -> bool:
+        until = self._loss_cooldown_until.get(symbol)
+        if until and datetime.now() < until:
+            return True
+        return False
     
     def _load_profile(self) -> dict:
         from pathlib import Path
