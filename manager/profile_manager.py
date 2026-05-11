@@ -29,7 +29,7 @@ import threading
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 # ── Typed config dataclasses ──────────────────────────────────────────────────
@@ -87,6 +87,8 @@ class ScannerConfig:
     mtf_min_alignment:     float
     volatility_spike_atr:  float
     dead_volume_ratio:     float
+    timeframe:             str   = "H1"
+    mtf_timeframes:         List[str] = field( default_factory=lambda: ["M1", "M15", "H1", "H4", "D1"] )
 
 
 # ── Validation ────────────────────────────────────────────────────────────────
@@ -103,6 +105,8 @@ _REQUIRED_BROKER_KEYS = [
     "max_open_trades", "min_margin_level",
     "spread_tolerance_pips", "magic_number", "slippage_points",
 ]
+
+_VALID_TIMEFRAMES = {"M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"}
 
 
 def _validate(raw: dict, path: Path) -> None:
@@ -249,12 +253,16 @@ class ProfileManager:
     def scanner(self) -> ScannerConfig:
         with self._lock:
             sc = self._raw["scanner"]
+            primary_tf = sc.get("timeframe", "H1")
+            default_mtf = self._default_mtf_for(primary_tf)
             return ScannerConfig(
                 interval_seconds     = int(sc.get("interval_seconds",     3)),
                 dry_run              = bool(sc.get("dry_run",             False)),
                 mtf_min_alignment    = float(sc.get("mtf_min_alignment",  0.50)),
                 volatility_spike_atr = float(sc.get("volatility_spike_atr", 2.5)),
                 dead_volume_ratio    = float(sc.get("dead_volume_ratio",  0.3)),
+                timeframe            = primary_tf,
+                mtf_timeframes       = list(sc.get("mtf_timeframes", default_mtf)),
             )
 
     # ── Convenience helpers ───────────────────────────────────────────────────
@@ -357,6 +365,37 @@ class ProfileManager:
                        indent=4),
             encoding="utf-8",
         )
+        
+    @staticmethod
+    def _default_mtf_for(primary_tf: str) -> list:
+        """
+        Return a sensible MTF ladder centred on the primary timeframe.
+ 
+        The idea: one step below for entry timing, and two steps above
+        for macro trend confirmation.
+ 
+        M1  → [M1,  M5,  M15, H1 ]
+        M5  → [M5,  M15, H1,  H4 ]
+        M15 → [M15, H1,  H4,  D1 ]
+        M30 → [M30, H1,  H4,  D1 ]
+        H1  → [M15, H1,  H4,  D1 ]   (classic)
+        H4  → [H1,  H4,  D1,  W1 ]
+        D1  → [H4,  D1,  W1,  MN ]
+        W1  → [D1,  W1,  MN,  MN ]
+        """
+        _LADDER = {
+            "M1":  ["M1",  "M5",  "M15", "H1"],
+            "M5":  ["M5",  "M15", "H1",  "H4"],
+            "M15": ["M15", "H1",  "H4",  "D1"],
+            "M30": ["M30", "H1",  "H4",  "D1"],
+            "H1":  ["M15", "H1",  "H4",  "D1"],
+            "H4":  ["H1",  "H4",  "D1",  "W1"],
+            "D1":  ["H4",  "D1",  "W1",  "MN"],
+            "W1":  ["D1",  "W1",  "MN",  "MN"],
+            "MN":  ["W1",  "MN",  "MN",  "MN"],
+        }
+        return _LADDER.get(primary_tf, ["M15", "H1", "H4", "D1"])
+ 
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────

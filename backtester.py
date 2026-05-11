@@ -45,7 +45,7 @@ import numpy as np
 import pandas as pd
 
 from strategies.features.feature_engineer import FeatureEngineer
-
+from manager.profile_manager import profile
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -623,7 +623,7 @@ class BacktestEngine:
 def run_backtest(
     strategy_manager,
     symbol:       str,
-    timeframe:    str   = "H1",
+    timeframe:    str   = None,
     start_date:   str   = "",
     end_date:     str   = "",
     risk_pct:     float = 1.0,
@@ -638,9 +638,10 @@ def run_backtest(
                               start_date="2024-01-01", risk_pct=1.0)
         return result.summary()
     """
+    effective_tf = timeframe or profile.scanner().timeframe
     config = BacktestConfig(
         symbol      = symbol,
-        timeframe   = timeframe,
+        timeframe   = effective_tf,
         start_date  = start_date,
         end_date    = end_date,
         risk_pct    = risk_pct,

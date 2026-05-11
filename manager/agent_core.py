@@ -308,7 +308,8 @@ class AgentExecutor:
         try:
             learner = getattr(self.sm, "learner", None)
             if symbol and learner:
-                raw = self.broker.ohclv_data(symbol, timeframe="H1", count=300)
+                tf = profile.scanner().timeframe
+                raw = self.broker.ohclv_data(symbol, timeframe=tf, count=300)
                 if raw is not None and not raw.empty:
                     from strategies.features.feature_engineer import FeatureEngineer
                     feat = FeatureEngineer.compute(raw)
@@ -374,9 +375,16 @@ class AgentExecutor:
             if not symbol:
                 return {"trend": "NEUTRAL"}
             
+            _LADDER = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]
+            primary_tf = profile.scanner().timeframe
+            try:
+                idx = _LADDER.index(primary_tf)
+                htf = _LADDER[min(idx + 2, len(_LADDER) - 1)]   # two steps up
+            except ValueError:
+                htf = "D1"
             try:
                 # Fetch Daily (D1) candles to act as the higher timeframe
-                df = self.broker.get_historical_rates(symbol, timeframe="D1", count=20)
+                df = self.broker.get_historical_rates(symbol, timeframe=htf, count=20)
                 if df is None or df.empty:
                     return {"trend": "NEUTRAL"}
                 

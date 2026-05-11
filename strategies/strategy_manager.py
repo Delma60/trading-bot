@@ -45,18 +45,26 @@ class DummyStrategy:
 
 class MTFConfluenceEngine:
     """Multi-Timeframe Confluence engine (Feature #4)."""
-    TIMEFRAMES = ["M15", "H1", "H4", "D1"]
+    @property
 
-    def __init__(self, broker):
+    def __init__(self, broker:Trader):
         self.broker = broker
         self.broker_timeout_seconds = 5.0
 
-    def get_confluence_score(self, symbol: str, cache=None) -> dict:
+    def TIMEFRAMES(self) -> list:
+        """Live property — always reflects the current profile setting."""
+        return _profile.scanner().mtf_timeframes
+    
+    @property
+    def _primary_tf(self) -> str:
+        return _profile.scanner().timeframe
+    
+    def get_confluence_score(self, symbol: str, cache:LocalCache=None) -> dict:
         signals = {}
         for tf in self.TIMEFRAMES:
             try:
                 # FIXED: Strictly evaluate timeframe to prevent reading duplicate H1 cache frames
-                if cache and tf == "H1":
+                if cache and tf == self._primary_tf:
                     df = cache.get_raw_ohlcv(symbol)
                 else:
                     from threading import Thread
@@ -350,6 +358,7 @@ class StrategyManager:
             f"LSTM: {lstm_pred['direction']} ({lstm_pred['confidence']:.1%}). "
             f"Strategies: {vote_summary}."
         )
+        effective_tf = timeframe or _profile.scanner().timeframe
 
         return {
             "action":           final["action"],
@@ -359,6 +368,7 @@ class StrategyManager:
             "lstm_prediction":  lstm_pred,
             "strategy_signals": strategy_signals,
             "feature_vector":   fv,
+            "timeframe":        effective_tf,
         }
         
 

@@ -1,12 +1,12 @@
 import threading
-import time
+import time, re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from strategies.features.feature_engineer import FeatureEngineer
-
+from manager.profile_manager import profile as _profile
 
 class ProgressSpinner:
     """Reusable progress indicator with spinner animation for terminal output."""
@@ -55,6 +55,7 @@ class LocalCache:
         self.notify = notify_callback
         self.history_dir = Path(history_dir or Path("data/cache"))
         self.history_dir.mkdir(parents=True, exist_ok=True)
+        self._timeframe = _profile.scanner().timeframe
 
         self._lock = threading.RLock()
         self._running = False
@@ -69,6 +70,11 @@ class LocalCache:
         self._ohlcv: Dict[str, pd.DataFrame] = {}
         self._features: Dict[str, pd.DataFrame] = {}
 
+    @property
+    def timeframe(self) -> str:
+        """The primary timeframe this cache is populated with."""
+        return self._timeframe
+    
     def warm_up(self):
         """Warm the cache with historical OHLCV, symbol info, and market snapshots."""
         self.notify("[LocalCache] Warming up cache...")
@@ -146,8 +152,9 @@ class LocalCache:
         safe_symbol = re.sub(r'[^A-Z0-9]', '', symbol.upper())
         if not safe_symbol:
             raise ValueError("Invalid symbol provided for caching.")
-            
-        target_path = self.history_dir / f"{safe_symbol}_ohlcv.parquet"
+        
+        filename = f"{safe_symbol}_{self._timeframe}_ohlcv.parquet"
+        target_path = self.history_dir / filename
         
         # 2. Enforce absolute path boundary resolution
         resolved_base = self.history_dir.resolve()
@@ -157,6 +164,7 @@ class LocalCache:
             raise PermissionError("Path traversal attempt detected.")
             
         return target_path
+    
     def _load_symbol_history(self, symbol: str) -> Optional[pd.DataFrame]:
         path = self._get_history_path(symbol)
         if not path.exists():
@@ -201,7 +209,7 @@ class LocalCache:
         
         df = self._load_symbol_history(symbol)
         if df is None:
-            df = self.broker.ohclv_data(symbol, timeframe="H1", num_bars=500)
+            df = self.broker.ohclv_data(symbol, timeframe=self._timeframe, num_bars=1000)
             if df is None or df.empty:
                 return
             with self._lock:
@@ -217,7 +225,9 @@ class LocalCache:
                 with self._lock:
                     self._features[symbol] = feat_df
 
-    def get_raw_ohlcv(self, symbol: str, timeframe: str = "H1") -> Optional[pd.DataFrame]:
+    def get_raw_ohlcv(self, symbol: str, timeframe: str = None) -> Optional[pd.DataFrame]:
+        if timeframe is None:
+            timeframe = self._timeframe
         with self._lock:
             return self._ohlcv.get((symbol.upper(), timeframe), )
 
