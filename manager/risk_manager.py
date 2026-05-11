@@ -1569,46 +1569,51 @@ class BalancePipSizer:
 
 
 class RiskManager:
+    LOSS_STREAK_LIMIT = 2
+    LOSS_STREAK_PAUSE_MINUTES = 60
+    _consecutive_losses = {}
+    _loss_cooldown_until = {}
 
-        def compute_correlation_matrix(self, symbol_registry, window: int = 100) -> dict:
-            """
-            Compute real-time correlation matrix for all symbols in the registry using recent price data.
-            Returns a dict of {(sym1, sym2): correlation}.
-            """
-            import numpy as np
-            import pandas as pd
-            symbols = symbol_registry.get_all_symbols()
-            price_data = {}
-            for sym in symbols:
-                df = symbol_registry.get_ohlcv(sym, limit=window)
-                if df is not None and 'close' in df.columns:
-                    price_data[sym] = df['close'].values[-window:]
-            if len(price_data) < 2:
-                return {}
-            df_prices = pd.DataFrame(price_data)
-            corr = df_prices.corr()
-            result = {}
-            for s1 in symbols:
-                for s2 in symbols:
-                    if s1 != s2:
-                        result[(s1, s2)] = corr.loc[s1, s2]
-            return result
+    def compute_correlation_matrix(self, symbol_registry, window: int = 100) -> dict:
+        """
+        Compute real-time correlation matrix for all symbols in the registry using recent price data.
+        Returns a dict of {(sym1, sym2): correlation}.
+        """
+        import numpy as np
+        import pandas as pd
+        symbols = symbol_registry.get_all_symbols()
+        price_data = {}
+        for sym in symbols:
+            df = symbol_registry.get_ohlcv(sym, limit=window)
+            if df is not None and 'close' in df.columns:
+                price_data[sym] = df['close'].values[-window:]
+        if len(price_data) < 2:
+            return {}
+        df_prices = pd.DataFrame(price_data)
+        corr = df_prices.corr()
+        result = {}
+        for s1 in symbols:
+            for s2 in symbols:
+                if s1 != s2:
+                    result[(s1, s2)] = corr.loc[s1, s2]
+        return result
 
-        def is_correlation_safe(self, symbol, direction, open_positions, symbol_registry, threshold=0.85) -> tuple:
-            """
-            Prevents opening a new position if it would create highly correlated directional risk.
-            open_positions: list of dicts with 'symbol' and 'direction'.
-            Returns (allowed: bool, reason: str)
-            """
-            corr_matrix = self.compute_correlation_matrix(symbol_registry)
-            for pos in open_positions:
-                if pos['direction'] == direction:
-                    pair = (symbol, pos['symbol'])
-                    if pair in corr_matrix and abs(corr_matrix[pair]) >= threshold:
-                        return (False, f"{symbol} and {pos['symbol']} are highly correlated ({corr_matrix[pair]:.2f}) in the same direction.")
-            return (True, "OK")
+    def is_correlation_safe(self, symbol, direction, open_positions, symbol_registry, threshold=0.85) -> tuple:
+        """
+        Prevents opening a new position if it would create highly correlated directional risk.
+        open_positions: list of dicts with 'symbol' and 'direction'.
+        Returns (allowed: bool, reason: str)
+        """
+        corr_matrix = self.compute_correlation_matrix(symbol_registry)
+        for pos in open_positions:
+            if pos['direction'] == direction:
+                pair = (symbol, pos['symbol'])
+                if pair in corr_matrix and abs(corr_matrix[pair]) >= threshold:
+                    return (False, f"{symbol} and {pos['symbol']} are highly correlated ({corr_matrix[pair]:.2f}) in the same direction.")
+        return (True, "OK")
     """The Defense Engine: Handles exposure, drawdown limits, and position sizing."""
     
+
     def __init__(self, broker, cache=None, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print,
                  pyramid_min_pips: float = 1.0, spread_tolerance_pips: float = 1.0):
         self.broker = broker
@@ -1618,12 +1623,12 @@ class RiskManager:
         self.notify = notify_callback
         self.pyramid_min_pips = pyramid_min_pips
         self.spread_tolerance_pips = spread_tolerance_pips
-        
+
         self._loss_lock = threading.Lock()
-        
-        self.daily_high_watermark = 0.0 
+
+        self.daily_high_watermark = 0.0
         self.daily_low_watermark = 0.0
-        self.watermark_date: Optional[Any] = None
+        self.watermark_date = None
 
         self.targeter = DynamicRiskTargeter(broker)
         self.reentry_system = SmartReEntrySystem()
@@ -1634,26 +1639,23 @@ class RiskManager:
             lock_pct    = r.lock_pct_decimal,
         )
         self.balance_pip_sizer = BalancePipSizer()
-        
-        self._consecutive_losses: dict[str, int] = {}
-        self._loss_cooldown_until: dict[str, datetime] = {}
 
-    LOSS_STREAK_LIMIT = 2
-    LOSS_STREAK_PAUSE_MINUTES = 60
+    @classmethod
+    def record_loss(cls, symbol: str, notify_callback=print):
+        cls._consecutive_losses[symbol] = cls._consecutive_losses.get(symbol, 0) + 1
+        if cls._consecutive_losses[symbol] >= cls.LOSS_STREAK_LIMIT:
+            pause_until = datetime.now() + timedelta(minutes=cls.LOSS_STREAK_PAUSE_MINUTES)
+            cls._loss_cooldown_until[symbol] = pause_until
+            cls._consecutive_losses[symbol] = 0
+            notify_callback(f"⏸ {symbol}: {cls.LOSS_STREAK_LIMIT} consecutive losses — paused for {cls.LOSS_STREAK_PAUSE_MINUTES}m")
 
-    def record_loss(self, symbol: str):
-        self._consecutive_losses[symbol] = self._consecutive_losses.get(symbol, 0) + 1
-        if self._consecutive_losses[symbol] >= self.LOSS_STREAK_LIMIT:
-            pause_until = datetime.now() + timedelta(minutes=self.LOSS_STREAK_PAUSE_MINUTES)
-            self._loss_cooldown_until[symbol] = pause_until
-            self._consecutive_losses[symbol] = 0
-            self.notify(f"⏸ {symbol}: {self.LOSS_STREAK_LIMIT} consecutive losses — paused for {self.LOSS_STREAK_PAUSE_MINUTES}m")
+    @classmethod
+    def record_win(cls, symbol: str):
+        cls._consecutive_losses[symbol] = 0
 
-    def record_win(self, symbol: str):
-        self._consecutive_losses[symbol] = 0
-
-    def is_loss_paused(self, symbol: str) -> bool:
-        until = self._loss_cooldown_until.get(symbol)
+    @classmethod
+    def is_loss_paused(cls, symbol: str) -> bool:
+        until = cls._loss_cooldown_until.get(symbol)
         return bool(until and datetime.now() < until)
     
     def _load_profile(self) -> dict:
@@ -1839,43 +1841,46 @@ class RiskManager:
         symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
         if symbol_info is None:
             return {"approved": False, "reason": "Symbol info missing."}
-
-        pip_multiplier = 1.0 if any(x in symbol for x in ["BTC", "ETH"]) else 10.0
-        safe_sl_points = int(safe_sl_pips * pip_multiplier)
+        # Loss streak logic (class-level constants and state)
+        LOSS_STREAK_LIMIT = 2
+        LOSS_STREAK_PAUSE_MINUTES = 60
+        _consecutive_losses = {}
+        _loss_cooldown_until = {}
         
-        optimal_lots = self.calculate_position_size(symbol, max_risk_usd, safe_sl_points)
+        self._loss_lock = threading.Lock()
         
-        if optimal_lots == 0.0:
-             return {"approved": False, "reason": "Volatility/Spread too high for minimum lot size."}
-
-        return {
-            "approved": True,
-            "reason": "Clearance granted.",
-            "symbol": symbol,
-            "lots": optimal_lots,
-            "risk_usd": max_risk_usd,
-            "applied_risk_pct": actual_risk_pct,
-            "stop_loss_pips": safe_sl_pips
-        }
+        self.daily_high_watermark = 0.0 
+        self.daily_low_watermark = 0.0
+        self.watermark_date = None
+        
+        self.targeter = DynamicRiskTargeter(broker)
+        self.reentry_system = SmartReEntrySystem()
+        
+        # ── Balance-based pip sizing & lock balance ───────────────────────
+        r = _profile.risk()
+        self.lock_guard = LockBalanceGuard(
+            lock_amount = r.lock_amount,
+            lock_pct    = r.lock_pct_decimal,   # always 0–1, bug fixed
+        )
+        self.balance_pip_sizer = BalancePipSizer()
+        
+    @classmethod
+    def record_loss(cls, symbol: str, notify_callback=print):
+        cls._consecutive_losses[symbol] = cls._consecutive_losses.get(symbol, 0) + 1
+        if cls._consecutive_losses[symbol] >= cls.LOSS_STREAK_LIMIT:
+            pause_until = datetime.now() + timedelta(minutes=cls.LOSS_STREAK_PAUSE_MINUTES)
+            cls._loss_cooldown_until[symbol] = pause_until
+            cls._consecutive_losses[symbol] = 0
+            notify_callback(f"⏸ {symbol}: {cls.LOSS_STREAK_LIMIT} consecutive losses — paused for {cls.LOSS_STREAK_PAUSE_MINUTES}m")
     
-    def calculate_micro_lot(self, symbol: Optional[str] = None) -> float:
-        if symbol:
-            symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
-            if symbol_info is not None and symbol_info.get("volume_min", 0) and symbol_info.get("volume_min", 0) > 0:
-                return round(symbol_info["volume_min"], 2)
-
-        return 0.01
-
-    def calculate_position_size(self, symbol: str, risk_amount_usd: float, stop_loss_points: int) -> float:
-        symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
-        if symbol_info is None:
-            return 0.0
-
-        tick_value = float(symbol_info.get("trade_tick_value", 0.0))
-        tick_size = float(symbol_info.get("trade_tick_size", 0.0))
-        min_lot = float(symbol_info.get("volume_min", 0.0))
-        max_lot = float(symbol_info.get("volume_max", 0.0))
-        step_lot = float(symbol_info.get("volume_step", 0.0))
+    @classmethod
+    def record_win(cls, symbol: str):
+        cls._consecutive_losses[symbol] = 0
+    
+    @classmethod
+    def is_loss_paused(cls, symbol: str) -> bool:
+        until = cls._loss_cooldown_until.get(symbol)
+        return bool(until and datetime.now() < until)
 
         if tick_value == 0 or tick_size == 0 or step_lot == 0:
             return 0.0
