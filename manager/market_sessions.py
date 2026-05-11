@@ -13,43 +13,50 @@ Used by TradeGatekeeper, PortfolioManager scanner, and the chat layer
 so the bot never wastes time analysing instruments that can't be traded.
 """
 
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timezone
 from typing import Optional
 from manager.symbol_registry import SymbolRegistry
 
 class MarketSession:
-    """Single session with an open/close rule."""
-
     def __init__(
         self,
-        name: str,
-        open_hour_utc: int,
-        close_hour_utc: int,
-        weekdays_only: bool = True,
-        always_open: bool = False,
+        name:             str,
+        open_hour_utc:    int,
+        close_hour_utc:   int,
+        weekdays_only:    bool = True,
+        always_open:      bool = False,
+        all_day_weekdays: bool = False,
     ):
-        self.name = name
-        self.open_hour = open_hour_utc
-        self.close_hour = close_hour_utc
-        self.weekdays_only = weekdays_only
-        self.always_open = always_open
+        self.name             = name
+        self.open_hour        = open_hour_utc
+        self.close_hour       = close_hour_utc
+        self.weekdays_only    = weekdays_only
+        self.always_open      = always_open
+        self.all_day_weekdays = all_day_weekdays
 
     def is_open(self, now_utc: datetime = None) -> bool:
         if now_utc is None:
             now_utc = datetime.now(timezone.utc)
-
         if self.always_open:
             return True
+        weekday = now_utc.weekday()
+        hour    = now_utc.hour
 
-        weekday = now_utc.weekday()  # 0=Mon … 6=Sun
+        if self.all_day_weekdays:
+            if weekday == 5:                        # Saturday always closed
+                return False
+            if weekday == 6:                        # Sunday open after open_utc
+                return hour >= self.open_hour if self.open_hour else hour >= 22
+            if weekday == 4:                        # Friday close at close_utc
+                return hour < self.close_hour if self.close_hour else hour < 22
+            return True                             # Mon–Thu always open
+
         if self.weekdays_only and weekday >= 5:
             return False
-
-        hour = now_utc.hour
-
         if self.open_hour < self.close_hour:
             return self.open_hour <= hour < self.close_hour
-        else:
+        else:                                       # wraps midnight
             return hour >= self.open_hour or hour < self.close_hour
 
 
@@ -87,27 +94,93 @@ class MarketSessionManager:
                          "NVDA", "NFLX", "BABA"],
     }
 
-    SESSIONS: dict[str, MarketSession] = {
-        "crypto":       MarketSession("Crypto",      0,  0,  weekdays_only=False, always_open=True),
-        "forex":        MarketSession("Forex",        0,  22, weekdays_only=True),
-        "metals":       MarketSession("Metals",       23, 22, weekdays_only=True),
-        "indices_us":   MarketSession("US Markets",   13, 21, weekdays_only=True),
-        "indices_eu":   MarketSession("EU Markets",   7,  17, weekdays_only=True),
-        "indices_asia": MarketSession("Asia Markets", 0,  9,  weekdays_only=True),
-        "commodities":  MarketSession("Commodities",  1,  21, weekdays_only=True),
-        "stocks":       MarketSession("US Stocks",    13, 21, weekdays_only=True),
+_FRIENDLY_NAMES = {
+    "crypto":       "Crypto (BTC, ETH…)",
+    "forex":        "Forex (EUR/USD, GBP/USD…)",
+    "metals":       "Metals (Gold, Silver…)",
+    "indices_us":   "US Indices (US30, NAS100…)",
+    "indices_eu":   "EU Indices (GER40, UK100…)",
+    "indices_asia": "Asia Indices (JPN225, AUS200…)",
+    "commodities":  "Commodities (Oil, Gas…)",
+    "stocks":       "US Stocks (AAPL, TSLA…)",
+}
+
+# Hardcoded fallback if profile has no market_sessions section
+_FALLBACK_SESSIONS = {
+    "forex":        MarketSession("Forex",        0,  0,  weekdays_only=False, all_day_weekdays=True),
+    "metals":       MarketSession("Metals",       23, 22, weekdays_only=False, all_day_weekdays=True),
+    "crypto":       MarketSession("Crypto",       0,  0,  weekdays_only=False, always_open=True),
+    "indices_us":   MarketSession("US Markets",   13, 21, weekdays_only=True),
+    "indices_eu":   MarketSession("EU Markets",   7,  17, weekdays_only=True),
+    "indices_asia": MarketSession("Asia Markets", 0,  9,  weekdays_only=True),
+    "commodities":  MarketSession("Commodities",  1,  21, weekdays_only=True),
+    "stocks":       MarketSession("US Stocks",    13, 21, weekdays_only=True),
+}
+
+
+class MarketSessionManager:
+
+    CATEGORY_MAP: dict[str, list[str]] = {
+        "crypto":       ["BTC", "ETH", "LTC", "XBT", "DOGE", "ADA", "SOL",
+                         "XRP", "BNB", "MATIC", "DOT", "LINK", "UNI", "AVAX",
+                         "SHIB", "PEPE", "NEAR", "FET", "INJ"],
+        "metals":       ["XAU", "XAG", "XPT", "XPD"],
+        "indices_us":   ["US30", "US500", "NAS100", "SPX", "NDX", "DOW",
+                         "SP500", "US2000", "VIX"],
+        "indices_eu":   ["GER40", "UK100", "FRA40", "ESP35", "DAX",
+                         "FTSE", "CAC", "EUSTX50"],
+        "indices_asia": ["JPN225", "AUS200", "HKG33", "NKY", "CN50", "SG30"],
+        "commodities":  ["USOIL", "BRENT", "NGAS", "CORN", "WHEAT",
+                         "COFFEE", "COCOA", "SUGAR"],
+        "stocks":       ["AAPL", "TSLA", "AMZN", "GOOGL", "MSFT", "META",
+                         "NVDA", "NFLX", "BABA"],
     }
 
-    FRIENDLY_NAMES: dict[str, str] = {
-        "crypto":       "Crypto (BTC, ETH…)",
-        "forex":        "Forex (EUR/USD, GBP/USD…)",
-        "metals":       "Metals (Gold, Silver…)",
-        "indices_us":   "US Indices (US30, NAS100…)",
-        "indices_eu":   "EU Indices (GER40, UK100…)",
-        "indices_asia": "Asia Indices (JPN225, AUS200…)",
-        "commodities":  "Commodities (Oil, Gas…)",
-        "stocks":       "US Stocks (AAPL, TSLA…)",
-    }
+    def __init__(self):
+        self.SESSIONS      = self._build_sessions()
+        self.FRIENDLY_NAMES = _FRIENDLY_NAMES
+
+    def _build_sessions(self) -> dict[str, MarketSession]:
+        """
+        Load session hours from profile.json.
+        Falls back to hardcoded defaults if the section is missing.
+        """
+        try:
+            from manager.profile_manager import profile
+            ms_config = profile.market_sessions()
+            if not ms_config.sessions:
+                return _FALLBACK_SESSIONS
+
+            built = {}
+            name_map = {
+                "forex":        "Forex",
+                "metals":       "Metals",
+                "crypto":       "Crypto",
+                "indices_us":   "US Markets",
+                "indices_eu":   "EU Markets",
+                "indices_asia": "Asia Markets",
+                "commodities":  "Commodities",
+                "stocks":       "US Stocks",
+            }
+            for category, cfg in ms_config.sessions.items():
+                built[category] = MarketSession(
+                    name             = name_map.get(category, category.title()),
+                    open_hour_utc    = cfg.open_utc,
+                    close_hour_utc   = cfg.close_utc,
+                    weekdays_only    = cfg.weekdays_only,
+                    always_open      = cfg.always_open,
+                    all_day_weekdays = cfg.all_day_weekdays,
+                )
+
+            # Fill any missing categories with fallback
+            for cat, sess in _FALLBACK_SESSIONS.items():
+                if cat not in built:
+                    built[cat] = sess
+
+            return built
+
+        except Exception:
+            return _FALLBACK_SESSIONS
 
     def get_symbol_category(self, symbol: str) -> str:
         """Return the market category for a broker symbol."""

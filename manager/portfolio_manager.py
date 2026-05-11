@@ -47,17 +47,20 @@ class PortfolioManager:
         p = _profile.portfolio()
         self.asset_classes    = p.asset_classes
         self.strategy_mapping = p.strategy_mapping
-        self.master_watchlist = _profile.symbols()
+        # FIX: Use a set to prevent duplicate symbols in the master watchlist
+        initial_symbols = _profile.symbols()
+        asset_symbols = [s for sublist in self.asset_classes.values() for s in sublist]
+        self.master_watchlist = list(set(initial_symbols + asset_symbols))
 
-        for symbols in self.asset_classes.values():
-            self.master_watchlist.extend(symbols)
-            
         self.available_strategies = list(self.strategy_manager.engines.keys())
-        
+
         # Use provided cache or get from strategy manager
         self._ohlcv_cache = cache or getattr(self.strategy_manager, '_ohlcv_cache', OHLCVCache(ttl_seconds=60))
-        
+
         # Thread-safe lock for model predictions (prevents race conditions between main and background threads)
+        # FIX: Added a dedicated lock for trade state management
+        self._state_lock = threading.Lock()
+        self._temporary_trade_states: dict[int, dict] = {}
         self._model_lock = threading.Lock()
         self._temporary_trade_states: dict[int, dict] = {}
         
@@ -227,8 +230,10 @@ class PortfolioManager:
                 f"{len(tradeable_symbols)} symbols remain tradeable."
             )
 
-        portfolio_size = len(tradeable_symbols)
-        
+        # FIX: Risk Scaling Logic
+        # Use total watchlist size for risk distribution, not just currently open markets.
+        total_portfolio_capacity = len(self.master_watchlist)
+
         account_info = self.broker.getAccountInfo()
         if account_info is None:
             return results
@@ -238,32 +243,32 @@ class PortfolioManager:
         for p in positions:
             if p.symbol in symbol_counts:
                 symbol_counts[p.symbol] += 1
-                
+
         prioritized_symbols = sorted(tradeable_symbols, key=lambda s: symbol_counts.get(s, 0))
 
         for symbol in prioritized_symbols:
             allowed, reason = self.risk_manager.is_trading_allowed(
                 symbol=symbol, 
                 max_daily_loss=max_daily_loss,
-                portfolio_size=portfolio_size
+                portfolio_size=total_portfolio_capacity  # Updated to use total capacity
             )
 
             if not allowed:
                 results.append(f"⚠️ {symbol}: Skipped. {reason}")
                 continue
-            
+
             ok, corr_reason = self.corr_guard.check(symbol, self.broker)
-            
+
             if not ok:
                 results.append(f"⚠️ {symbol}: {corr_reason}")
                 continue
             if self.risk_manager.is_loss_paused(symbol):
                 results.append(f"⏸ {symbol}: loss-streak pause active, skipping.")
                 continue
-            
+
             current_state = self._get_current_market_state(symbol)
             strategy_name = self._assign_strategy(symbol, current_state)
-            
+
             # Reduced threshold from 0.65 to 0.50 to allow valid multi-timeframe signals
             MIN_SIGNAL_CONFIDENCE = _profile.scanner().min_signal_confidence   
             signal = self.strategy_manager.check_signals(symbol, use_ensemble=True)
@@ -301,7 +306,7 @@ class PortfolioManager:
                                     self.notify(f"🔄 Smart Re-Entry approved for {symbol}! Price swept liquidity and recovered.")
 
                 trade_plan = self.risk_manager.calculate_safe_trade(
-                    symbol=symbol, base_risk_pct=risk_pct, stop_loss_pips=stop_loss, max_daily_loss=max_daily_loss, portfolio_size=portfolio_size
+                    symbol=symbol, base_risk_pct=risk_pct, stop_loss_pips=stop_loss, max_daily_loss=max_daily_loss, portfolio_size=total_portfolio_capacity
                 )
                 
                 if trade_plan["approved"]:

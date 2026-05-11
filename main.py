@@ -63,51 +63,51 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
             if shutdown_event.wait(timeout=scan_interval_seconds):
                 break
             continue
-        
+
         try:
-            
             # 1. Check total realized profit for today
             today_profit = portfolio_manager.broker.get_daily_realized_profit()
-            
             # 2. Check floating profit of open trades (the current session)
             floating_profit = portfolio_manager.broker.get_total_floating_profit()
-            
+
             # 3. Have we hit the daily goal?
             if today_profit + floating_profit >= daily_target:
                 notify(f"🎉 Daily Goal of ${daily_target} reached! Closing all trades.")
                 portfolio_manager.broker.close_all_positions()
-                
+
                 # +++ TRIGGER CONTINUOUS LEARNING HERE +++
                 for symbol in symbols:
                     portfolio_manager.strategy_manager.continuous_learning_routine(symbol)
-                
+
                 notify("💤 Neural Net optimized. Sleeping until tomorrow.")
-                time.sleep(86400)  # 24 hours
+                # FIX: Replace time.sleep(86400) with a cancellable wait
+                if shutdown_event.wait(timeout=86400):
+                    break
                 continue
-            
+
             # 4. Have we hit the session goal?
             if floating_profit >= session_target:
                 notify(f"✅ Session Goal of ${session_target} reached! Closing basket and starting a new cycle.")
                 portfolio_manager.broker.close_all_positions()
                 # Continue to next scan
-            
+
             # 5. Scan portfolio for opportunities (silent operation)
             results = portfolio_manager.evaluate_portfolio_opportunities(
                 risk_pct=risk_pct,
                 stop_loss=stop_loss,
                 max_daily_loss=max_daily_loss
             )
-            
+
             # 6. Send the results through the agent
             for result in results:
-                priority = "trade_executed" if "EXECUTED" in result else "critical" if "🛑" in result or "FATAL" in result else "normal"
+                priority = "trade_executed" if "EXECUTED" in result else "critical" if "🚑" in result or "FATAL" in result else "normal"
                 notify(result, priority=priority)
 
             # 7. Wait for the next scan or a shutdown signal.
             if shutdown_event.wait(timeout=scan_interval_seconds):
-                notify("🛑 Shutdown signal received. Scanner stopping gracefully...")
+                notify("🚑 Shutdown signal received. Scanner stopping gracefully...")
                 break
-                
+
         except Exception as e:
             notify(f"⚠️ Error during autonomous scan: {e}")
             # Sleep for a minute before retrying to prevent error spam
@@ -115,7 +115,7 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
                 break
         finally:
             _scan_lock.release()
-    
+
     notify("✅ Background Scanner stopped.")
 
 def signal_handler(signum, frame):

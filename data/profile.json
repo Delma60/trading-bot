@@ -233,6 +233,51 @@
         "magic_number": 1000,
         "slippage_points": 20
     },
+    "market_sessions": {
+        "forex": {
+            "open_utc": 0,
+            "close_utc": 0,
+            "all_day_weekdays": true,
+            "weekdays_only": false
+        },
+        "metals": {
+            "open_utc": 23,
+            "close_utc": 22,
+            "all_day_weekdays": true,
+            "weekdays_only": false
+        },
+        "crypto": {
+            "open_utc": 0,
+            "close_utc": 0,
+            "always_open": true,
+            "weekdays_only": false
+        },
+        "indices_us": {
+            "open_utc": 13,
+            "close_utc": 21,
+            "weekdays_only": true
+        },
+        "indices_eu": {
+            "open_utc": 7,
+            "close_utc": 17,
+            "weekdays_only": true
+        },
+        "indices_asia": {
+            "open_utc": 0,
+            "close_utc": 9,
+            "weekdays_only": true
+        },
+        "commodities": {
+            "open_utc": 1,
+            "close_utc": 21,
+            "weekdays_only": true
+        },
+        "stocks": {
+            "open_utc": 13,
+            "close_utc": 21,
+            "weekdays_only": true
+        }
+    },
     "sessions": {
         "avoid_asian_session": true,
         "avoid_friday_close": true,
