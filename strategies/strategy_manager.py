@@ -45,12 +45,11 @@ class DummyStrategy:
 
 class MTFConfluenceEngine:
     """Multi-Timeframe Confluence engine (Feature #4)."""
-    @property
-
     def __init__(self, broker:Trader):
         self.broker = broker
         self.broker_timeout_seconds = 5.0
-
+    
+    @property
     def TIMEFRAMES(self) -> list:
         """Live property — always reflects the current profile setting."""
         return _profile.scanner().mtf_timeframes

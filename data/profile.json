@@ -148,9 +148,9 @@
     "scanner": {
         "interval_seconds": 3,
         "dry_run": false,
-        "mtf_min_alignment": 0.55,
+        "mtf_min_alignment": 0.35,
         "volatility_spike_atr": 2.5,
         "dead_volume_ratio": 0.3,
-        "timeframe": "M15"
+        "timeframe": "M1"
     }
 }
