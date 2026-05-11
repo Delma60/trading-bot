@@ -80,13 +80,86 @@
         ],
         "asset_classes": {
             "forex": [
+                "AUDJPY",
+                "AUDUSD",
+                "CADJPY",
+                "CHFJPY",
+                "EURAUD",
+                "EURCAD",
+                "EURCHF",
+                "EURCZK",
+                "EURGBP",
+                "EURHUF",
+                "EURJPY",
+                "EURNOK",
+                "EURNZD",
+                "EURPLN",
+                "EURSEK",
+                "EURSGD",
                 "EURUSD",
-                "GBPUSD"
+                "GBPAUD",
+                "GBPCAD",
+                "GBPCHF",
+                "GBPJPY",
+                "GBPNZD",
+                "GBPUSD",
+                "NZDJPY",
+                "NZDUSD",
+                "USDCAD",
+                "USDCHF",
+                "USDCLP",
+                "USDCNH",
+                "USDCZE",
+                "USDHKD",
+                "USDHUF",
+                "USDIDR",
+                "USDJPY",
+                "USDKRW",
+                "USDMXN",
+                "USDNOK",
+                "USDPHP",
+                "USDPLN",
+                "USDRON",
+                "USDRUB",
+                "USDSEK",
+                "USDSGD",
+                "USDTHB",
+                "USDTRY",
+                "USDZAR"
             ],
             "metals": [
+                "XAGUSD",
                 "XAUUSD"
             ],
-            "crypto": []
+            "crypto": [
+                "ADAUSD",
+                "BCHUSD",
+                "BTCUSD",
+                "ETHUSD",
+                "LTCUSD",
+                "XRPUSD"
+            ],
+            "indices": [
+                "AUS200",
+                "CAC40",
+                "DAX",
+                "FTSE",
+                "HSI",
+                "MOEX",
+                "NIKKEI",
+                "SENSEX",
+                "US100",
+                "US30",
+                "US500"
+            ],
+            "commodities": [
+                "BRENTUSD",
+                "CORNUSD",
+                "NATGAS",
+                "SOYBEANSUSD",
+                "WHEATUSD",
+                "WTIUSD"
+            ]
         },
         "strategy_mapping": {
             "default": "Mean_Reversion",
@@ -112,6 +185,32 @@
             "lock_pct": 0.0,
             "target_profit": 10.0
         },
+        "asset_class_overrides": {
+            "default": {
+                "ris k_pct": 1.0,
+                "stop_loss_pips": 20.0,
+                "take_profit_pips": 40.0,
+                "max_open_trades": 2
+            },
+            "forex": {
+                "risk_pct": 1.0,
+                "stop_loss_pips": 20.0,
+                "take_profit_pips": 40.0,
+                "max_open_trades": 2
+            },
+            "crypto": {
+                "risk_pct": 0.5,
+                "stop_loss_pips": 100.0,
+                "take_profit_pips": 200.0,
+                "max_open_trades": 1
+            },
+            "metals": {
+                "risk_pct": 0.7,
+                "stop_loss_pips": 80.0,
+                "take_profit_pips": 160.0,
+                "max_open_trades": 1
+            }
+        },
         "symbol_overrides": {
             "XAUUSD": {
                 "risk_pct": 0.5,
@@ -126,8 +225,9 @@
             "critical_scale": 0.25
         }
     },
+
     "broker": {
-        "max_open_trades": 3,
+        "max_open_trades": 4,
         "min_margin_level": 150.0,
         "spread_tolerance_pips": 3.0,
         "magic_number": 1000,

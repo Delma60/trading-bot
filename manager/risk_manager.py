@@ -1545,8 +1545,13 @@ class RiskManager:
     
     LOSS_STREAK_LIMIT = 2
     LOSS_STREAK_PAUSE_MINUTES = 60
-    _consecutive_losses = {}
-    _loss_cooldown_until = {}
+    _consecutive_losses = {}  # {asset_class: int}
+    _loss_cooldown_until = {}  # {asset_class: datetime}
+
+    @staticmethod
+    def get_asset_class(symbol: str):
+        from manager.profile_manager import profile
+        return profile.get_asset_class(symbol)
 
     def compute_correlation_matrix(self, symbol_registry, window: int = 100) -> dict:
         import numpy as np
@@ -1605,20 +1610,29 @@ class RiskManager:
 
     @classmethod
     def record_loss(cls, symbol: str, notify_callback=print):
-        cls._consecutive_losses[symbol] = cls._consecutive_losses.get(symbol, 0) + 1
-        if cls._consecutive_losses[symbol] >= cls.LOSS_STREAK_LIMIT:
+        from manager.profile_manager import profile
+        asset_class = profile.get_asset_class(symbol)
+        key = asset_class or symbol
+        cls._consecutive_losses[key] = cls._consecutive_losses.get(key, 0) + 1
+        if cls._consecutive_losses[key] >= cls.LOSS_STREAK_LIMIT:
             pause_until = datetime.now() + timedelta(minutes=cls.LOSS_STREAK_PAUSE_MINUTES)
-            cls._loss_cooldown_until[symbol] = pause_until
-            cls._consecutive_losses[symbol] = 0
-            notify_callback(f"⏸ {symbol}: {cls.LOSS_STREAK_LIMIT} consecutive losses — paused for {cls.LOSS_STREAK_PAUSE_MINUTES}m")
+            cls._loss_cooldown_until[key] = pause_until
+            cls._consecutive_losses[key] = 0
+            notify_callback(f"⏸ {key}: {cls.LOSS_STREAK_LIMIT} consecutive losses — paused for {cls.LOSS_STREAK_PAUSE_MINUTES}m")
 
     @classmethod
     def record_win(cls, symbol: str):
-        cls._consecutive_losses[symbol] = 0
+        from manager.profile_manager import profile
+        asset_class = profile.get_asset_class(symbol)
+        key = asset_class or symbol
+        cls._consecutive_losses[key] = 0
 
     @classmethod
     def is_loss_paused(cls, symbol: str) -> bool:
-        until = cls._loss_cooldown_until.get(symbol)
+        from manager.profile_manager import profile
+        asset_class = profile.get_asset_class(symbol)
+        key = asset_class or symbol
+        until = cls._loss_cooldown_until.get(key)
         return bool(until and datetime.now() < until)
     
     def _load_profile(self) -> dict:
@@ -1687,6 +1701,7 @@ class RiskManager:
         return True, "Existing positions profitable — pyramiding approved."
 
     def is_trading_allowed(self, symbol: str, max_daily_loss: float, portfolio_size: int) -> Tuple[bool, str]:
+        from manager.profile_manager import profile
         account = self.cache.get_account() if self.cache is not None else self.broker.getAccountInfo()
         if account is None:
             account = self.broker.getAccountInfo()
@@ -1705,9 +1720,19 @@ class RiskManager:
                 f"consumes the full account — no tradeable balance."
             )
 
+        # Per-asset-class open trade ceiling
+        asset_class = profile.get_asset_class(symbol)
+        class_max_trades = profile.max_open_trades(symbol)
+        if asset_class:
+            open_trades_in_class = sum(1 for p in positions if profile.get_asset_class(p.symbol) == asset_class)
+            if open_trades_in_class >= class_max_trades:
+                return False, f"{asset_class.title()} exposure reached ({open_trades_in_class}/{class_max_trades} trades)."
+
+        # Global fallback ceiling
         current_open_trades = len(positions) if positions else 0
-        if current_open_trades >= self.max_open_trades:
-            return False, f"Global exposure reached ({current_open_trades}/{self.max_open_trades} trades)."
+        global_max_trades = profile.max_open_trades()
+        if current_open_trades >= global_max_trades:
+            return False, f"Global exposure reached ({current_open_trades}/{global_max_trades} trades)."
 
         if positions:
             symbol_positions = [p for p in positions if p.symbol == symbol]
@@ -2344,51 +2369,45 @@ class TradeGatekeeper:
         self.avoid_asian_session = avoid_asian_session
         self.avoid_friday_close  = avoid_friday_close
 
-    def gate(self, symbol: str, broker=None) -> Tuple[bool, str]:
-        from datetime import datetime, timezone
-        from manager.market_sessions import MarketSessionManager
+    def check(self, symbol: str, broker) -> tuple[bool, str]:
+        """
+        Returns (allowed: bool, reason: str).
+        Only applies to forex symbols (skips for other asset classes).
+        """
+        from manager.profile_manager import profile
+        asset_class = profile.get_asset_class(symbol)
+        if asset_class != "forex":
+            return True, "CorrelationGuard: Not a forex symbol, skipping check."
 
-        now_utc = datetime.now(timezone.utc)
-        hour    = now_utc.hour
-        weekday = now_utc.weekday()
+        positions = broker.getPositions() or []
+        if not positions:
+            return True, "No existing positions."
 
-        mgr      = MarketSessionManager()
-        category = mgr.get_symbol_category(symbol)
-        tradeable, session_reason = mgr.is_symbol_tradeable(symbol, now_utc)
+        # Extract legs from all open positions
+        open_legs: list[str] = []
+        for pos in positions:
+            if pos.symbol.upper() != symbol.upper():
+                open_legs.extend(self._legs(pos.symbol))
 
-        if not tradeable:
-            next_open = mgr.get_next_open_time(symbol, now_utc)
-            return False, f"{session_reason} Opens: {next_open}."
+        leg_counts = Counter(open_legs)
 
-        if category != "crypto" and self.avoid_friday_close and weekday == 4 and hour >= 20:
-            return False, (
-                "Friday after 20:00 UTC — weekend gap risk. "
-                "No new non-crypto positions before market close."
-            )
-
-        if category == "forex" and self.avoid_asian_session and 0 <= hour < 7:
-            asian_active = {"USDJPY", "AUDUSD", "NZDUSD", "CADJPY", "CHFJPY", "GBPJPY"}
-            if symbol.upper() not in asian_active:
+        # Check proposed symbol's legs against existing counts
+        proposed_legs = self._legs(symbol)
+        for leg in proposed_legs:
+            # Count would become leg_counts[leg] + 1 after this trade
+            if leg_counts[leg] + 1 > self.max_shared_legs:
+                concentrated = [
+                    pos.symbol for pos in positions
+                    if leg in self._legs(pos.symbol)
+                ]
                 return False, (
-                    f"Asian session ({hour:02d}:00 UTC) — low liquidity for {symbol}. "
-                    f"Waiting for London open (07:00 UTC)."
+                    f"Correlation limit: {leg} already appears in "
+                    f"{leg_counts[leg]} open position(s) "
+                    f"({', '.join(concentrated)}). "
+                    f"Max shared legs = {self.max_shared_legs}."
                 )
 
-        spread_pips = self._get_spread_pips(symbol, broker, category)
-        if spread_pips is None:
-            return False, f"Could not fetch tick data for {symbol}."
-
-        if category == "crypto":
-            spread_limit = self.max_spread_crypto
-        else:
-            spread_limit = self.max_spread_forex
-
-        if spread_pips > spread_limit:
-            return False, (
-                f"Spread too wide: {spread_pips:.1f} pips "
-                f"(limit {spread_limit:.1f} pips for {category}). "
-                f"Waiting for tighter conditions."
-            )
+        return True, "OK"
 
         return True, "OK"
 

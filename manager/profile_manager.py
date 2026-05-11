@@ -193,13 +193,32 @@ class ProfileManager:
 
     # ── Section accessors ─────────────────────────────────────────────────────
 
+    def get_asset_class(self, symbol: str) -> str:
+        """Return the asset class for a symbol, or None if not found."""
+        symbol = symbol.upper()
+        with self._lock:
+            asset_classes = self._raw["portfolio"].get("asset_classes", {})
+            for asset_class, syms in asset_classes.items():
+                if symbol in [s.upper() for s in syms]:
+                    return asset_class
+        return None
+
     def risk(self, symbol: str = None) -> RiskConfig:
         """
-        Returns risk config for symbol, merging global defaults with
-        any per-symbol override. If symbol is None, returns global defaults.
+        Returns risk config for symbol, merging global defaults, asset class, and per-symbol override.
+        Priority: symbol > asset class > default.
         """
         with self._lock:
-            base  = deepcopy(self._raw["risk"]["defaults"])
+            base = deepcopy(self._raw["risk"]["defaults"])
+            asset_class = None
+            if symbol:
+                asset_class = self.get_asset_class(symbol)
+            # Apply asset class overrides if present
+            if asset_class:
+                class_overrides = self._raw["risk"].get("asset_class_overrides", {})
+                if asset_class in class_overrides:
+                    base.update(class_overrides[asset_class])
+            # Apply symbol overrides if present
             overrides = self._raw["risk"].get("symbol_overrides", {})
             if symbol and symbol.upper() in overrides:
                 base.update(overrides[symbol.upper()])
@@ -209,16 +228,26 @@ class ProfileManager:
                 risk_pct             = float(base["risk_pct"]),
                 stop_loss_pips       = float(base["stop_loss_pips"]),
                 take_profit_pips     = float(base["take_profit_pips"]),
-                max_daily_loss       = float(base["max_daily_loss"]),
-                daily_goal           = float(base["daily_goal"]),
-                cooldown_minutes     = int(base["cooldown_minutes"]),
-                lock_amount          = float(base["lock_amount"]),
-                lock_pct             = float(base["lock_pct"]),
+                max_daily_loss       = float(base.get("max_daily_loss", 500.0)),
+                daily_goal           = float(base.get("daily_goal", 50.0)),
+                cooldown_minutes     = int(base.get("cooldown_minutes", 5)),
+                lock_amount          = float(base.get("lock_amount", 0.0)),
+                lock_pct             = float(base.get("lock_pct", 0.0)),
                 moderate_threshold   = float(dr.get("moderate_threshold", 0.50)),
                 moderate_scale       = float(dr.get("moderate_scale",     0.50)),
                 critical_threshold   = float(dr.get("critical_threshold", 0.80)),
                 critical_scale       = float(dr.get("critical_scale",     0.25)),
             )
+
+    def max_open_trades(self, symbol: str = None) -> int:
+        """Return max_open_trades for the asset class of the symbol, or global if not set."""
+        with self._lock:
+            if symbol:
+                asset_class = self.get_asset_class(symbol)
+                class_overrides = self._raw["risk"].get("asset_class_overrides", {})
+                if asset_class and asset_class in class_overrides:
+                    return int(class_overrides[asset_class].get("max_open_trades", self._raw["broker"].get("max_open_trades", 3)))
+            return int(self._raw["broker"].get("max_open_trades", 3))
 
     def portfolio(self) -> PortfolioConfig:
         with self._lock:
