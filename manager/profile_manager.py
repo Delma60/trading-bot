@@ -88,6 +88,7 @@ class ScannerConfig:
     volatility_spike_atr:  float
     dead_volume_ratio:     float
     timeframe:             str   = "H1"
+    min_signal_confidence:  float      = 0.50
     mtf_timeframes:         List[str] = field( default_factory=lambda: ["M1", "M15", "H1", "H4", "D1"] )
 
 
@@ -291,6 +292,7 @@ class ProfileManager:
                 volatility_spike_atr = float(sc.get("volatility_spike_atr", 2.5)),
                 dead_volume_ratio    = float(sc.get("dead_volume_ratio",  0.3)),
                 timeframe            = primary_tf,
+                min_signal_confidence = float(sc.get("min_signal_confidence", 0.50)),
                 mtf_timeframes       = list(sc.get("mtf_timeframes", default_mtf)),
             )
 

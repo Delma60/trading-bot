@@ -249,8 +249,9 @@
         "interval_seconds": 3,
         "dry_run": false,
         "mtf_min_alignment": 0.35,
-        "volatility_spike_atr": 2.5,
-        "dead_volume_ratio": 0.3,
-        "timeframe": "M1"
+        "volatility_spike_atr": 3.5,
+        "dead_volume_ratio": 0.13,
+        "min_signal_confidence": 0.30,
+        "timeframe": "H1"
     }
 }

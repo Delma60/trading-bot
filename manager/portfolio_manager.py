@@ -265,7 +265,7 @@ class PortfolioManager:
             strategy_name = self._assign_strategy(symbol, current_state)
             
             # Reduced threshold from 0.65 to 0.50 to allow valid multi-timeframe signals
-            MIN_SIGNAL_CONFIDENCE = 0.50   
+            MIN_SIGNAL_CONFIDENCE = _profile.scanner().min_signal_confidence   
             signal = self.strategy_manager.check_signals(symbol, use_ensemble=True)
             if (signal
                     and signal.get('action') != 'WAIT'

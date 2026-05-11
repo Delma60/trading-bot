@@ -282,7 +282,8 @@ class StrategyManager:
         # Market condition pre-filter
         is_suitable, mc_reason = self._mc_filter.is_market_suitable(symbol)
         if not is_suitable:
-            return {"action": "WAIT", "confidence": 0.0, "reason": mc_reason}
+            # return {"action": "WAIT", "confidence": 0.0, "reason": mc_reason}
+            pass
 
         # MTF confluence check
         mtf_data = self._mtf_engine.get_confluence_score(symbol, cache=self.cache)
