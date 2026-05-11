@@ -1597,13 +1597,12 @@ class RiskManager:
         )
         self.balance_pip_sizer = BalancePipSizer()
         
-        # risk_manager.py  — add to RiskManager.__init__
         self._consecutive_losses: dict[str, int] = {}
         self._loss_cooldown_until: dict[str, datetime] = {}
-        LOSS_STREAK_LIMIT = 2
-        LOSS_STREAK_PAUSE_MINUTES = 60
 
-        # add new method
+    LOSS_STREAK_LIMIT = 2
+    LOSS_STREAK_PAUSE_MINUTES = 60
+
     def record_loss(self, symbol: str):
         self._consecutive_losses[symbol] = self._consecutive_losses.get(symbol, 0) + 1
         if self._consecutive_losses[symbol] >= self.LOSS_STREAK_LIMIT:
@@ -1617,9 +1616,7 @@ class RiskManager:
 
     def is_loss_paused(self, symbol: str) -> bool:
         until = self._loss_cooldown_until.get(symbol)
-        if until and datetime.now() < until:
-            return True
-        return False
+        return bool(until and datetime.now() < until)
     
     def _load_profile(self) -> dict:
         from pathlib import Path

@@ -11,7 +11,9 @@ Key changes from previous version:
 4. All data retrieval paths strictly query the unified self.cache interface.
 """
 
+
 import threading
+import time
 from inspect import signature
 import pandas as pd
 
@@ -360,7 +362,7 @@ class StrategyManager:
         }
         
 
-class OHLCVCache(LocalCache):
+class OHLCVCache:
     """
     Thread-safe time-to-live cache for OHLCV DataFrames.
     Prevents redundant MT5 calls when multiple strategies analyse the

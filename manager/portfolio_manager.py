@@ -410,13 +410,6 @@ class PortfolioManager:
                             self.evaluate_news_impact(article_id, entry_price, current_price, action)
             except:
                 pass  # Silently fail if price fetch doesn't work
-            
-            if not close_price:
-                close_price = trade_data.get("entry_price", 0.0)
-                
-            # Map action to mt5 position type constants (0 = BUY, 1 = SELL)
-            pos_type = 0 if action.upper() == "BUY" else 1
-            self.risk_manager.record_stop_out_position(symbol, close_price, pos_type)
         
     def evaluate_news_impact(self, article_id: str, entry_price: float, current_price: float, action: str = "BUY"):
         """
