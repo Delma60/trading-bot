@@ -229,7 +229,7 @@ class LocalCache:
         if timeframe is None:
             timeframe = self._timeframe
         with self._lock:
-            return self._ohlcv.get((symbol.upper(), timeframe), )
+            return self._ohlcv.get(symbol.upper())
 
     def get_features(self, symbol: str) -> Optional[pd.DataFrame]:
         with self._lock:
