@@ -418,10 +418,15 @@ class ConversationalParser:
             if pattern.match(lower):
                 return True
         # Very short messages that aren't clear commands
-        if len(lower.split()) <= 2 and not any(
-            kw in lower for kw in ["go", "scan", "run", "yes", "no", "ok", "done"]
-        ):
-            return True
+        VALID_SINGLES = {
+            "positions", "account", "balance", "history", "retrain",
+            "scan", "news", "risk", "settings", "portfolio", "help",
+        }
+        if len(lower.split()) <= 2:
+            if lower.strip() in VALID_SINGLES:
+                return False   # known command — not ambiguous
+            if not any(kw in lower for kw in ["go", "scan", "run", "yes", "no", "ok", "done"]):
+                return True
         return False
 
     def _resolve_with_context(

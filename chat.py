@@ -547,7 +547,9 @@ class ARIA:
 
     def _update_memory(self, entities: dict):
         if entities.get("symbols"):
-            self.memory["last_symbol"] = entities["symbols"][0]
+            sym = entities["symbols"][0]
+            self.memory["last_symbol"] = sym
+            self.working_memory.last_symbol = sym
         if entities.get("timeframes"):
             self.memory["last_timeframe"] = entities["timeframes"][0]
 
@@ -602,54 +604,6 @@ class ARIA:
                 result = self.broker.close_profitable_positions(symbol=symbol)
             else:
                 result = self.broker.close_profitable_positions()
-
-    def _handle_backtest(self, text: str, entities: dict) -> str:
-        import re
-        from backtester import run_backtest
-
-        symbol = (entities.get("symbols") or [self.memory.get("last_symbol")])[0]
-        if not symbol:
-            return "Which symbol do you want to backtest? Mention it and I'll run the numbers."
-
-        # Parse optional date range from text:  "backtest EURUSD from Jan to June"
-        start, end = "", ""
-        yr_match = re.search(r"20\d{2}", text)
-        year = yr_match.group(0) if yr_match else "2024"
-
-        month_map = {
-            "jan": "01", "feb": "02", "mar": "03", "apr": "04",
-            "may": "05", "jun": "06", "jul": "07", "aug": "08",
-            "sep": "09", "oct": "10", "nov": "11", "dec": "12",
-        }
-        months_found = [v for k, v in month_map.items() if k in text.lower()]
-        if len(months_found) >= 2:
-            start = f"{year}-{months_found[0]}-01"
-            end   = f"{year}-{months_found[1]}-28"
-
-        risk_match = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
-        risk_pct = float(risk_match.group(1)) if risk_match else 1.0
-
-        self._type_print(
-            f"Running backtest on {symbol} "
-            f"({'full history' if not start else f'{start} → {end}'}) "
-            f"at {risk_pct}% risk per trade..."
-        )
-
-        try:
-            result = run_backtest(
-                strategy_manager = self.sm,
-                symbol           = symbol,
-                start_date       = start,
-                end_date         = end,
-                risk_pct         = risk_pct,
-                notify_callback  = lambda m, **_: self._step_callback("backtest", m),
-            )
-            result.save_csv(f"data/backtest_{symbol}.csv")
-            return result.summary()
-        except Exception as exc:
-            return f"Backtest ran into a problem: {exc}"
-            if isinstance(result, list):
-                return "\n".join(result)
             return result
 
         # Close all
@@ -696,6 +650,52 @@ class ARIA:
             return self._handle_trading_symbols_intent(lower)
 
         return None
+
+    def _handle_backtest(self, text: str, entities: dict) -> str:
+        import re
+        from backtester import run_backtest
+
+        symbol = (entities.get("symbols") or [self.memory.get("last_symbol")])[0]
+        if not symbol:
+            return "Which symbol do you want to backtest? Mention it and I'll run the numbers."
+
+        # Parse optional date range from text:  "backtest EURUSD from Jan to June"
+        start, end = "", ""
+        yr_match = re.search(r"20\d{2}", text)
+        year = yr_match.group(0) if yr_match else "2024"
+
+        month_map = {
+            "jan": "01", "feb": "02", "mar": "03", "apr": "04",
+            "may": "05", "jun": "06", "jul": "07", "aug": "08",
+            "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+        }
+        months_found = [v for k, v in month_map.items() if k in text.lower()]
+        if len(months_found) >= 2:
+            start = f"{year}-{months_found[0]}-01"
+            end   = f"{year}-{months_found[1]}-28"
+
+        risk_match = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
+        risk_pct = float(risk_match.group(1)) if risk_match else 1.0
+
+        self._type_print(
+            f"Running backtest on {symbol} "
+            f"({'full history' if not start else f'{start} → {end}'}) "
+            f"at {risk_pct}% risk per trade..."
+        )
+
+        try:
+            result = run_backtest(
+                strategy_manager = self.sm,
+                symbol           = symbol,
+                start_date       = start,
+                end_date         = end,
+                risk_pct         = risk_pct,
+                notify_callback  = lambda m, **_: self._step_callback("backtest", m),
+            )
+            result.save_csv(f"data/backtest_{symbol}.csv")
+            return result.summary()
+        except Exception as exc:
+            return f"Backtest ran into a problem: {exc}"
 
     def _handle_market_status(self) -> str:
         mgr = MarketSessionManager()

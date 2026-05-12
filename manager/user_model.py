@@ -82,7 +82,9 @@ class UserModel:
                 # User requested a trade — mild trust signal
                 self._model["trust_in_bot"] = min(1.0,
                     self._model["trust_in_bot"] + 0.01)
-            self._save()
+            snapshot = dict(self._model)
+
+        self._save(snapshot)
 
     def get_communication_style(self) -> dict:
         """
@@ -132,10 +134,11 @@ class UserModel:
             except Exception:
                 pass
 
-    def _save(self):
+    def _save(self, model_snapshot=None):
         """Save user model to disk."""
+        data = model_snapshot if model_snapshot is not None else self._model
         self.MODEL_FILE.parent.mkdir(exist_ok=True)
-        self.MODEL_FILE.write_text(json.dumps(self._model, indent=2))
+        self.MODEL_FILE.write_text(json.dumps(data, indent=2))
 
     def __getitem__(self, key):
         """Dict-like access to model attributes."""

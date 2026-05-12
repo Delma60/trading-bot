@@ -1387,6 +1387,9 @@ class MarketConditionFilter:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SmartReEntrySystem:
+    def mark_reentered(self, symbol: str):
+        if symbol in self.stopped_out_trades:
+            self.stopped_out_trades[symbol]["re_entered"] = True
     """Tracks stop-outs to allow re-entry if price sweeps liquidity and recovers."""
     def __init__(self):
         self.stopped_out_trades: Dict[str, Dict[str, Any]] = {}  # {symbol: {"time": datetime, "price": float, "direction": str}}
@@ -1545,8 +1548,33 @@ class RiskManager:
     
     LOSS_STREAK_LIMIT = 2
     LOSS_STREAK_PAUSE_MINUTES = 60
-    _consecutive_losses = {}  # {asset_class: int}
-    _loss_cooldown_until = {}  # {asset_class: datetime}
+    def __init__(self, broker, cache=None, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print,
+                 pyramid_min_pips: float = 1.0, spread_tolerance_pips: float = 1.0):
+        self.broker = broker
+        self.cache = cache
+        self.max_open_trades = max_open_trades
+        self.min_margin_level = min_margin_level
+        self.notify = notify_callback
+        self.pyramid_min_pips = pyramid_min_pips
+        self.spread_tolerance_pips = spread_tolerance_pips
+
+        self._loss_lock = threading.Lock()
+
+        self.daily_high_watermark = 0.0
+        self.daily_low_watermark = 0.0
+        self.watermark_date = None
+
+        self.targeter = DynamicRiskTargeter(broker)
+        self.reentry_system = SmartReEntrySystem()
+
+        r = _profile.risk()
+        self.lock_guard = LockBalanceGuard(
+            lock_amount = r.lock_amount,
+            lock_pct    = r.lock_pct_decimal,
+        )
+        self.balance_pip_sizer = BalancePipSizer()
+        self._loss_cooldown_until = {}  # {asset_class: datetime}
+        self._consecutive_losses = {}  # {asset_class: int}
 
     @staticmethod
     def get_asset_class(symbol: str):
@@ -1582,57 +1610,29 @@ class RiskManager:
                     return (False, f"{symbol} and {pos['symbol']} are highly correlated ({corr_matrix[pair]:.2f}) in the same direction.")
         return (True, "OK")
 
-    def __init__(self, broker, cache=None, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print,
-                 pyramid_min_pips: float = 1.0, spread_tolerance_pips: float = 1.0):
-        self.broker = broker
-        self.cache = cache
-        self.max_open_trades = max_open_trades
-        self.min_margin_level = min_margin_level
-        self.notify = notify_callback
-        self.pyramid_min_pips = pyramid_min_pips
-        self.spread_tolerance_pips = spread_tolerance_pips
 
-        self._loss_lock = threading.Lock()
-
-        self.daily_high_watermark = 0.0
-        self.daily_low_watermark = 0.0
-        self.watermark_date = None
-
-        self.targeter = DynamicRiskTargeter(broker)
-        self.reentry_system = SmartReEntrySystem()
-
-        r = _profile.risk()
-        self.lock_guard = LockBalanceGuard(
-            lock_amount = r.lock_amount,
-            lock_pct    = r.lock_pct_decimal,
-        )
-        self.balance_pip_sizer = BalancePipSizer()
-
-    @classmethod
-    def record_loss(cls, symbol: str, notify_callback=print):
+    def record_loss(self, symbol: str, notify_callback=print):
         from manager.profile_manager import profile
         asset_class = profile.get_asset_class(symbol)
         key = asset_class or symbol
-        cls._consecutive_losses[key] = cls._consecutive_losses.get(key, 0) + 1
-        if cls._consecutive_losses[key] >= cls.LOSS_STREAK_LIMIT:
-            pause_until = datetime.now() + timedelta(minutes=cls.LOSS_STREAK_PAUSE_MINUTES)
-            cls._loss_cooldown_until[key] = pause_until
-            cls._consecutive_losses[key] = 0
-            notify_callback(f"⏸ {key}: {cls.LOSS_STREAK_LIMIT} consecutive losses — paused for {cls.LOSS_STREAK_PAUSE_MINUTES}m")
+        self._consecutive_losses[key] = self._consecutive_losses.get(key, 0) + 1
+        if self._consecutive_losses[key] >= self.LOSS_STREAK_LIMIT:
+            pause_until = datetime.now() + timedelta(minutes=self.LOSS_STREAK_PAUSE_MINUTES)
+            self._loss_cooldown_until[key] = pause_until
+            self._consecutive_losses[key] = 0
+            notify_callback(f"⏸ {key}: {self.LOSS_STREAK_LIMIT} consecutive losses — paused for {self.LOSS_STREAK_PAUSE_MINUTES}m")
 
-    @classmethod
-    def record_win(cls, symbol: str):
+    def record_win(self, symbol: str):
         from manager.profile_manager import profile
         asset_class = profile.get_asset_class(symbol)
         key = asset_class or symbol
-        cls._consecutive_losses[key] = 0
+        self._consecutive_losses[key] = 0
 
-    @classmethod
-    def is_loss_paused(cls, symbol: str) -> bool:
+    def is_loss_paused(self, symbol: str) -> bool:
         from manager.profile_manager import profile
         asset_class = profile.get_asset_class(symbol)
         key = asset_class or symbol
-        until = cls._loss_cooldown_until.get(key)
+        until = self._loss_cooldown_until.get(key)
         return bool(until and datetime.now() < until)
     
     def _load_profile(self) -> dict:
@@ -1752,31 +1752,37 @@ class RiskManager:
             current_equity = account.equity
             today = datetime.now().date()
             
+
+            # Always initialize start_of_day_balance
             if self.watermark_date != today:
                 today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
                 today_end = int(datetime.now().timestamp())
                 deals = mt5.history_deals_get(today_start, today_end)
-                
+
                 net_today_pnl = 0.0
                 if deals:
                     for deal in deals:
                         net_today_pnl += deal.profit + getattr(deal, 'commission', 0.0) + getattr(deal, 'fee', 0.0)
-                
+
                 start_of_day_balance = account.balance - net_today_pnl
-                
+
                 self.daily_high_watermark = max(start_of_day_balance, account.balance, current_equity)
                 self.daily_low_watermark = min(start_of_day_balance, account.balance, current_equity)
                 self.watermark_date = today
-            elif current_equity > self.daily_high_watermark:
-                self.daily_high_watermark = current_equity
-            elif current_equity < self.daily_low_watermark:
-                self.daily_low_watermark = current_equity
+            else:
+                # Use previous day's high watermark as fallback if not set
+                # (should only happen if watermark_date is set but not start_of_day_balance)
+                start_of_day_balance = max(getattr(self, 'daily_high_watermark', account.balance), account.balance)
+                if current_equity > self.daily_high_watermark:
+                    self.daily_high_watermark = current_equity
+                elif current_equity < self.daily_low_watermark:
+                    self.daily_low_watermark = current_equity
 
             trailing_drawdown = self.daily_high_watermark - current_equity
-            
-            if max_daily_loss > 0 and trailing_drawdown >= max_daily_loss:
-                return False, f"FATAL: Trailing drawdown limit hit! Peak: ${self.daily_high_watermark:,.2f}, Dropped: ${trailing_drawdown:.2f} (Limit: ${max_daily_loss})"
-            
+            daily_loss_from_start = start_of_day_balance - current_equity
+
+            if daily_loss_from_start >= max_daily_loss:   # true daily loss gate
+                return False, "Daily loss limit reached."
         return True, "System healthy."
     
     def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float, portfolio_size: int) -> Dict[str, Any]:
@@ -2397,9 +2403,6 @@ class TradeGatekeeper:
         if spread is not None and spread > self.max_spread_forex:
             return False, f"Spread too high: {spread:.1f} pips."
         return True, "OK"
-    def mark_reentered(self, symbol: str):
-        if symbol in self.stopped_out_trades:
-            self.stopped_out_trades[symbol]["re_entered"] = True
 
     def _get_spread_pips(self, symbol: str, broker=None, category: Optional[str] = None) -> Optional[float]:
         import MetaTrader5 as mt5
@@ -2467,7 +2470,8 @@ class CorrelationGuard:
     @staticmethod
     def _legs(symbol: str) -> List[str]:
         sym = symbol.upper()
-        if any(sym.startswith(p) for p in ["XAU", "XAG", "BTC", "ETH", "US", "GER"]):
+        INDEX_PREFIXES = {"US30","US500","NAS100","GER40","UK100"}
+        if sym in INDEX_PREFIXES or any(sym.startswith(p) for p in ["XAU","XAG","BTC","ETH"]):
             return []
         if len(sym) >= 6:
             return [sym[:3], sym[3:6]]

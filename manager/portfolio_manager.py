@@ -295,6 +295,11 @@ class PortfolioManager:
                     )
                     
                     if not record["re_entered"] and time_elapsed <= 4.0:
+                        open_syms = [p.symbol for p in self.broker.getPositions() or []]
+                        heat_ok, heat_reason, _ = self.heat_check.check(symbol, open_syms)
+                        if not heat_ok:
+                            results.append(f"⚠️ {symbol}: {heat_reason}")
+                            continue
                         tick = self.broker.get_tick_data(symbol)
                         if tick:
                             current_price = tick.get("ask") if action == "BUY" else tick.get("bid")
