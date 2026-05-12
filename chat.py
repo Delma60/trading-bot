@@ -32,6 +32,8 @@ from manager.conversational_parser import ConversationalParser
 from strategies.strategy_manager import StrategyManager
 from trader import Trader
 from manager.profile_manager import profile
+
+from optimizer import run_full_optimization
 from manager.position_monitor import PositionMonitor
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -558,6 +560,22 @@ class ARIA:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _handle_quick_action(self, intent: str, text: str, entities: dict) -> Optional[str]:
+
+                # Optimizer trigger
+                if text.lower().startswith("run optimizer on "):
+                    symbol = text.lower().split("run optimizer on ")[-1].strip().upper()
+                    # Optionally parse dates from entities/text, here we use defaults
+                    report = run_full_optimization(
+                        self.sm,
+                        symbol=symbol,
+                        start_date="2024-01-01",
+                        end_date="2024-12-31",
+                        n_trials=25,
+                        run_wfo=False,
+                        notify=getattr(self, "_step_callback", None),
+                    )
+                    report.save()
+                    return report.summary()
         lower = text.lower()
 
         # Backtesting

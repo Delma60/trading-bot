@@ -1,21 +1,32 @@
 # strategies/mean_reversion.py
 """
-Mean Reversion Strategy — Refactored
+Mean Reversion Strategy — v4
 
-Root cause of prior underperformance:
-  - Entered on first band touch instead of confirmed reversal
-  - No R:R gate: wins averaged $0.05 vs losses $0.19
-  - SL/TP not returned in signal, so execution used generic fixed pips
-  - RSI checked for level, not direction — stale extremes caused bad entries
+Root cause analysis of poor live performance (40.8% WR, avg win $2.56 vs avg loss $7.34):
+  - SL placed at `low - 5% band_width` was far too wide on high-volatility reversal bars.
+    A reversal bar is almost always larger than average, so the "buffer" was eating into
+    the trade's natural risk immediately.
+  - TP capped at bb_mid (half the band away) while SL could be 2–3x that distance.
+    min_rr=1.5 gate passed on PIPS but not on USD because lots were being sized to the
+    full (inflated) pip stop — producing lopsided dollar outcomes.
+  - No hard volume gate meant entries fired in thin, choppy conditions with no follow-through.
+  - Single-candle confirmation is too fragile; a second candle closing back inside the band
+    is more reliable.
 
-Fixes applied:
-  1. Confirmation candle: price must close BACK inside the band before entry
-  2. RSI must be turning away from extreme, not just sitting there
-  3. Natural SL/TP derived from the band geometry and returned in signal
-  4. Hard R:R gate: skips trade if potential R < 1.5 : 1
-  5. Minimum retracement to midline: ensures enough room to profit
-  6. Squeeze filter: skips when bands are too narrow (no room to profit)
-  7. Graduated confidence tied to actual R:R ratio achieved
+Fixes in v4
+-----------
+1. ATR-based SL: SL = entry ∓ (ATR × atr_sl_mult) anchored to a nearby swing low/high,
+   whichever is tighter. This caps the dollar risk regardless of band width.
+2. Tiered TP: primary TP at bb_mid (1R minimum); if R:R allows, extend to 1.618× risk
+   (Fibonacci extension). Entry lot size is sized against the ATR stop.
+3. Hard volume gate: vol_ratio must exceed volume_mult before the signal fires.
+4. Two-candle confirmation: both the touch bar AND the recovery bar must satisfy
+   their respective conditions (not just the last closed bar).
+5. RSI must cross back above/below a recovery threshold (not just be "turning").
+6. Tighter ADX floor: 30 instead of 28 to ensure we're genuinely in a ranging regime.
+7. ATR spread check: skip if ATR is spiking (> 2.5× normal) — news / stop-hunt conditions.
+8. Stochastic confirmation gate (hard, not just scoring): stoch_k must be in the
+   extreme zone at the touch bar for a buy/sell to qualify.
 """
 
 import pandas as pd
@@ -26,31 +37,49 @@ class MeanReversionStrategy:
 
     def __init__(
         self,
-        bb_length:        int   = 20,
-        bb_std:           float = 2.0,
-        rsi_length:       int   = 14,
-        stoch_k:          int   = 14,
-        stoch_d:          int   = 3,
-        adx_length:       int   = 14,
-        adx_threshold:    float = 28.0,   # above → trending, skip
-        volume_mult:      float = 1.15,   # volume spike confirmation
-        min_rr:           float = 1.5,    # hard R:R floor before signalling
-        min_midline_dist: float = 0.003,  # min % distance price→midline (room to profit)
-        min_bb_width:     float = 0.005,  # min % BB width — skip squeezed markets
-        rsi_turn_bars:    int   = 3,      # lookback bars to detect RSI turning
+        bb_length:          int   = 20,
+        bb_std:             float = 2.0,
+        rsi_length:         int   = 14,
+        stoch_k:            int   = 14,
+        stoch_d:            int   = 3,
+        adx_length:         int   = 14,
+        adx_threshold:      float = 30.0,   # raised: must be genuinely ranging
+        atr_length:         int   = 14,
+        atr_sl_mult:        float = 1.2,    # SL = ATR × this from entry
+        atr_spike_mult:     float = 2.5,    # skip if ATR > N × 20-bar ATR avg (news guard)
+        volume_mult:        float = 1.20,   # HARD gate — bar must exceed N× avg vol
+        rsi_buy_extreme:    float = 38.0,   # RSI must be ≤ this at the touch bar
+        rsi_sell_extreme:   float = 62.0,   # RSI must be ≥ this at the touch bar
+        rsi_recovery_buy:   float = 42.0,   # RSI must cross back above this on confirmation
+        rsi_recovery_sell:  float = 58.0,   # RSI must cross back below this on confirmation
+        stoch_buy_max:      float = 30.0,   # stoch_k ≤ this at touch (oversold)
+        stoch_sell_min:     float = 70.0,   # stoch_k ≥ this at touch (overbought)
+        min_rr:             float = 1.5,    # primary TP at bb_mid; fail if below this
+        tp_extension_ratio: float = 1.618,  # Fib extension for secondary TP
+        min_bb_width_atr:   float = 0.8,    # band width must be ≥ this × ATR (meaningful range)
+        rsi_turn_bars:      int   = 3,
     ):
-        self.bb_length        = bb_length
-        self.bb_std           = bb_std
-        self.rsi_length       = rsi_length
-        self.stoch_k          = stoch_k
-        self.stoch_d          = stoch_d
-        self.adx_length       = adx_length
-        self.adx_threshold    = adx_threshold
-        self.volume_mult      = volume_mult
-        self.min_rr           = min_rr
-        self.min_midline_dist = min_midline_dist
-        self.min_bb_width     = min_bb_width
-        self.rsi_turn_bars    = rsi_turn_bars
+        self.bb_length          = bb_length
+        self.bb_std             = bb_std
+        self.rsi_length         = rsi_length
+        self.stoch_k            = stoch_k
+        self.stoch_d            = stoch_d
+        self.adx_length         = adx_length
+        self.adx_threshold      = adx_threshold
+        self.atr_length         = atr_length
+        self.atr_sl_mult        = atr_sl_mult
+        self.atr_spike_mult     = atr_spike_mult
+        self.volume_mult        = volume_mult
+        self.rsi_buy_extreme    = rsi_buy_extreme
+        self.rsi_sell_extreme   = rsi_sell_extreme
+        self.rsi_recovery_buy   = rsi_recovery_buy
+        self.rsi_recovery_sell  = rsi_recovery_sell
+        self.stoch_buy_max      = stoch_buy_max
+        self.stoch_sell_min     = stoch_sell_min
+        self.min_rr             = min_rr
+        self.tp_extension_ratio = tp_extension_ratio
+        self.min_bb_width_atr   = min_bb_width_atr
+        self.rsi_turn_bars      = rsi_turn_bars
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -67,7 +96,7 @@ class MeanReversionStrategy:
             return self._wait(f"Indicator error: {e}")
 
         data.dropna(inplace=True)
-        if len(data) < 4:
+        if len(data) < 5:
             return self._wait("Insufficient data after indicator warm-up.")
 
         return self._evaluate(data)
@@ -80,9 +109,14 @@ class MeanReversionStrategy:
         if bb is None or bb.empty:
             raise ValueError("Bollinger Bands failed.")
         data = pd.concat([data, bb], axis=1)
-        self._bb_lower = [c for c in bb.columns if c.startswith("BBL")][0]
-        self._bb_upper = [c for c in bb.columns if c.startswith("BBU")][0]
-        self._bb_mid   = [c for c in bb.columns if c.startswith("BBM")][0]
+        self._bbl = [c for c in bb.columns if c.startswith("BBL")][0]
+        self._bbu = [c for c in bb.columns if c.startswith("BBU")][0]
+        self._bbm = [c for c in bb.columns if c.startswith("BBM")][0]
+
+        # ATR
+        data["atr"] = ta.atr(data["high"], data["low"], data["close"],
+                              length=self.atr_length)
+        data["atr_avg20"] = data["atr"].rolling(20).mean()
 
         # RSI
         data["rsi"] = ta.rsi(data["close"], length=self.rsi_length)
@@ -92,271 +126,316 @@ class MeanReversionStrategy:
                          k=self.stoch_k, d=self.stoch_d)
         if stoch is not None and not stoch.empty:
             data = pd.concat([data, stoch], axis=1)
-            self._stoch_k = [c for c in stoch.columns if c.startswith("STOCHk")][0]
-            self._stoch_d = [c for c in stoch.columns if c.startswith("STOCHd")][0]
+            self._sk = [c for c in stoch.columns if c.startswith("STOCHk")][0]
+            self._sd = [c for c in stoch.columns if c.startswith("STOCHd")][0]
         else:
-            data["_stoch_k"] = 50.0
-            data["_stoch_d"] = 50.0
-            self._stoch_k = "_stoch_k"
-            self._stoch_d = "_stoch_d"
+            data["_sk"] = 50.0
+            data["_sd"] = 50.0
+            self._sk = "_sk"
+            self._sd = "_sd"
 
         # ADX
-        adx_df = ta.adx(data["high"], data["low"], data["close"], length=self.adx_length)
+        adx_df = ta.adx(data["high"], data["low"], data["close"],
+                         length=self.adx_length)
         if adx_df is not None and not adx_df.empty:
             data = pd.concat([data, adx_df], axis=1)
-            self._adx_col = [c for c in adx_df.columns if c.startswith("ADX")][0]
+            self._adx = [c for c in adx_df.columns if c.startswith("ADX")][0]
         else:
             data["_adx"] = 0.0
-            self._adx_col = "_adx"
+            self._adx = "_adx"
 
         # Volume ratio
         data["vol_avg"]   = data["volume"].rolling(20).mean()
         data["vol_ratio"] = data["volume"] / data["vol_avg"].replace(0, float("nan"))
+
+        # Swing lows/highs (5-bar lookback) for structural SL anchor
+        data["swing_low"]  = data["low"].rolling(5, center=True).min()
+        data["swing_high"] = data["high"].rolling(5, center=True).max()
 
         return data
 
     # ── Signal evaluation ─────────────────────────────────────────────────────
 
     def _evaluate(self, data: pd.DataFrame) -> dict:
-        # Index -1 = live (potentially open) candle
-        # Index -2 = last confirmed closed candle  (signal candle)
-        # Index -3 = the candle before that        (touch candle for confirmation pattern)
-        bar     = data.iloc[-2]   # signal bar — must close back inside the band
-        prev    = data.iloc[-3]   # prior bar — the one that touched/breached the band
+        # bar  = last confirmed closed candle (confirmation / entry bar)
+        # prev = the bar before it              (touch / extreme bar)
+        bar  = data.iloc[-2]
+        prev = data.iloc[-3]
 
         close   = float(bar["close"])
         open_   = float(bar["open"])
-        low     = float(bar["low"])
         high    = float(bar["high"])
+        low     = float(bar["low"])
 
-        bb_lower  = float(bar[self._bb_lower])
-        bb_upper  = float(bar[self._bb_upper])
-        bb_mid    = float(bar[self._bb_mid])
-        bb_width  = (bb_upper - bb_lower) / (bb_mid + 1e-9)
+        bb_lower = float(bar[self._bbl])
+        bb_upper = float(bar[self._bbu])
+        bb_mid   = float(bar[self._bbm])
+        bb_width = bb_upper - bb_lower
 
-        adx       = float(bar[self._adx_col])
+        atr       = float(bar["atr"])
+        atr_avg   = float(bar["atr_avg20"])
+        adx       = float(bar[self._adx])
         rsi       = float(bar["rsi"])
-        stoch_k   = float(bar[self._stoch_k])
-        stoch_d   = float(bar[self._stoch_d])
+        prev_rsi  = float(prev["rsi"])
+        stoch_k   = float(bar[self._sk])
+        prev_sk   = float(prev[self._sk])
         vol_ratio = float(bar["vol_ratio"]) if not pd.isna(bar["vol_ratio"]) else 1.0
 
         prev_close  = float(prev["close"])
-        prev_lower  = float(prev[self._bb_lower])
-        prev_upper  = float(prev[self._bb_upper])
+        prev_low    = float(prev["low"])
+        prev_high   = float(prev["high"])
+        prev_bbl    = float(prev[self._bbl])
+        prev_bbu    = float(prev[self._bbu])
 
-        # ── Gate 1: ADX — must be ranging ────────────────────────────────────
+        # ── Gate 1: ATR spike guard (news / stop-hunt filter) ────────────────
+        if atr_avg > 0 and atr > self.atr_spike_mult * atr_avg:
+            return self._wait(
+                f"ATR spike detected ({atr:.5f} > {self.atr_spike_mult}× avg {atr_avg:.5f}). "
+                f"Likely news or stop-hunt conditions — skipping."
+            )
+
+        # ── Gate 2: ADX — must be ranging ────────────────────────────────────
         if adx > self.adx_threshold:
             return self._wait(
-                f"Market is trending (ADX {adx:.1f} > {self.adx_threshold}). "
-                f"Mean reversion is unreliable in trends."
+                f"Market trending (ADX {adx:.1f} > {self.adx_threshold}). "
+                f"Mean reversion unreliable in directional markets."
             )
 
-        # ── Gate 2: Band width — skip squeezed markets ────────────────────────
-        # Narrow bands mean little room between entry and target; not worth the risk.
-        if bb_width < self.min_bb_width:
+        # ── Gate 3: Band width meaningful relative to ATR ─────────────────────
+        if atr > 0 and bb_width < self.min_bb_width_atr * atr:
             return self._wait(
-                f"Bands too narrow (width {bb_width:.4f}). "
-                f"Insufficient room to profit; waiting for expansion."
+                f"Bands too narrow relative to ATR "
+                f"(BB width {bb_width:.5f} < {self.min_bb_width_atr}× ATR {atr:.5f}). "
+                f"No meaningful oscillation range to trade."
             )
 
-        # ── Gate 3: RSI momentum direction ───────────────────────────────────
-        # RSI must be turning back from extreme, not stalling at it.
-        rsi_series = data["rsi"].iloc[-(self.rsi_turn_bars + 2):-1]
-        rsi_peak   = float(rsi_series.max())
-        rsi_trough = float(rsi_series.min())
-        rsi_turning_up   = rsi > rsi_trough + 2.0   # RSI bouncing from its recent low
-        rsi_turning_down = rsi < rsi_peak  - 2.0    # RSI falling from its recent high
+        # ── Gate 4: Hard volume confirmation ─────────────────────────────────
+        if vol_ratio < self.volume_mult:
+            return self._wait(
+                f"Volume too low on signal bar ({vol_ratio:.2f}× < {self.volume_mult}×). "
+                f"No institutional participation — skip."
+            )
 
-        # ── BUY path ─────────────────────────────────────────────────────────
-        # Confirmation pattern: previous bar closed BELOW lower band,
-        # current bar closes back INSIDE (above lower band) with a bullish body.
-        prev_breached_lower = prev_close < prev_lower
-        current_reclaimed   = close > bb_lower        # back inside
-        bullish_body        = close > open_            # green candle
+        # ── BUY setup ────────────────────────────────────────────────────────
+        # Touch bar: close breached lower band AND stochastic was oversold
+        touch_lower   = prev_close < prev_bbl
+        stoch_oversold = prev_sk <= self.stoch_buy_max
+        rsi_extreme   = prev_rsi <= self.rsi_buy_extreme
 
-        if prev_breached_lower and current_reclaimed and bullish_body:
-            if not rsi_turning_up:
+        # Confirmation bar: closed back inside band with bullish body
+        confirmed_bull = close > bb_lower and close > open_
+
+        # RSI crossed back above recovery level
+        rsi_recovered_bull = prev_rsi < self.rsi_recovery_buy and rsi >= self.rsi_recovery_buy
+
+        if touch_lower and stoch_oversold and rsi_extreme and confirmed_bull:
+            if not rsi_recovered_bull:
                 return self._wait(
-                    f"Bullish reversal candle present but RSI not yet turning "
-                    f"(RSI {rsi:.1f}, trough {rsi_trough:.1f}). Waiting."
+                    f"Bullish setup forming but RSI hasn't crossed recovery threshold yet "
+                    f"(RSI {rsi:.1f}, need ≥ {self.rsi_recovery_buy} from {prev_rsi:.1f}). "
+                    f"Waiting one more bar."
                 )
 
-            # Natural targets: SL below the signal bar low, TP at midline
-            sl_price = low - (bb_upper - bb_lower) * 0.05   # 5% of band width below the low
-            tp_price = bb_mid
+            # ATR-anchored SL — tighter of: ATR stop OR structural swing low
+            atr_sl       = close - (self.atr_sl_mult * atr)
+            structural_sl = float(data["swing_low"].iloc[-3]) - (0.1 * atr)
+            sl_price     = max(atr_sl, structural_sl)   # less aggressive of the two
+            sl_price     = min(sl_price, low - 0.5 * atr)  # never tighter than half ATR below bar low
 
-            # R:R gate
-            risk   = close - sl_price
-            reward = tp_price - close
-            if risk <= 0 or reward <= 0:
-                return self._wait("BUY targets invalid (price at or above midline).")
+            risk = close - sl_price
+            if risk <= 0:
+                return self._wait("BUY SL invalid — price at or below structural swing low.")
 
-            rr = reward / risk
-            if rr < self.min_rr:
+            # Primary TP at bb_mid; extended TP at Fib ratio
+            tp_primary   = bb_mid
+            tp_extended  = close + (risk * self.tp_extension_ratio)
+            reward_primary = tp_primary - close
+
+            if reward_primary <= 0:
+                return self._wait("BUY TP invalid — price already at or above midline.")
+
+            rr_primary = reward_primary / risk
+            if rr_primary < self.min_rr:
                 return self._wait(
-                    f"R:R {rr:.2f} below minimum {self.min_rr}. "
-                    f"Not enough room to midline to justify the risk."
+                    f"BUY R:R {rr_primary:.2f}:1 below minimum {self.min_rr}. "
+                    f"Midline too close ({reward_primary:.5f}) relative to SL ({risk:.5f})."
                 )
 
-            # Distance to midline as % of price — ensures meaningful profit potential
-            midline_dist = reward / close
-            if midline_dist < self.min_midline_dist:
-                return self._wait(
-                    f"Midline too close ({midline_dist:.3%}). "
-                    f"Not enough upside to the mean."
-                )
+            # Use extended TP if it gives better R:R
+            use_tp  = tp_extended if tp_extended > tp_primary else tp_primary
+            reward  = use_tp - close
+            rr      = reward / risk
 
-            # Convert SL/TP to pips for the execution layer
-            pip_mult   = self._pip_multiplier(close)
-            sl_pips    = round(risk * pip_mult, 1)
-            tp_pips    = round(reward * pip_mult, 1)
+            pip_mult = self._pip_mult(close)
+            sl_pips  = round(risk * pip_mult, 1)
+            tp_pips  = round(reward * pip_mult, 1)
 
-            confidence = self._score_buy(rsi, stoch_k, stoch_d, vol_ratio, rr, adx)
+            confidence = self._score_buy(
+                rsi, prev_rsi, prev_sk, vol_ratio, rr, adx, stoch_k
+            )
+
             return {
                 "action":     "BUY",
                 "confidence": confidence,
-                "reason":     (
-                    f"Mean Reversion BUY — confirmed reversal off lower band. "
-                    f"RSI {rsi:.1f} turning up. "
-                    f"R:R {rr:.2f}:1 | SL {sl_pips}p → TP {tp_pips}p (midline). "
-                    f"ADX {adx:.1f}, Vol {vol_ratio:.1f}x."
+                "reason": (
+                    f"Mean Reversion BUY — two-bar confirmed recovery off lower BB. "
+                    f"RSI {prev_rsi:.1f}→{rsi:.1f} (crossed {self.rsi_recovery_buy}). "
+                    f"Stoch {prev_sk:.1f} (extreme ≤ {self.stoch_buy_max}). "
+                    f"ATR SL: {sl_pips}p | TP: {tp_pips}p | R:R {rr:.2f}:1. "
+                    f"ADX {adx:.1f}, Vol {vol_ratio:.1f}×."
                 ),
-                "sl_pips": sl_pips,
-                "tp_pips": tp_pips,
-                "sl_price": round(sl_price, 5),
-                "tp_price": round(tp_price, 5),
-                "rr":       round(rr, 2),
+                "sl_pips":   sl_pips,
+                "tp_pips":   tp_pips,
+                "sl_price":  round(sl_price, 5),
+                "tp_price":  round(use_tp, 5),
+                "rr":        round(rr, 2),
             }
 
-        # ── SELL path ─────────────────────────────────────────────────────────
-        prev_breached_upper = prev_close > prev_upper
-        current_reclaimed   = close < bb_upper
-        bearish_body        = close < open_
+        # ── SELL setup ───────────────────────────────────────────────────────
+        touch_upper    = prev_close > prev_bbu
+        stoch_overbought = prev_sk >= self.stoch_sell_min
+        rsi_extreme_sell = prev_rsi >= self.rsi_sell_extreme
 
-        if prev_breached_upper and current_reclaimed and bearish_body:
-            if not rsi_turning_down:
+        confirmed_bear = close < bb_upper and close < open_
+
+        rsi_recovered_bear = prev_rsi > self.rsi_recovery_sell and rsi <= self.rsi_recovery_sell
+
+        if touch_upper and stoch_overbought and rsi_extreme_sell and confirmed_bear:
+            if not rsi_recovered_bear:
                 return self._wait(
-                    f"Bearish reversal candle present but RSI not yet turning "
-                    f"(RSI {rsi:.1f}, peak {rsi_peak:.1f}). Waiting."
+                    f"Bearish setup forming but RSI hasn't crossed recovery threshold yet "
+                    f"(RSI {rsi:.1f}, need ≤ {self.rsi_recovery_sell} from {prev_rsi:.1f}). "
+                    f"Waiting one more bar."
                 )
 
-            sl_price = high + (bb_upper - bb_lower) * 0.05
-            tp_price = bb_mid
+            atr_sl        = close + (self.atr_sl_mult * atr)
+            structural_sl = float(data["swing_high"].iloc[-3]) + (0.1 * atr)
+            sl_price      = min(atr_sl, structural_sl)
+            sl_price      = max(sl_price, high + 0.5 * atr)
 
-            risk   = sl_price - close
-            reward = close - tp_price
-            if risk <= 0 or reward <= 0:
-                return self._wait("SELL targets invalid (price at or below midline).")
+            risk = sl_price - close
+            if risk <= 0:
+                return self._wait("SELL SL invalid — price at or above structural swing high.")
 
-            rr = reward / risk
-            if rr < self.min_rr:
+            tp_primary   = bb_mid
+            tp_extended  = close - (risk * self.tp_extension_ratio)
+            reward_primary = close - tp_primary
+
+            if reward_primary <= 0:
+                return self._wait("SELL TP invalid — price already at or below midline.")
+
+            rr_primary = reward_primary / risk
+            if rr_primary < self.min_rr:
                 return self._wait(
-                    f"R:R {rr:.2f} below minimum {self.min_rr}. "
-                    f"Not enough room to midline to justify the risk."
+                    f"SELL R:R {rr_primary:.2f}:1 below minimum {self.min_rr}. "
+                    f"Midline too close relative to SL."
                 )
 
-            midline_dist = reward / close
-            if midline_dist < self.min_midline_dist:
-                return self._wait(
-                    f"Midline too close ({midline_dist:.3%}). "
-                    f"Not enough downside to the mean."
-                )
+            use_tp  = tp_extended if tp_extended < tp_primary else tp_primary
+            reward  = close - use_tp
+            rr      = reward / risk
 
-            pip_mult   = self._pip_multiplier(close)
-            sl_pips    = round(risk * pip_mult, 1)
-            tp_pips    = round(reward * pip_mult, 1)
+            pip_mult = self._pip_mult(close)
+            sl_pips  = round(risk * pip_mult, 1)
+            tp_pips  = round(reward * pip_mult, 1)
 
-            confidence = self._score_sell(rsi, stoch_k, stoch_d, vol_ratio, rr, adx)
+            confidence = self._score_sell(
+                rsi, prev_rsi, prev_sk, vol_ratio, rr, adx, stoch_k
+            )
+
             return {
                 "action":     "SELL",
                 "confidence": confidence,
-                "reason":     (
-                    f"Mean Reversion SELL — confirmed reversal off upper band. "
-                    f"RSI {rsi:.1f} turning down. "
-                    f"R:R {rr:.2f}:1 | SL {sl_pips}p → TP {tp_pips}p (midline). "
-                    f"ADX {adx:.1f}, Vol {vol_ratio:.1f}x."
+                "reason": (
+                    f"Mean Reversion SELL — two-bar confirmed rejection off upper BB. "
+                    f"RSI {prev_rsi:.1f}→{rsi:.1f} (crossed {self.rsi_recovery_sell}). "
+                    f"Stoch {prev_sk:.1f} (extreme ≥ {self.stoch_sell_min}). "
+                    f"ATR SL: {sl_pips}p | TP: {tp_pips}p | R:R {rr:.2f}:1. "
+                    f"ADX {adx:.1f}, Vol {vol_ratio:.1f}×."
                 ),
-                "sl_pips": sl_pips,
-                "tp_pips": tp_pips,
-                "sl_price": round(sl_price, 5),
-                "tp_price": round(tp_price, 5),
-                "rr":       round(rr, 2),
+                "sl_pips":   sl_pips,
+                "tp_pips":   tp_pips,
+                "sl_price":  round(sl_price, 5),
+                "tp_price":  round(use_tp, 5),
+                "rr":        round(rr, 2),
             }
 
         return self._wait(
-            f"No confirmed reversal candle. ADX {adx:.1f}, RSI {rsi:.1f}. "
-            f"Price within bands [{bb_lower:.5f} – {bb_upper:.5f}]."
+            f"No two-bar reversal confirmation. "
+            f"ADX {adx:.1f} | RSI {rsi:.1f} | Stoch {stoch_k:.1f} | "
+            f"Bands [{bb_lower:.5f} – {bb_upper:.5f}]."
         )
 
     # ── Confidence scoring ────────────────────────────────────────────────────
 
-    def _score_buy(self, rsi, stoch_k, stoch_d, vol_ratio, rr, adx) -> float:
+    def _score_buy(
+        self, rsi: float, prev_rsi: float, prev_sk: float,
+        vol_ratio: float, rr: float, adx: float, stoch_k_now: float
+    ) -> float:
         score = 0.50
 
-        # RSI depth (deeper = stronger mean reversion pressure)
-        if rsi < 25:
-            score += 0.12
-        elif rsi < 30:
-            score += 0.08
-        elif rsi < 40:
-            score += 0.04
+        # RSI depth at touch (deeper = more stretched = stronger bounce expected)
+        if prev_rsi < 25:   score += 0.12
+        elif prev_rsi < 30: score += 0.08
+        elif prev_rsi < 38: score += 0.04
 
-        # Stochastic oversold confirmation
-        if stoch_k < 20 and stoch_d < 20:
-            score += 0.08
-        elif stoch_k < 30:
-            score += 0.04
+        # Stochastic depth at touch
+        if prev_sk < 15:    score += 0.08
+        elif prev_sk < 20:  score += 0.05
+        elif prev_sk < 30:  score += 0.02
 
-        # Volume: institutional footprint at the reversal
-        if vol_ratio >= 1.5:
-            score += 0.07
-        elif vol_ratio >= self.volume_mult:
-            score += 0.04
+        # Stochastic crossing back up (recovery confirmation)
+        if stoch_k_now > prev_sk + 5: score += 0.05
 
-        # R:R quality (capped at R:R = 3)
-        score += min((rr - self.min_rr) / (3.0 - self.min_rr), 1.0) * 0.08
+        # Volume (institutional reversal footprint)
+        if vol_ratio >= 2.0:   score += 0.08
+        elif vol_ratio >= 1.5: score += 0.05
+        else:                  score += 0.02   # already passed hard gate at 1.2
 
-        # Ranging confirmation (lower ADX = more ranging = better for mean rev)
-        if adx < 20:
-            score += 0.05
+        # R:R quality (cap contribution at R:R = 4)
+        score += min((rr - self.min_rr) / 2.5, 1.0) * 0.08
+
+        # Ranging confirmation (lower ADX within threshold = cleaner range)
+        if adx < 20:   score += 0.05
+        elif adx < 25: score += 0.02
 
         return round(min(score, 0.95), 2)
 
-    def _score_sell(self, rsi, stoch_k, stoch_d, vol_ratio, rr, adx) -> float:
+    def _score_sell(
+        self, rsi: float, prev_rsi: float, prev_sk: float,
+        vol_ratio: float, rr: float, adx: float, stoch_k_now: float
+    ) -> float:
         score = 0.50
 
-        if rsi > 75:
-            score += 0.12
-        elif rsi > 70:
-            score += 0.08
-        elif rsi > 60:
-            score += 0.04
+        if prev_rsi > 75:   score += 0.12
+        elif prev_rsi > 70: score += 0.08
+        elif prev_rsi > 62: score += 0.04
 
-        if stoch_k > 80 and stoch_d > 80:
-            score += 0.08
-        elif stoch_k > 70:
-            score += 0.04
+        if prev_sk > 85:    score += 0.08
+        elif prev_sk > 80:  score += 0.05
+        elif prev_sk > 70:  score += 0.02
 
-        if vol_ratio >= 1.5:
-            score += 0.07
-        elif vol_ratio >= self.volume_mult:
-            score += 0.04
+        if stoch_k_now < prev_sk - 5: score += 0.05
 
-        score += min((rr - self.min_rr) / (3.0 - self.min_rr), 1.0) * 0.08
+        if vol_ratio >= 2.0:   score += 0.08
+        elif vol_ratio >= 1.5: score += 0.05
+        else:                  score += 0.02
 
-        if adx < 20:
-            score += 0.05
+        score += min((rr - self.min_rr) / 2.5, 1.0) * 0.08
+
+        if adx < 20:   score += 0.05
+        elif adx < 25: score += 0.02
 
         return round(min(score, 0.95), 2)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _pip_multiplier(price: float) -> float:
-        """Rough pip multiplier based on price magnitude."""
-        if price > 100:    # JPY pairs, Gold, indices
+    def _pip_mult(price: float) -> float:
+        """Approximate pip multiplier from price magnitude."""
+        if price > 100:   # JPY, Gold, Indices
             return 100.0
-        return 10000.0     # Standard forex (5-digit)
+        return 10000.0    # Standard 5-digit Forex
 
     @staticmethod
     def _wait(reason: str) -> dict:
