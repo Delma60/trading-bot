@@ -250,8 +250,21 @@ class MetaScorer:
             lstm_prediction.get("direction", "NEUTRAL"), "WAIT"
         )
         lstm_conf = float(lstm_prediction.get("confidence", 0.0))
-        
-        lstm_weight = 3.0 if lstm_conf > 0.70 else 0.5
+
+        # Enforce consensus check: count active strategies matching the LSTM direction
+        matching_strategies = sum(
+            1 for name, sig in strategy_signals.items()
+            if name not in ("News_Trading", "Sentiment_Analysis")
+            and sig.get("action", "WAIT") == lstm_action
+            and lstm_action != "WAIT"
+        )
+
+        # Require agreement with at least 2 strategies before granting bonus weight,
+        # and cap the max bonus to prevent absolute domination.
+        if lstm_conf > 0.70 and matching_strategies >= 2:
+            lstm_weight = 2.0
+        else:
+            lstm_weight = 0.5
         votes[lstm_action] += lstm_conf * lstm_weight
 
         total = sum(votes.values()) or 1.0

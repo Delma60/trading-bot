@@ -1751,9 +1751,8 @@ class RiskManager:
         with self._loss_lock:
             current_equity = account.equity
             today = datetime.now().date()
-            
 
-            # Always initialize start_of_day_balance
+            # Securely initialize baseline once per day
             if self.watermark_date != today:
                 today_start = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
                 today_end = int(datetime.now().timestamp())
@@ -1769,10 +1768,11 @@ class RiskManager:
                 self.daily_high_watermark = max(start_of_day_balance, account.balance, current_equity)
                 self.daily_low_watermark = min(start_of_day_balance, account.balance, current_equity)
                 self.watermark_date = today
+                # Explicitly cache the pristine start-of-day reference
+                self._start_of_day_balance = start_of_day_balance
             else:
-                # Use previous day's high watermark as fallback if not set
-                # (should only happen if watermark_date is set but not start_of_day_balance)
-                start_of_day_balance = max(getattr(self, 'daily_high_watermark', account.balance), account.balance)
+                # Retrieve the true start-of-day baseline securely
+                start_of_day_balance = getattr(self, '_start_of_day_balance', account.balance)
                 if current_equity > self.daily_high_watermark:
                     self.daily_high_watermark = current_equity
                 elif current_equity < self.daily_low_watermark:
@@ -1781,8 +1781,8 @@ class RiskManager:
             trailing_drawdown = self.daily_high_watermark - current_equity
             daily_loss_from_start = start_of_day_balance - current_equity
 
-            if daily_loss_from_start >= max_daily_loss:   # true daily loss gate
-                return False, "Daily loss limit reached."
+            if max_daily_loss > 0 and daily_loss_from_start >= max_daily_loss:
+                return False, f"Daily loss limit reached. Net decline from baseline: ${daily_loss_from_start:,.2f}."
         return True, "System healthy."
     
     def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float, portfolio_size: int) -> Dict[str, Any]:
@@ -1891,10 +1891,13 @@ class RiskManager:
 
         clean_lot_size = math.floor(raw_lot_size / step_lot) * step_lot
 
-        # Fallback to minimum lot size instead of dropping the trade entirely
+        # Fallback safeguard: prevent extreme leverage scaling
         if clean_lot_size < min_lot:
+            risk_at_min_lot = min_lot * risk_per_1_lot
+            # If the broker minimum forces us to exceed 2x our intended dollar risk, reject the trade entirely.
+            if risk_at_min_lot > risk_amount_usd * 2.0:
+                return 0.0 
             return min_lot 
-            
         if clean_lot_size > max_lot:
             return max_lot
 

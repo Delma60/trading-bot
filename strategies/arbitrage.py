@@ -64,15 +64,16 @@ class ArbitrageStrategy:
         z_score_threshold: float = 2.0,
         lookback: int = 20,
         min_correlation: float = 0.80,
+        cache_ttl_hours: float = 4.0,
     ):
         self._registry          = symbol_registry   # SymbolRegistry or None
         self.z_score_threshold  = z_score_threshold
         self.lookback           = lookback
         self.min_correlation    = min_correlation
+        self.cache_ttl_hours    = cache_ttl_hours
 
-        # {primary_symbol: sister_symbol | None}
-        # Cached so we don't re-run the correlation matrix every bar.
-        self._pair_cache: dict[str, Optional[str]] = {}
+        # {primary_symbol: (sister_symbol | None, timestamp)}
+        self._pair_cache: dict[str, tuple[Optional[str], datetime]] = {}
 
     # ------------------------------------------------------------------
     # Universe resolution
@@ -103,14 +104,19 @@ class ArbitrageStrategy:
         Scan the universe to find the asset most correlated with `symbol`.
 
         The result is cached so the expensive Daily-data correlation
-        matrix is only computed once per primary symbol per session.
+        matrix is only computed once per primary symbol per session, or until TTL expiry.
         """
+        from datetime import datetime
+        now = datetime.now()
+        # Invalidate stale pair correlations exceeding TTL expiration limits
         if symbol in self._pair_cache:
-            return self._pair_cache[symbol]
+            cached_pair, cached_time = self._pair_cache[symbol]
+            if (now - cached_time).total_seconds() < self.cache_ttl_hours * 3600:
+                return cached_pair
 
         primary_df = broker.get_historical_rates(symbol, timeframe="D1", count=100)
         if primary_df is None or primary_df.empty:
-            self._pair_cache[symbol] = None
+            self._pair_cache[symbol] = (None, now)
             return None
 
         universe = self._universe()
@@ -139,7 +145,7 @@ class ArbitrageStrategy:
                 highest_correlation = corr
                 best_pair = candidate
 
-        self._pair_cache[symbol] = best_pair
+        self._pair_cache[symbol] = (best_pair, now)
         return best_pair
 
     # ------------------------------------------------------------------
