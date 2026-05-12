@@ -23,9 +23,29 @@ class Trader:
         self._cooldown: dict[str, datetime] = {}
         self._cooldown_lock = threading.Lock()
         self._cooldown_seconds = 5  # default cooldown duration in seconds
-        self._ticket_strategy: dict[int, str] = {}  # maps ticket → strategy name
+        self._ticket_strategy: dict[int, str] = {}
+        self._ticket_strategy_path = Path("data/cache/ticket_strategy.json")
+        self._load_ticket_strategy()
         # Legacy lock for compatibility
         self._order_lock = self._execution_lock
+        
+    def _load_ticket_strategy(self):
+        try:
+            if self._ticket_strategy_path.exists():
+                import json
+                with self._ticket_strategy_path.open("r", encoding="utf-8") as f:
+                    self._ticket_strategy = {int(k): v for k, v in json.load(f).items()}
+        except Exception:
+            self._ticket_strategy = {}
+
+    def _save_ticket_strategy(self):
+            try:
+                import json
+                self._ticket_strategy_path.parent.mkdir(parents=True, exist_ok=True)
+                with self._ticket_strategy_path.open("w", encoding="utf-8") as f:
+                    json.dump({str(k): v for k, v in self._ticket_strategy.items()}, f, indent=2)
+            except Exception:
+                pass
         
 
     def set_cooldown(self, seconds: int):
@@ -55,6 +75,7 @@ class Trader:
         """Return the strategy that opened this ticket from memory, or fallback to trade_history.csv."""
         strat = self._ticket_strategy.pop(ticket, None)
         if strat is not None and strat != "Unknown":
+            self._save_ticket_strategy()
             return strat
         
         # Persistent fallback: scan the logged CSV history across bot restarts
@@ -503,6 +524,7 @@ class Trader:
             # 6. Check if it succeeded and handle specific error codes
             if result.retcode == mt5.TRADE_RETCODE_DONE:
                 self._ticket_strategy[result.order] = strategy   # register which strategy opened this ticket
+                self._save_ticket_strategy()
                 self._log_trade_history(
                     action=action.upper(),
                     symbol=symbol,

@@ -120,3 +120,4 @@ data/user_model.json
 data/unsupervised/
 models/weights/
 *.log
+data/cache/

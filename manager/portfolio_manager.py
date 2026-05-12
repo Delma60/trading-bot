@@ -67,6 +67,32 @@ class PortfolioManager:
         # AI Initialization
         self.model = self._load_or_build_model()
         self.is_ai_ready = self._check_ai_readiness()
+    
+    def _get_current_market_state(self, symbol: str) -> np.ndarray:
+        """Gathers and normalizes market regime features for the given symbol."""
+        try:
+            df = self._ohlcv_cache.fetch(self.broker, symbol, timeframe="H1", num_bars=1000)
+            if df is None or len(df) < 50:
+                return np.zeros((1, 4))
+
+            # Calculate technical indicators
+            atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+            adx = ta.adx(df['high'], df['low'], df['close'], length=14)
+            rsi = ta.rsi(df['close'], length=14)
+
+            # Use most recent values, fill with defaults if missing
+            atr_val = float(atr.iloc[-1]) if atr is not None and not atr.isna().iloc[-1] else 0.0
+            adx_val = float(adx['ADX_14'].iloc[-1]) if adx is not None and 'ADX_14' in adx.columns and not adx['ADX_14'].isna().iloc[-1] else 25.0
+            rsi_val = float(rsi.iloc[-1]) if rsi is not None and not rsi.isna().iloc[-1] else 50.0
+            # Normalized ATR (as ratio of close)
+            close_val = float(df['close'].iloc[-1]) if not df['close'].isna().iloc[-1] else 1.0
+            atr_ratio = atr_val / close_val if close_val != 0 else 0.0
+
+            # Return as shape (1, 4) for model
+            return np.array([[atr_val, adx_val, rsi_val, atr_ratio]])
+        except Exception:
+            return np.zeros((1, 4))
+    
 
     def _load_json(self, filepath: Path, fallback: dict) -> dict:
         if filepath.exists():
