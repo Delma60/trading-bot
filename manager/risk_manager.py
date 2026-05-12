@@ -1960,6 +1960,8 @@ class TrailingStopManager:
     secures breakeven, and locks in 50% of peak profits.
     """
 
+    MAX_MODIFY_ATTEMPTS = 5
+
     def __init__(self, broker, targeter, trail_atr_multiplier: float = 1.5):
         self.broker = broker
         self.targeter = targeter
@@ -1967,6 +1969,7 @@ class TrailingStopManager:
         self.running = False
         self._thread: Optional[threading.Thread] = None
         self.peak_prices: Dict[int, float] = {}
+        self._failed_attempts: dict[int, int] = {}
 
     def start(self):
         if self.running:
@@ -2013,11 +2016,38 @@ class TrailingStopManager:
 
             time.sleep(5)
 
+    def _min_stop_distance(self, symbol: str) -> float:
+        # This should query the broker or symbol info for min stop distance in price units
+        # For now, use a placeholder or broker-provided method if available
+        info = getattr(self.broker, "get_symbol_info", lambda s: None)(symbol)
+        if info and hasattr(info, "stops_level") and hasattr(info, "point"):
+            return info.stops_level * info.point
+        # Fallback: hardcoded minimums (should be replaced with real broker data)
+        if "XAU" in symbol.upper() or "XAG" in symbol.upper():
+            return 0.5
+        elif "JPY" in symbol.upper():
+            return 0.05
+        else:
+            return 0.0005
+
+    def _try_modify(self, ticket, symbol, new_sl, label):
+        if self._failed_attempts.get(ticket, 0) >= self.MAX_MODIFY_ATTEMPTS:
+            return False  # stop spamming
+        ok = self.broker.modify_position(ticket, symbol, new_sl)
+        if not ok:
+            self._failed_attempts[ticket] = self._failed_attempts.get(ticket, 0) + 1
+            if self._failed_attempts[ticket] == self.MAX_MODIFY_ATTEMPTS:
+                print(f"[Profit Lock] ⚠️ Giving up on {symbol} ticket {ticket} after {self.MAX_MODIFY_ATTEMPTS} failures.")
+        else:
+            self._failed_attempts.pop(ticket, None)  # reset on success
+        return ok
+
     def _process_positions(self, positions):
         active_tickets = [p.ticket for p in positions]
         keys_to_remove = [k for k in self.peak_prices.keys() if k not in active_tickets]
         for k in keys_to_remove:
             del self.peak_prices[k]
+            self._failed_attempts.pop(k, None)
 
         for pos in positions:
             symbol = pos.symbol
@@ -2040,6 +2070,8 @@ class TrailingStopManager:
                 pip_multiplier = 10000.0
             breakeven_trigger_distance = (atr_pips * 0.8) / pip_multiplier
 
+            min_stop = self._min_stop_distance(symbol)
+
             if ticket not in self.peak_prices:
                 self.peak_prices[ticket] = current_price
 
@@ -2053,26 +2085,17 @@ class TrailingStopManager:
                 if current_price > (open_price + breakeven_trigger_distance):
                     if current_sl < open_price:
                         be_price = round(open_price + (2.0 / pip_multiplier), 5)
-                        if self.broker.modify_position(ticket, symbol, be_price):
-                            if self._verify_order_levels(ticket, symbol, be_price):
-                                print(f"[Profit Lock] 🛡️ {symbol} is now RISK FREE at {be_price}")
-                                current_sl = be_price
-                            else:
-                                print(f"[Profit Lock] ❌ Failed to enforce breakeven SL for {symbol} ticket {ticket}.")
-                        else:
-                            print(f"[Profit Lock] ❌ Broker failed to apply breakeven SL for {symbol} ticket {ticket}.")
+                        if (be_price - open_price) < min_stop:
+                            continue  # Don't attempt if too close
+                        self._try_modify(ticket, symbol, be_price, "breakeven")
+                        # No print here, _try_modify handles output
 
                 if profit_distance > (breakeven_trigger_distance * 1.5):
                     seventy_five_percent_mark = peak - (profit_distance * 0.75)
                     if seventy_five_percent_mark > current_sl:
-                        new_sl = round(seventy_five_percent_mark, 5)
-                        if self.broker.modify_position(ticket, symbol, new_sl):
-                            if self._verify_order_levels(ticket, symbol, new_sl):
-                                print(f"[Profit Lock] 💰 Raised 75% Profit Lock on {symbol} to {new_sl}")
-                            else:
-                                print(f"[Profit Lock] ❌ Failed to verify 75% SL lock for {symbol} ticket {ticket}.")
-                        else:
-                            print(f"[Profit Lock] ❌ Broker failed to apply 75% SL lock for {symbol} ticket {ticket}.")
+                        if (seventy_five_percent_mark - open_price) < min_stop:
+                            continue
+                        self._try_modify(ticket, symbol, round(seventy_five_percent_mark, 5), "75% lock")
 
             elif order_type == 1:
                 if current_price < self.peak_prices[ticket]:
@@ -2084,26 +2107,16 @@ class TrailingStopManager:
                 if current_price < (open_price - breakeven_trigger_distance):
                     if current_sl == 0.0 or current_sl > open_price:
                         be_price = round(open_price - (2.0 / pip_multiplier), 5)
-                        if self.broker.modify_position(ticket, symbol, be_price):
-                            if self._verify_order_levels(ticket, symbol, be_price):
-                                print(f"[Profit Lock] 🛡️ {symbol} is now RISK FREE at {be_price}")
-                                current_sl = be_price
-                            else:
-                                print(f"[Profit Lock] ❌ Failed to enforce breakeven SL for {symbol} ticket {ticket}.")
-                        else:
-                            print(f"[Profit Lock] ❌ Broker failed to apply breakeven SL for {symbol} ticket {ticket}.")
+                        if (open_price - be_price) < min_stop:
+                            continue
+                        self._try_modify(ticket, symbol, be_price, "breakeven")
 
                 if profit_distance > (breakeven_trigger_distance * 1.5):
                     seventy_five_percent_mark = peak + (profit_distance * 0.75)
                     if current_sl == 0.0 or seventy_five_percent_mark < current_sl:
-                        new_sl = round(seventy_five_percent_mark, 5)
-                        if self.broker.modify_position(ticket, symbol, new_sl):
-                            if self._verify_order_levels(ticket, symbol, new_sl):
-                                print(f"[Profit Lock] 💰 Lowered 75% Profit Lock on {symbol} to {new_sl}")
-                            else:
-                                print(f"[Profit Lock] ❌ Failed to verify 75% SL lock for {symbol} ticket {ticket}.")
-                        else:
-                            print(f"[Profit Lock] ❌ Broker failed to apply 75% SL lock for {symbol} ticket {ticket}.")
+                        if (open_price - seventy_five_percent_mark) < min_stop:
+                            continue
+                        self._try_modify(ticket, symbol, round(seventy_five_percent_mark, 5), "75% lock")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2369,47 +2382,24 @@ class TradeGatekeeper:
         self.avoid_asian_session = avoid_asian_session
         self.avoid_friday_close  = avoid_friday_close
 
-    def check(self, symbol: str, broker) -> tuple[bool, str]:
+    def gate(self, symbol: str, broker) -> tuple[bool, str]:
         """
         Returns (allowed: bool, reason: str).
-        Only applies to forex symbols (skips for other asset classes).
+        Checks only session and spread, not correlation.
         """
         from manager.profile_manager import profile
-        asset_class = profile.get_asset_class(symbol)
-        if asset_class != "forex":
-            return True, "CorrelationGuard: Not a forex symbol, skipping check."
-
-        positions = broker.getPositions() or []
-        if not positions:
-            return True, "No existing positions."
-
-        # Extract legs from all open positions
-        open_legs: list[str] = []
-        for pos in positions:
-            if pos.symbol.upper() != symbol.upper():
-                open_legs.extend(self._legs(pos.symbol))
-
-        leg_counts = Counter(open_legs)
-
-        # Check proposed symbol's legs against existing counts
-        proposed_legs = self._legs(symbol)
-        for leg in proposed_legs:
-            # Count would become leg_counts[leg] + 1 after this trade
-            if leg_counts[leg] + 1 > self.max_shared_legs:
-                concentrated = [
-                    pos.symbol for pos in positions
-                    if leg in self._legs(pos.symbol)
-                ]
-                return False, (
-                    f"Correlation limit: {leg} already appears in "
-                    f"{leg_counts[leg]} open position(s) "
-                    f"({', '.join(concentrated)}). "
-                    f"Max shared legs = {self.max_shared_legs}."
-                )
-
+        # Session checks (example, adapt as needed)
+        session_cfg = profile.sessions()
+        if session_cfg.avoid_asian_session and symbol in getattr(session_cfg, 'asian_session_pairs', []):
+            return False, f"Trading {symbol} is blocked during Asian session."
+        # Spread check (example, adapt as needed)
+        spread = self._get_spread_pips(symbol, broker)
+        if spread is not None and spread > self.max_spread_forex:
+            return False, f"Spread too high: {spread:.1f} pips."
         return True, "OK"
-
-        return True, "OK"
+    def mark_reentered(self, symbol: str):
+        if symbol in self.stopped_out_trades:
+            self.stopped_out_trades[symbol]["re_entered"] = True
 
     def _get_spread_pips(self, symbol: str, broker=None, category: Optional[str] = None) -> Optional[float]:
         import MetaTrader5 as mt5

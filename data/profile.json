@@ -137,7 +137,10 @@
                 "BTCUSD",
                 "ETHUSD",
                 "LTCUSD",
-                "XRPUSD"
+                "XRPUSD",
+                "BNBUSD",
+                "SOLUSD",
+                "DOTUSD"
             ],
             "indices": [
                 "AUS200",

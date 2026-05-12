@@ -1,3 +1,5 @@
+from dataclasses import dataclass, field
+
 @dataclass
 class MarketSessionConfig:
     """Config for a single market category."""
@@ -175,19 +177,21 @@ def _validate(raw: dict, path: Path) -> None:
 # ── ProfileManager ────────────────────────────────────────────────────────────
 
 class ProfileManager:
-        def market_sessions(self) -> MarketSessionsConfig:
-            with self._lock:
-                raw = self._raw.get("market_sessions", {})
-                sessions = {}
-                for category, cfg in raw.items():
-                    sessions[category] = MarketSessionConfig(
-                        open_utc         = int(cfg.get("open_utc",         0)),
-                        close_utc        = int(cfg.get("close_utc",        0)),
-                        weekdays_only    = bool(cfg.get("weekdays_only",   True)),
-                        always_open      = bool(cfg.get("always_open",     False)),
-                        all_day_weekdays = bool(cfg.get("all_day_weekdays",False)),
-                    )
-                return MarketSessionsConfig(sessions=sessions)
+
+    def market_sessions(self) -> MarketSessionsConfig:
+        with self._lock:
+            raw = self._raw.get("market_sessions", {})
+            sessions = {}
+            for category, cfg in raw.items():
+                sessions[category] = MarketSessionConfig(
+                    open_utc         = int(cfg.get("open_utc",         0)),
+                    close_utc        = int(cfg.get("close_utc",        0)),
+                    weekdays_only    = bool(cfg.get("weekdays_only",   True)),
+                    always_open      = bool(cfg.get("always_open",     False)),
+                    all_day_weekdays = bool(cfg.get("all_day_weekdays",False)),
+                )
+            return MarketSessionsConfig(sessions=sessions)
+
     """
     Thread-safe config loader. Call profile.reload() to hot-reload
     from disk without restarting the bot.
