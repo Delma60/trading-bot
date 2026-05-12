@@ -130,79 +130,21 @@ class PortfolioManager:
     def add_symbol(self, symbol: str, asset_class: str = None) -> bool:
         symbol = symbol.upper()
         # FIX: Delegate persistence directly to the single source of truth
-        if _profile.add_symbol(symbol):
-            if symbol not in self.master_watchlist:
-                self.master_watchlist.append(symbol)
-            return True
-        return False
+        if not asset_class:
+            asset_class = self._infer_asset_class(symbol)
 
-    def _infer_asset_class(self, symbol: str) -> str:
-        symbol = symbol.upper()
-        if any(symbol.startswith(prefix) for prefix in ["XAU", "XAG", "XPT", "XPD"]):
-            return "Metals"
-        if any(token in symbol for token in ["BTC", "ETH", "LTC", "XBT", "USDT", "DOGE"]):
-            return "Crypto"
-        if any(token in symbol for token in ["USD", "EUR", "JPY", "GBP", "AUD", "CAD", "CHF", "NZD"]):
-            return "Forex"
-        return "Forex"
+        if asset_class not in self.asset_classes:
+            self.asset_classes[asset_class] = []
 
-    def _get_current_market_state(self, symbol: str) -> np.ndarray:
-        """Gathers and normalizes market regime features."""
-        try:
-            df = self._ohlcv_cache.fetch(self.broker, symbol, timeframe="H1", num_bars=1000)
-            
-            if df is None or len(df) < 50:
-                return np.zeros((1, 4))
-            
-            # Calculate technical indicators
-            atr_result = ta.atr(df['high'], df['low'], df['close'], length=14)
-            if atr_result is not None:
-                df['ATR'] = atr_result
-            
-            adx_result = ta.adx(df['high'], df['low'], df['close'], length=14)
-            if adx_result is not None and 'ADX_14' in adx_result.columns:
-                df['ADX'] = adx_result['ADX_14']
-            else:
-                df['ADX'] = 50.0  # Default middle value
-            
-            rsi_result = ta.rsi(df['close'], length=14)
-            if rsi_result is not None:
-                df['RSI'] = rsi_result
-            
-            latest = df.iloc[-1]
-            
-            # Extract values with defaults if missing
-            atr_val = latest.get('ATR', latest['close'] * 0.01)
-            adx_val = latest.get('ADX', 50.0)
-            rsi_val = latest.get('RSI', 50.0)
-            
-            norm_atr = (atr_val / latest['close']) * 100 if latest['close'] > 0 else 0 
-            norm_adx = adx_val / 100.0
-            norm_rsi = rsi_val / 100.0
-            norm_hour = datetime.now().hour / 24.0
-            
-            state = np.array([norm_atr, norm_adx, norm_rsi, norm_hour])
-            state = np.nan_to_num(state)
-            
-            return np.expand_dims(state, axis=0)
-        
-        except Exception as e:
-            # self.notify(f"[Portfolio Manager]: Error getting market state for {symbol}: {e}")
-            return np.zeros((1, 4))
+        if symbol in self.asset_classes[asset_class]:
+            return False
 
-    def _assign_strategy_fallback(self, symbol: str) -> str:
-        """Uses the config file if the AI isn't ready yet."""
-        asset_class = next((k for k, v in self.asset_classes.items() if symbol in v), "Unknown")
-        overrides = self.strategy_mapping.get("symbol_overrides", {})
-        if symbol in overrides: return overrides[symbol]
-        class_defaults = self.strategy_mapping.get("asset_class_defaults", {})
-        if asset_class in class_defaults: return class_defaults[asset_class]
-        return self.strategy_mapping.get("default", "Mean_Reversion")
-    
-    def _predict_strategy_safe(self, current_state: np.ndarray) -> np.ndarray:
-        """Thread-safe wrapper for model.predict() to prevent race conditions."""
-        with self._model_lock:
-            return self.model.predict(current_state, verbose=0)
+        self.asset_classes[asset_class].append(symbol)
+        self.master_watchlist.append(symbol)
+        # If you have a config dict, persist here if needed
+        # self.config["asset_classes"] = self.asset_classes
+        # self._save_config()
+        return True
 
     def _assign_strategy(self, symbol: str, current_state: np.ndarray) -> str:
         """Decides which strategy to use (AI if ready, Config if not)."""

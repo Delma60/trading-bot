@@ -42,6 +42,37 @@ class ProgressSpinner:
 
 class LocalCache:
     """In-memory cache for account, positions, symbol info, OHLCV, and engineered features."""
+    def _save_symbol_features(self, symbol: str, df: pd.DataFrame) -> None:
+        try:
+            path = self.history_dir / f"{symbol.upper()}_{self._timeframe}_features.parquet"
+            df.to_parquet(path)
+        except Exception as exc:
+            pass
+            # self.notify(f"[LocalCache] Failed to save features for {symbol}: {exc}")
+
+    def _save_positions(self):
+        try:
+            import json
+            path = self.history_dir / "positions.json"
+            with path.open("w", encoding="utf-8") as f:
+                # Only save basic info to avoid serialization errors
+                json.dump([
+                    {"symbol": p.symbol, "type": getattr(p, "type", None), "volume": getattr(p, "volume", None), "price_open": getattr(p, "price_open", None), "profit": getattr(p, "profit", None)}
+                    for p in self._positions
+                ], f, indent=2)
+        except Exception as exc:
+            pass
+            # self.notify(f"[LocalCache] Failed to save positions: {exc}")
+
+    def _save_account(self):
+        try:
+            import json
+            path = self.history_dir / "account.json"
+            with path.open("w", encoding="utf-8") as f:
+                json.dump(self._account, f, indent=2, default=str)
+        except Exception as exc:
+            pass
+            # self.notify(f"[LocalCache] Failed to save account: {exc}")
 
     def __init__(
         self,
@@ -145,7 +176,6 @@ class LocalCache:
                 if tick_data is not None:
                     self._ticks[symbol] = tick_data
 
-    import re
 
     def _get_history_path(self, symbol: str) -> Path:
         # 1. Strip out any dangerous characters (allow only uppercase A-Z and 0-9)
@@ -194,19 +224,28 @@ class LocalCache:
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             pool.map(self._load_symbol_features, [(symbol, progress) for symbol in self.symbols])
-        
+
+        # Save all features after refresh
+        for symbol, feat_df in self._features.items():
+            if feat_df is not None:
+                self._save_symbol_features(symbol, feat_df)
+
         if is_initial and progress:
             progress.finish("[LocalCache] Cache loading complete.")
         self._last_feature_refresh = time.time()
 
+        # Save positions and account snapshot
+        self._save_positions()
+        self._save_account()
+
     def _load_symbol_features(self, args):
         symbol, progress = args
         symbol = symbol.upper()
-        
+
         # Update progress with spinner (only if progress object exists)
         if progress:
             progress.update(item_name=symbol)
-        
+
         df = self._load_symbol_history(symbol)
         if df is None:
             df = self.broker.ohclv_data(symbol, timeframe=self._timeframe, num_bars=1000)
@@ -219,11 +258,16 @@ class LocalCache:
             with self._lock:
                 self._ohlcv[symbol] = df
 
+        # Save OHLCV history after update
+        if df is not None:
+            self._save_symbol_history(symbol, df)
+
         if symbol not in self._features or self._features[symbol] is None:
             feat_df = FeatureEngineer.compute(df)
             if feat_df is not None and not feat_df.empty:
                 with self._lock:
                     self._features[symbol] = feat_df
+                self._save_symbol_features(symbol, feat_df)
 
     def get_raw_ohlcv(self, symbol: str, timeframe: str = None) -> Optional[pd.DataFrame]:
         if timeframe is None:
