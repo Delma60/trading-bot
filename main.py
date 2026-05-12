@@ -245,9 +245,6 @@ if __name__ == "__main__":
     # 4. Initialize the Portfolio Manager
     portfolio_manager = PortfolioManager(broker, strategy_manager, risk_manager, cache=cache, notify_callback=agent_notify)
     
-    position_monitor = PositionMonitor(broker=broker, on_external_close=handle_external_close)
-    broker.register_position_monitor(position_monitor)
-    position_monitor.start()
     
     # 5. Start the Background Scanner Thread
     # Set daemon=False so we can gracefully join it on exit

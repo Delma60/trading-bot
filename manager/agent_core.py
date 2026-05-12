@@ -711,7 +711,7 @@ class AgentExecutor:
             if not self.TRADE_HISTORY.exists():
                 return {}
             
-            df = pd.read_csv(self.TRADE_HISTORY, encoding='utf-8-sig')
+            df = pd.read_csv(self.TRADE_HISTORY, encoding='utf-8', encoding_errors="replace")
             df = df[df['Action'].isin(['CLOSE', 'CLOSE_SL_TP'])].copy()
             if df.empty:
                 return {}

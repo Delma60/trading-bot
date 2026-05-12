@@ -73,32 +73,30 @@ class Trader:
         
     def _strategy_for(self, ticket: int) -> str:
         """Return the strategy that opened this ticket from memory, or fallback to trade_history.csv."""
-        strat = self._ticket_strategy.pop(ticket, None)
+        # 1. Non-destructive read: preserves strategy in memory for multiple callbacks/listeners
+        strat = self._ticket_strategy.get(ticket, None)
         if strat is not None and strat != "Unknown":
-            self._save_ticket_strategy()
             return strat
-
-        # Persistent fallback: scan the logged CSV history across bot restarts
+        
+        # 2. Persistent fallback: scan the logged CSV history safely across bot restarts
         file_path = Path("data/trade_history.csv")
         if file_path.exists():
             try:
-                # First, try to find the original BUY/SELL for this ticket
-                with open(file_path, mode='r', newline='', encoding='utf-8') as f:
-                    reader = list(csv.DictReader(f))
+                # errors='replace' prevents unexpected characters from breaking the read loop
+                with open(file_path, mode='r', newline='', encoding='utf-8', errors='replace') as f:
+                    reader = csv.DictReader(f)
                     for row in reader:
                         if row.get("Ticket") == str(ticket) and row.get("Action") in ("BUY", "SELL"):
-                            return row.get("Strategy", "Unknown")
-                    # If not found, try to find any previous action for this ticket with a non-Unknown strategy
-                    for row in reader:
-                        if row.get("Ticket") == str(ticket):
-                            strat_val = row.get("Strategy")
-                            if strat_val and strat_val != "Unknown":
-                                return strat_val
+                            found_strat = row.get("Strategy", "Unknown")
+                            if found_strat != "Unknown":
+                                # Re-cache in memory for faster subsequent multi-turn/inbox lookups
+                                self._ticket_strategy[ticket] = found_strat
+                            return found_strat
             except Exception:
                 pass
-
+                
         return "Unknown"
-
+    
     def is_mt5_running(self):
         """Check if MetaTrader 5 terminal is running"""
         for proc in psutil.process_iter(['pid', 'name']):
