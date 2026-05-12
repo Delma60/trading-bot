@@ -182,7 +182,7 @@
             "stop_loss_pips": 20.0,
             "take_profit_pips": 40.0,
             "max_daily_loss": 500.0,
-            "daily_goal": 50.0,
+            "daily_goal": 150.0,
             "cooldown_minutes": 5,
             "lock_amount": 0.0,
             "lock_pct": 0.0,

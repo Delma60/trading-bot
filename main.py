@@ -17,6 +17,7 @@ from manager.portfolio_manager import PortfolioManager
 from chat import ARIA
 from pathlib import Path
 from manager.profile_manager import profile as _profile
+from manager.position_monitor import PositionMonitor
 
 # Global shutdown flag for graceful termination
 shutdown_event = threading.Event()
@@ -38,6 +39,44 @@ def agent_notify(msg: str, priority: str = "normal"):
     else:
         _default_agent_notify(msg, priority)
 
+
+# Define the callback handler above the autonomous_scanner function
+def handle_external_close(ticket: int, symbol: str, profit: float, close_price: float, direction: str, lots: float, open_price: float):
+    """
+    Fired by PositionMonitor when MT5 closes a trade via SL/TP or manual app intervention.
+    Ensures complete history tracking and continuous ML feedback loops.
+    """
+    # 1. Fetch the strategy associated with this ticket
+    strategy_name = broker._strategy_for(ticket)
+    
+    # 2. Log the external close to trade_history.csv
+    broker._log_trade_history(
+        action="CLOSE_SL_TP",
+        symbol=symbol,
+        lots=lots,
+        price=close_price,
+        ticket=ticket,
+        comment=f"External close (SL/TP) | Profit: {profit}",
+        strategy=strategy_name,
+        profit=profit
+    )
+    
+    # 3. Update Risk Manager metrics (win/loss counters and cool-downs)
+    if profit < 0:
+        risk_manager.record_loss(symbol)
+    else:
+        risk_manager.record_win(symbol)
+        
+    # 4. Feed the finalized PnL back into the Portfolio Manager for continuous ML learning
+    portfolio_manager.log_trade_for_learning(ticket=ticket, profit=profit)
+    
+    # 5. Push real-time alert to the system/interface
+    status_icon = "🟢" if profit > 0 else "🔴"
+    agent_notify(
+        f"{status_icon} External Close Detected -> {symbol} (Ticket #{ticket}) closed at {close_price} | PnL: ${profit:.2f}",
+        priority="trade_executed"
+    )
+    
 def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_seconds: int = 3, notify=agent_notify):
     """
     This runs in the background forever. It wakes up, scans the market, 
@@ -205,7 +244,11 @@ if __name__ == "__main__":
 
     # 4. Initialize the Portfolio Manager
     portfolio_manager = PortfolioManager(broker, strategy_manager, risk_manager, cache=cache, notify_callback=agent_notify)
-
+    
+    position_monitor = PositionMonitor(broker=broker, on_external_close=handle_external_close)
+    broker.register_position_monitor(position_monitor)
+    position_monitor.start()
+    
     # 5. Start the Background Scanner Thread
     # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
@@ -247,6 +290,10 @@ if __name__ == "__main__":
         
         # 1. Signal scanner thread to stop
         shutdown_event.set()
+        
+        if 'position_monitor' in locals() and position_monitor is not None:
+            agent_notify("Stopping external position monitor...")
+            position_monitor.stop()
         
         # 2. Wait for scanner thread to finish (with timeout)
         agent_notify("Waiting for background scanner to stop...")

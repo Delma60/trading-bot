@@ -435,6 +435,7 @@ class PortfolioManager:
             health = "🔴 High Risk (Low Margin)"
 
         return f"{health} | PnL Today: ${daily_pnl:,.2f} | Exposure: {open_count}/{self.risk_manager.max_open_trades} Trades"
+    
     def retrain_model(self):
         history = self._load_json(self.TRAINING_DATA_PATH, fallback=[])
         if len(history) < 50: return
@@ -448,3 +449,58 @@ class PortfolioManager:
             self.model.fit(X, y, epochs=50, batch_size=8, verbose=0)  # Changed verbose=1 to verbose=0
             self.model.save(str(self.MODEL_PATH))
         
+    def _assign_strategy_fallback(self, symbol: str) -> str:
+        """
+        Fallback method to assign a strategy based on profile configuration 
+        when the AI model lacks sufficient data to make predictions.
+        """
+        symbol = symbol.upper()
+        
+        # 1. Check if the specific symbol is mapped directly
+        if hasattr(self, 'strategy_mapping') and self.strategy_mapping:
+            if symbol in self.strategy_mapping:
+                return self.strategy_mapping[symbol]
+            
+            # 2. Find the asset class for the symbol and check class-level mapping
+            for asset_class, symbols in self.asset_classes.items():
+                if symbol in symbols:
+                    if asset_class in self.strategy_mapping:
+                        return self.strategy_mapping[asset_class]
+        
+        # 3. Default fallback if no configuration mapping matches
+        if self.available_strategies:
+            # Prefer trend following if available, otherwise default to the first initialized engine
+            for strat in self.available_strategies:
+                if "trend" in strat.lower():
+                    return strat
+            return self.available_strategies[0]
+            
+        return "Unknown"
+
+    def _predict_strategy_safe(self, current_state: np.ndarray) -> np.ndarray:
+        """
+        Performs thread-safe Keras model predictions using the dedicated model lock.
+        Prevents race conditions/crashes when background scanner and UI threads overlap.
+        """
+        with self._model_lock:
+            try:
+                return self.model.predict(current_state, verbose=0)
+            except Exception:
+                # Return uniform flat probabilities if the prediction pipeline fails
+                num_strats = max(1, len(self.available_strategies))
+                return np.ones((1, num_strats)) / num_strats
+
+    def _infer_asset_class(self, symbol: str) -> str:
+        """
+        Infers the base asset class of a given symbol if not explicitly provided.
+        """
+        s = symbol.upper()
+        if any(s.startswith(p) for p in ["XAU", "XAG", "XPT", "XPD"]):
+            return "Metals"
+        if any(t in s for t in ["BTC", "ETH", "LTC", "XBT", "SOL", "XRP", "ADA", "DOGE"]):
+            return "Crypto"
+        if any(t in s for t in ["US30", "US500", "NAS", "GER", "UK100", "SPX", "NDX"]):
+            return "Indices"
+        if any(t in s for t in ["OIL", "BRENT", "NGAS", "WHEAT", "CORN"]):
+            return "Commodities"
+        return "Forex"

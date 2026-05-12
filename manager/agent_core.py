@@ -711,8 +711,8 @@ class AgentExecutor:
             if not self.TRADE_HISTORY.exists():
                 return {}
             
-            df = pd.read_csv(self.TRADE_HISTORY)
-            df = df[df['Action'] == 'CLOSE'].copy()
+            df = pd.read_csv(self.TRADE_HISTORY, encoding='utf-8-sig')
+            df = df[df['Action'].isin(['CLOSE', 'CLOSE_SL_TP'])].copy()
             if df.empty:
                 return {}
 
@@ -1090,6 +1090,7 @@ class AgentSynthesizer:
  
     def _history(self, plan, r) -> str:
         perf = r.get("performance_analysis", {})
+        print(perf)
         
         if not perf or "error" in perf:
             return "Not enough closed trade history to generate a performance report yet."
