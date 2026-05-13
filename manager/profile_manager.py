@@ -54,7 +54,13 @@ from typing import List, Optional
 
 
 # ── Typed config dataclasses ──────────────────────────────────────────────────
-
+@dataclass
+class ProfitGuardConfig:
+    activation_pct:     float
+    breakeven_pct:      float
+    damage_control_pct: float
+    damage_loss_pct:    float
+    
 @dataclass
 class RiskConfig:
     risk_pct:             float
@@ -66,7 +72,7 @@ class RiskConfig:
     cooldown_minutes:     int
     lock_amount:          float   # fixed $ to ring-fence
     lock_pct:             float   # fraction of balance to ring-fence (0.0–0.99)
-    # Drawdown recovery thresholds
+    profit_guard:         ProfitGuardConfig
     moderate_threshold:   float = 0.50
     moderate_scale:       float = 0.50
     critical_threshold:   float = 0.80
@@ -264,6 +270,7 @@ class ProfileManager:
                 base.update(overrides[symbol.upper()])
 
             dr = self._raw["risk"].get("drawdown_recovery", {})
+            pg = base.get("profit_guard", {})
             return RiskConfig(
                 risk_pct             = float(base["risk_pct"]),
                 stop_loss_pips       = float(base["stop_loss_pips"]),
@@ -274,6 +281,12 @@ class ProfileManager:
                 cooldown_minutes     = int(base.get("cooldown_minutes", 5)),
                 lock_amount          = float(base.get("lock_amount", 0.0)),
                 lock_pct             = float(base.get("lock_pct", 0.0)),
+                profit_guard         = ProfitGuardConfig(
+                    activation_pct     = float(pg.get("activation_pct", 0.002)),
+                    breakeven_pct      = float(pg.get("breakeven_pct", 0.003)),
+                    damage_control_pct = float(pg.get("damage_control_pct", 0.005)),
+                    damage_loss_pct    = float(pg.get("damage_loss_pct", 0.001)),
+                ),
                 moderate_threshold   = float(dr.get("moderate_threshold", 0.50)),
                 moderate_scale       = float(dr.get("moderate_scale",     0.50)),
                 critical_threshold   = float(dr.get("critical_threshold", 0.80)),

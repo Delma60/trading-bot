@@ -707,10 +707,10 @@ class TrailingStopManager:
                             self._try_modify(ticket, symbol, round(seventy_five_percent_mark, 5), "75% lock")
 
 class ProfitGuard:
-    BREAKEVEN_NORM_PCT: float     = 0.002   
+    BREAKEVEN_NORM_PCT: float      = 0.002   
     DAMAGE_CONTROL_NORM_PCT: float = 0.005  
-    DAMAGE_LOSS_NORM_PCT: float   = 0.001   
-    CHECK_INTERVAL: int           = 5
+    DAMAGE_LOSS_NORM_PCT: float    = 0.001   
+    CHECK_INTERVAL: int            = 5
 
     TIERS: List[Tuple[float, float]] = [
         (0.001,        0.70),  
@@ -735,6 +735,9 @@ class ProfitGuard:
         self.running = False
         self._thread: Optional[threading.Thread] = None
         self._exp_guard = ExpectancyGuard(notify_callback=notify_callback)
+        
+        # Initialize internal dynamic targeter instance for real-time ATR parsing
+        self.targeter = DynamicRiskTargeter(broker)
 
     def start(self):
         if self.running:
@@ -753,24 +756,41 @@ class ProfitGuard:
         if self._thread:
             self._thread.join(timeout=3)
 
-    def _get_dynamic_activation_usd(self, equity_base: float) -> float:
+    def _get_dynamic_activation_usd(self, equity_base: float, pos) -> float:
         """
-        Dynamically calculates the dollar activation threshold based on deposit size.
-        Prevents micro-accounts from triggering on noise and large accounts from starving.
+        Derives activation dynamically against real-time structural asset volatility (ATR).
+        Falls back smoothly to continuous balance interpolation if live target structures fail.
         """
-        if equity_base <= 500.0:
-            # Micro accounts: Require at least a 0.5% gain to clear spread costs
-            return equity_base * 0.005
-        elif equity_base <= 5000.0:
-            # Small accounts: Standard 0.2% activation
-            return equity_base * 0.002
-        elif equity_base <= 20000.0:
-            # Mid-sized accounts: Scale down to 0.1% activation
-            return equity_base * 0.001
-        else:
-            # Large accounts (> $20k): Scale to 0.05% activation
-            # Ensures a $50k account activates trailing at a practical $25 gain
-            return equity_base * 0.0005
+        symbol = pos.symbol
+        lots = float(pos.volume)
+        
+        try:
+            # Query active dynamic target constraints directly from local scope
+            target_data = self.targeter.calculate_targets(symbol)
+            atr_pips = target_data.get("atr_pips", 0.0)
+
+            # Resolve cached or runtime pip value for precise translation
+            pip_val = self._pip_val.get(pos.ticket) or _pip_value_usd(symbol, lots)
+            
+            # Evaluate absolute dollar cost of a 0.5 ATR directional breakout
+            atr_activation_usd = (atr_pips * 0.5) * pip_val
+
+            if atr_activation_usd > 0:
+                # Ensure the target clears minimum operational spread/drag floors
+                min_floor_usd = max(2.0, equity_base * 0.0005)
+                return max(atr_activation_usd, min_floor_usd)
+        except Exception:
+            pass
+
+        # Failsafe Fallback: Continuous balance interpolation curve (eliminates cliff effects)
+        equity = max(equity_base, 100.0)
+        if equity <= 500.0:
+            return equity * 0.005
+        elif equity <= 5000.0:
+            return 2.50 + (equity - 500.0) * (7.50 / 4500.0)
+        elif equity <= 20000.0:
+            return 10.00 + (equity - 5000.0) * (10.00 / 15000.0)
+        return 20.00 + (equity - 20000.0) * 0.0005
     
     def _guard_loop(self):
         while self.running:
@@ -843,10 +863,27 @@ class ProfitGuard:
             current_peak_pips = current_peak / pip_val if pip_val > 0 else 0.0
             self._peak_pips[ticket] = current_peak_pips
 
-            activate_usd       = self._get_dynamic_activation_usd(equity_base)
-            breakeven_usd      = equity_base * self.BREAKEVEN_NORM_PCT
-            damage_control_usd = equity_base * self.DAMAGE_CONTROL_NORM_PCT
-            damage_loss_usd    = -(equity_base * self.DAMAGE_LOSS_NORM_PCT)
+            # ── VOLATILITY-DRIVEN DYNAMISM (ATR ANCHORING) ──
+            # Calculate real-time target structures directly from internal targeter engine
+            target_data = self.targeter.calculate_targets(symbol)
+            atr_pips = target_data.get("atr_pips", 0.0)
+            
+            # Evaluate the active dollar value of a single ATR movement for this position size
+            atr_usd_value = atr_pips * pip_val if pip_val > 0 else 0.0
+
+            if atr_usd_value > 0:
+                # Volatility-Anchored Dynamic Thresholds
+                # Scales exactly to the pair's current market behavior and live position exposure
+                activate_usd       = self._get_dynamic_activation_usd(equity_base, pos)
+                breakeven_usd      = atr_usd_value * 1.0    # Lock breakeven at a full 1.0 ATR push
+                damage_control_usd = atr_usd_value * 1.5    # Establish damage control at a 1.5 ATR peak
+                damage_loss_usd    = -(atr_usd_value * 0.3) # Allow room to absorb pullbacks up to 0.3 ATR below entry
+            else:
+                # Safe Fallback to standard internal Profile/Equity normalization if targets fail to parse
+                activate_usd       = self._get_dynamic_activation_usd(equity_base, pos)
+                breakeven_usd      = equity_base * self.BREAKEVEN_NORM_PCT
+                damage_control_usd = equity_base * self.DAMAGE_CONTROL_NORM_PCT
+                damage_loss_usd    = -(equity_base * self.DAMAGE_LOSS_NORM_PCT)
 
             if current_peak >= breakeven_usd and ticket not in self._breakeven_set:
                 self._set_breakeven_atomic(pos, breakeven_usd)
@@ -875,7 +912,6 @@ class ProfitGuard:
                         f"Consider closing manually.",
                         priority="normal",
                     )
-            # ──
                 return
 
             if current_peak >= damage_control_usd and profit <= damage_loss_usd:
@@ -976,7 +1012,6 @@ class ProfitGuard:
         self._be_attempted.discard(ticket)
         self._exp_guard.clear_ticket(ticket)
 
-
     def status_fixed(self) -> str:
         with self._api_lock:
             if not self._peak:
@@ -996,10 +1031,9 @@ class ProfitGuard:
                     )
                 base = "\n".join(lines)
 
-        # FIX: exp_guard summary is now assembled OUTSIDE the with-block and
-        # appended before returning — it was previously unreachable dead code.
         exp_summary = self._exp_guard.summary()
         return f"{base}\n\n{exp_summary}"
+
 class TradeGatekeeper:
     """
     Pre-trade session and spread guard.
