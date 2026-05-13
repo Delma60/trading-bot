@@ -184,8 +184,8 @@ class StrategyManager:
             "Momentum":           MomentumStrategy(),
             "Breakout":           BreakoutStrategy(),
             "Scalping":           ScalpingStrategy(),
-            "News_Trading":       DummyStrategy(),
-            "Sentiment_Analysis": DummyStrategy(),
+            "News_Trading":       NewsTradingStrategy(),
+            "Sentiment_Analysis": SentimentAnalysisStrategy(),
             "Arbitrage":          ArbitrageStrategy(
                                       symbol_registry=self.symbol_registry
                                   ),
