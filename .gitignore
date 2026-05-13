@@ -121,3 +121,4 @@ data/unsupervised/
 models/weights/
 *.log
 data/cache/
+data/auto_optimizer_log.jsonl
