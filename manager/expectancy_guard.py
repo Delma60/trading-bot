@@ -26,7 +26,7 @@ from typing import Callable, Optional
 TRADE_HISTORY = Path("data/trade_history.csv")
 
 # How many closed trades before we trust the stats enough to act
-MIN_TRADES = 20
+MIN_TRADES = 10
 
 # Rolling window — how many recent trades to average
 ROLLING_WINDOW = 40

@@ -707,7 +707,6 @@ class TrailingStopManager:
                             self._try_modify(ticket, symbol, round(seventy_five_percent_mark, 5), "75% lock")
 
 class ProfitGuard:
-    ACTIVATE_NORM_PCT: float      = 0.0005  
     BREAKEVEN_NORM_PCT: float     = 0.002   
     DAMAGE_CONTROL_NORM_PCT: float = 0.005  
     DAMAGE_LOSS_NORM_PCT: float   = 0.001   
@@ -754,6 +753,25 @@ class ProfitGuard:
         if self._thread:
             self._thread.join(timeout=3)
 
+    def _get_dynamic_activation_usd(self, equity_base: float) -> float:
+        """
+        Dynamically calculates the dollar activation threshold based on deposit size.
+        Prevents micro-accounts from triggering on noise and large accounts from starving.
+        """
+        if equity_base <= 500.0:
+            # Micro accounts: Require at least a 0.5% gain to clear spread costs
+            return equity_base * 0.005
+        elif equity_base <= 5000.0:
+            # Small accounts: Standard 0.2% activation
+            return equity_base * 0.002
+        elif equity_base <= 20000.0:
+            # Mid-sized accounts: Scale down to 0.1% activation
+            return equity_base * 0.001
+        else:
+            # Large accounts (> $20k): Scale to 0.05% activation
+            # Ensures a $50k account activates trailing at a practical $25 gain
+            return equity_base * 0.0005
+    
     def _guard_loop(self):
         while self.running:
             try:
@@ -825,7 +843,7 @@ class ProfitGuard:
             current_peak_pips = current_peak / pip_val if pip_val > 0 else 0.0
             self._peak_pips[ticket] = current_peak_pips
 
-            activate_usd       = equity_base * self.ACTIVATE_NORM_PCT
+            activate_usd       = self._get_dynamic_activation_usd(equity_base)
             breakeven_usd      = equity_base * self.BREAKEVEN_NORM_PCT
             damage_control_usd = equity_base * self.DAMAGE_CONTROL_NORM_PCT
             damage_loss_usd    = -(equity_base * self.DAMAGE_LOSS_NORM_PCT)
@@ -1041,13 +1059,10 @@ class TradeGatekeeper:
                     f"trading {symbol} is blocked."
                 )
 
-        # 3. Spread check
+        #3. Dynamic Spread Check via Profile Single Source of Truth
         spread = self._get_spread_pips(symbol, broker)
-        ceiling = (
-            self.max_spread_crypto
-            if any(k in symbol.upper() for k in ("BTC", "ETH", "LTC", "XRP"))
-            else self.max_spread_forex
-        )
+        ceiling = profile.risk(symbol).max_spread_pips
+        
         if spread is not None and spread > ceiling:
             return False, f"Spread too high: {spread:.1f} pips (ceiling {ceiling:.1f})."
 
@@ -1104,10 +1119,10 @@ class CorrelationGuard:
  
     @staticmethod
     def _legs(symbol: str) -> List[str]:
-        sym = symbol.upper()
-        INDEX_PREFIXES = {"US30","US500","NAS100","GER40","UK100"}
-        if sym in INDEX_PREFIXES or any(sym.startswith(p) for p in ["XAU","XAG","BTC","ETH"]):
+        if _profile.get_asset_class(symbol) != "forex":
             return []
+            
+        sym = symbol.upper()
         if len(sym) >= 6:
             return [sym[:3], sym[3:6]]
         return []
