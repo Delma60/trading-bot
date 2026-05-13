@@ -8,6 +8,7 @@ import threading
 from collections import Counter
 from manager.market_sessions import MarketSessionManager
 from manager.profile_manager import profile as _profile
+from manager.expectancy_guard import ExpectancyGuard
 
 def _pip_value_usd(symbol: str, lots: float) -> float:
     try:
@@ -734,11 +735,13 @@ class ProfitGuard:
         self._api_lock = threading.Lock()
         self.running = False
         self._thread: Optional[threading.Thread] = None
+        self._exp_guard = ExpectancyGuard(notify_callback=notify_callback)
 
     def start(self):
         if self.running:
             return
         self.running = True
+        self._exp_guard.start()
         self._thread = threading.Thread(
             target=self._guard_loop, daemon=True, name="ProfitGuard"
         )
@@ -747,6 +750,7 @@ class ProfitGuard:
 
     def stop(self):
         self.running = False
+        self._exp_guard.stop()  
         if self._thread:
             self._thread.join(timeout=3)
 
@@ -830,6 +834,30 @@ class ProfitGuard:
                 self._set_breakeven_atomic(pos, breakeven_usd)
 
             if current_peak < activate_usd:
+                exp_verdict = self._exp_guard.evaluate(ticket, profit)
+                if exp_verdict == "close":
+                    stats = self._exp_guard.stats
+                    threshold = stats.loss_close_threshold if stats else 0.0
+                    self._close_atomic(
+                        pos,
+                        reason=(
+                            f"loss ${abs(profit):.2f} exceeded expectancy close "
+                            f"threshold ${threshold:.2f} "
+                            f"({ExpectancyGuard.__module__}.LOSS_MULT_CLOSE × avg loss)"
+                        )
+                    )
+                    return
+                elif exp_verdict == "alert":
+                    stats = self._exp_guard.stats
+                    threshold = stats.loss_alert_threshold if stats else 0.0
+                    self.notify(
+                        f"⚠️ Expectancy alert — {symbol} is down ${abs(profit):.2f} "
+                        f"(avg loss is ${stats.avg_loss:.2f}, "
+                        f"alert threshold ${threshold:.2f}). "
+                        f"Consider closing manually.",
+                        priority="normal",
+                    )
+            # ──
                 return
 
             if current_peak >= damage_control_usd and profit <= damage_loss_usd:
@@ -840,6 +868,27 @@ class ProfitGuard:
                 return
 
             if profit <= 0:
+                exp_verdict = self._exp_guard.evaluate(ticket, profit)
+                if exp_verdict == "close":
+                    stats = self._exp_guard.stats
+                    threshold = stats.loss_close_threshold if stats else 0.0
+                    self._close_atomic(
+                        pos,
+                        reason=(
+                            f"loss ${abs(profit):.2f} exceeded expectancy close "
+                            f"threshold ${threshold:.2f} after peak "
+                            f"+${current_peak:.2f}"
+                        ),
+                    )
+                    return
+                elif exp_verdict == "alert":
+                    stats = self._exp_guard.stats
+                    self.notify(
+                        f"⚠️ Expectancy alert — {symbol} reversed from "
+                        f"+${current_peak:.2f} to -${abs(profit):.2f}. "
+                        f"Avg loss is ${stats.avg_loss:.2f}.",
+                        priority="normal",
+                    )
                 return
 
             retracement = (current_peak - profit) / current_peak
@@ -907,6 +956,7 @@ class ProfitGuard:
         self._pip_val.pop(ticket, None)
         self._breakeven_set.discard(ticket)
         self._be_attempted.discard(ticket)
+        self._exp_guard.clear_ticket(ticket)
 
     def status(self) -> str:
         with self._api_lock:
@@ -926,8 +976,8 @@ class ProfitGuard:
                     f"1 pip = ${pip_val:.4f} | Secure on {threshold:.0%} retrace | {be_locked}"
                 )
             return "\n".join(lines)
-
-
+        exp_summary = self._exp_guard.summary()
+        return f"{base}\n\n{exp_summary}"
 
 class TradeGatekeeper:
     """
