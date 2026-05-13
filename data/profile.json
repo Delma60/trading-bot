@@ -50,6 +50,10 @@
             "commodities": [
                 "BRENTUSD", "CORNUSD", "NATGAS", "SOYBEANSUSD",
                 "WHEATUSD", "WTIUSD"
+            ],
+            "stocks": [
+                "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA",
+                "META", "NVDA", "JPM", "V", "UNH", "AAPL.NAS", "BA.NYSE","BX.NAS","COP.NYSE","DIS.NYSE","F.NYSE","GE.NYSE","IBM.NYSE","INTC.NAS","JNJ.NYSE","CRM.NYSE"
             ]
         },
         "strategy_mapping": {
@@ -59,7 +63,8 @@
                 "metals": "Momentum",
                 "crypto": "Momentum",
                 "indices": "Breakout",
-                "commodities": "Trend_Following"
+                "commodities": "Trend_Following",
+                "stocks": "Trend_Following"
             },
             "symbol_overrides": {}
         }

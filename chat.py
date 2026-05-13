@@ -759,8 +759,10 @@ class ARIA:
             category = "metals"
         elif any(w in lower for w in ["crypto", "bitcoin", "ethereum", "btc", "eth"]):
             category = "crypto"
-        elif any(w in lower for w in ["index", "indices", "stocks", "us30"]):
+        elif any(w in lower for w in ["index", "indices", "us30"]):
             category = "indices"
+        elif any(w in lower for w in ["stock", "stocks", "shares", "equities"]):
+            category = "stocks"
         elif any(w in lower for w in ["oil", "commodity", "commodities"]):
             category = "commodities"
 
@@ -807,11 +809,11 @@ class ARIA:
 
         CAT_EMOJI = {
             "forex": "💱 FOREX", "metals": "🥇 METALS", "crypto": "₿  CRYPTO",
-            "indices": "📈 INDICES", "commodities": "🛢  COMMODITIES",
+            "indices": "📈 INDICES", "commodities": "🛢  COMMODITIES", "stocks": "🏢 STOCKS",
         }
 
         lines = [header]
-        for cat in ["forex", "metals", "crypto", "indices", "commodities"]:
+        for cat in ["forex", "metals", "crypto", "indices", "commodities", "stocks"]:
             items = grouped.get(cat, [])
             if not items:
                 continue
@@ -1038,7 +1040,7 @@ class ARIA:
         import re
         from manager.nlp_engine import SYMBOL_ALIASES
 
-        symbols_found = re.findall(r"\b([A-Z]{3,7})\b", text.upper())
+        symbols_found = re.findall(r"\b([A-Z]{2,7}[0-9]{0,3}(?:\.[A-Z]{1,4})?)\b", text.upper())
         resolved = set()
         for sym in symbols_found:
             if sym in SYMBOL_ALIASES:
@@ -1148,7 +1150,7 @@ class ARIA:
         ).strip()
 
         text_upper = user_input.upper()
-        symbols = list(set(re.findall(r"\b[A-Z]{4,7}[0-9]{0,3}\b", text_upper)))
+        symbols = list(set(re.findall(r"\b[A-Z]{2,7}[0-9]{0,3}(?:\.[A-Z]{1,4})?\b", text_upper)))
         risk_m  = re.search(r"(\d+(?:\.\d+)?)\s*%", user_input)
         profit_m = re.search(r"\$?(\d+(?:\.\d+)?)\s*(?:daily|per day)?", user_input)
 
@@ -1171,6 +1173,7 @@ class ARIA:
                     "asset_class_defaults": {
                         "forex": "Mean_Reversion", "metals": "Momentum",
                         "crypto": "Momentum", "indices": "Breakout",
+                        "stocks": "Trend_Following"
                     },
                     "symbol_overrides": {}
                 }

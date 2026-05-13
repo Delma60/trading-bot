@@ -161,7 +161,7 @@ def _resolve_symbols(broker, symbols: list[str]) -> list[str]:
             result = []
             result.extend(registry.get_universe("forex")[:5])
             result.extend(registry.get_universe("metals")[:2])
-            result.extend(registry.get_universe("indices_us")[:2])
+            result.extend(registry.get_universe("stocks")[:2])  # <- Pull available stocksresult.extend(registry.get_universe("indices")[:2])
             result.extend(registry.get_universe("crypto")[:2])
             if result:
                 agent_notify(

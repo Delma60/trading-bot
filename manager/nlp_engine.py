@@ -305,11 +305,25 @@ class NLPEngine:
             if re.search(rf'\b{re.escape(alias)}\b', text_upper):
                 alias_symbols.append(canonical)
 
-        # 2. Extract 6–7 letter uppercase ticker patterns
-        ticker_symbols = [
-            token for token in re.findall(r'\b[A-Z]{6,7}\b', text_upper)
-            if token.endswith(("USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"))
-        ]
+        # 2. Extract standard tickers, suffixed stock symbols (AAPL.NAS), or pure short equities
+        raw_candidates = re.findall(r'\b[A-Z]{2,7}[0-9]{0,3}(?:\.[A-Z]{1,4})?\b', text_upper)
+        ticker_symbols = []
+        
+        valid_quotes = ("USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD")
+        filler_words = {"BUY", "SELL", "LONG", "SHORT", "THE", "AND", "LOT", "LOTS", "PERCENT", "DAILY"}
+        
+        for token in raw_candidates:
+            if token in filler_words:
+                continue
+            # Keep explicitly suffixed broker symbols
+            if "." in token:
+                ticker_symbols.append(token)
+            # Keep standard forex/crypto assets ending in quote currencies
+            elif token.endswith(valid_quotes) and len(token) >= 6:
+                ticker_symbols.append(token)
+            # Keep standalone short equity tickers (e.g., AAPL, TSLA, BA)
+            elif 2 <= len(token) <= 5:
+                ticker_symbols.append(token)
 
         # 3. Merge and deduplicate (alias results take priority)
         all_symbols = alias_symbols + [s for s in ticker_symbols if s not in alias_symbols]

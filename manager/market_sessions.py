@@ -155,27 +155,42 @@ class MarketSessionManager:
 
         except Exception:
             return _FALLBACK_SESSIONS
-
     def get_symbol_category(self, symbol: str) -> str:
-        """Return the market category for a broker symbol."""
         sym = symbol.upper()
 
+        # 1. Check explicit mappings first
         for cat, keywords in self.CATEGORY_MAP.items():
             if any(sym.startswith(kw) or kw in sym for kw in keywords):
                 return cat
 
+        # 2. Check standard Forex pairs (avoid matching suffixed stocks if they contain a triplet)
         forex_currencies = ["USD", "EUR", "GBP", "JPY", "CHF",
                             "CAD", "AUD", "NZD", "SEK", "NOK", "DKK"]
-        if any(sym[:3] in forex_currencies or sym[3:6] in forex_currencies
-               for _ in [None]):
+        if len(sym) >= 6 and "." not in sym and (sym[:3] in forex_currencies or sym[3:6] in forex_currencies):
             return "forex"
-        if re.search(r"\d", sym):
-            if any(x in sym for x in ["US", "GER", "UK", "FRA", "JPN", "AUS", "HK"]):
-                return "indices_us" if "US" in sym else "indices_eu"
-            return "commodities"  # NGAS, BRENT, WTI etc.
 
-        return "forex"
+        # 3. Explicit check for stock exchange suffixes
+        if any(sym.endswith(suffix) for suffix in [".NAS", ".NYSE", ".US", ".UK", ".L"]):
+            return "stocks"
 
+        # 4. Catch numeric index/commodity symbols or explicit commodity strings
+        import re
+        if re.search(r"\d", sym) or any(c in sym for c in ["OIL", "GAS", "BRENT", "WTI"]):
+            if any(x in sym for x in ["US", "NAS", "DOW", "SP"]):
+                return "indices_us"
+            elif any(x in sym for x in ["GER", "UK", "FRA", "ESP", "EUSTX", "DAX", "CAC"]):
+                return "indices_eu"
+            elif any(x in sym for x in ["JPN", "AUS", "HK", "CN", "SG", "NKY"]):
+                return "indices_asia"
+            elif any(x in sym for x in ["OIL", "GAS", "BRENT", "WTI"]):
+                return "commodities"
+            return "indices_us"  # Safe default for unknown indices
+
+        # 5. Fallback for Stocks: Short alphabetical tickers without dots
+        if len(sym) <= 5 and not any(fc in sym for fc in forex_currencies[:4]):
+            return "stocks"
+
+        return "forex"  # Ultimate fallback
     def is_symbol_tradeable(
         self, symbol: str, now_utc: datetime = None
     ) -> tuple[bool, str]:

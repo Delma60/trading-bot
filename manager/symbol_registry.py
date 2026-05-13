@@ -52,6 +52,8 @@ _FALLBACK: dict[str, list[str]] = {
     "crypto":      ["BTCUSD", "ETHUSD", "LTCUSD", "XRPUSD"],
     "indices":     ["US30", "US500", "NAS100", "GER40", "UK100"],
     "commodities": ["USOIL", "NGAS"],
+    "stocks":      ["AAPL", "TSLA", "MSFT", "NVDA", "AMZN", "GOOGL"]
+    
 }
 
 # Spread ceiling (pips) used to filter out illiquid symbols from the
@@ -62,6 +64,7 @@ _ARB_MAX_SPREAD_PIPS: dict[str, float] = {
     "crypto":      80.0,
     "indices":     5.0,
     "commodities": 8.0,
+    "stocks":      10.0
 }
 
 # How many seconds cached data stays fresh before the next broker query.

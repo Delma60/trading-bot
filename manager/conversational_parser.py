@@ -392,10 +392,16 @@ class ConversationalParser:
                 if canonical not in found:
                     found.append(canonical)
 
-        # Then look for 6-7 char uppercase tickers
-        for match in re.findall(r'\b([A-Z]{6,7})\b', original):
-            if match not in found:
-                found.append(match)
+        # Extract tickers supporting standard formats, short equities, and dot suffixes
+        for match in re.findall(r'\b([A-Z]{2,7}[0-9]{0,3}(?:\.[A-Z]{1,4})?)\b', original.upper()):
+            # If it's a short token without a dot suffix, ensure it's not a standard English word
+            if len(match) <= 4 and "." not in match:
+                ignore_words = {"BUY", "SELL", "LONG", "THE", "AND", "FOR", "ALL", "DAY", "NOW", "P&L", "LOT"}
+                if match not in ignore_words and match not in found:
+                    found.append(match)
+            else:
+                if match not in found:
+                    found.append(match)
 
         return found
 
