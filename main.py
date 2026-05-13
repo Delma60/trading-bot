@@ -18,6 +18,9 @@ from chat import ARIA
 from pathlib import Path
 from manager.profile_manager import profile as _profile
 from manager.position_monitor import PositionMonitor
+# --- Optimizer imports ---
+from manager.self_optimizer import SelfOptimizer
+from manager.auto_optimizer import AutoOptimizer
 
 # Global shutdown flag for graceful termination
 shutdown_event = threading.Event()
@@ -315,3 +318,10 @@ if __name__ == "__main__":
         # 5. Final goodbye message
         agent_notify("👋 Trading bot shutdown complete. Goodbye!\n")
         sys.exit(0)
+
+    # --- Optimizer initialization ---
+    self_optimizer = SelfOptimizer(strategy_manager, broker, notify_callback=agent_notify)
+    auto_optimizer = AutoOptimizer(strategy_manager, notify_callback=agent_notify)
+    self_optimizer.start()
+    auto_optimizer.start()
+    # --- End optimizer initialization ---
