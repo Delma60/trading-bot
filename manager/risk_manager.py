@@ -927,7 +927,23 @@ class ProfitGuard:
                 )
             return "\n".join(lines)
 
+
+
 class TradeGatekeeper:
+    """
+    Pre-trade session and spread guard.
+
+    Checks (in order):
+    1. Friday-close blackout  (last 2 h of Friday, UTC)
+    2. Asian session block    (configurable pairs + time window)
+    3. Live spread ceiling
+    """
+
+    # UTC hour ranges (inclusive start, exclusive end)
+    FRIDAY_CLOSE_START_UTC = 20   # 20:00 UTC Friday
+    ASIAN_SESSION_START_UTC = 0   # 00:00 UTC
+    ASIAN_SESSION_END_UTC   = 8   # 08:00 UTC
+
     def __init__(
         self,
         max_spread_pips:        float = 3.0,
@@ -943,12 +959,45 @@ class TradeGatekeeper:
 
     def gate(self, symbol: str, broker) -> tuple[bool, str]:
         from manager.profile_manager import profile
+
+        now_utc  = datetime.now(timezone.utc)
+        weekday  = now_utc.weekday()   # 0=Mon … 4=Fri … 6=Sun
+        hour_utc = now_utc.hour
+
         session_cfg = profile.sessions()
-        if session_cfg.avoid_asian_session and symbol in getattr(session_cfg, 'asian_session_pairs', []):
-            return False, f"Trading {symbol} is blocked during Asian session."
+
+        # ── FIX #19: Check ACTUAL clock time, not just pair membership ──
+
+        # 1. Friday close blackout
+        if self.avoid_friday_close and weekday == 4 and hour_utc >= self.FRIDAY_CLOSE_START_UTC:
+            return False, (
+                f"Friday close blackout — no new entries after "
+                f"{self.FRIDAY_CLOSE_START_UTC}:00 UTC on Friday."
+            )
+
+        # 2. Asian session block (time-gated, then pair-filtered)
+        if self.avoid_asian_session:
+            in_asian_hours = (
+                self.ASIAN_SESSION_START_UTC <= hour_utc < self.ASIAN_SESSION_END_UTC
+            )
+            asian_pairs = getattr(session_cfg, "asian_session_pairs", [])
+            if in_asian_hours and symbol in asian_pairs:
+                return False, (
+                    f"Asian session ({self.ASIAN_SESSION_START_UTC:02d}:00–"
+                    f"{self.ASIAN_SESSION_END_UTC:02d}:00 UTC): "
+                    f"trading {symbol} is blocked."
+                )
+
+        # 3. Spread check
         spread = self._get_spread_pips(symbol, broker)
-        if spread is not None and spread > self.max_spread_forex:
-            return False, f"Spread too high: {spread:.1f} pips."
+        ceiling = (
+            self.max_spread_crypto
+            if any(k in symbol.upper() for k in ("BTC", "ETH", "LTC", "XRP"))
+            else self.max_spread_forex
+        )
+        if spread is not None and spread > ceiling:
+            return False, f"Spread too high: {spread:.1f} pips (ceiling {ceiling:.1f})."
+
         return True, "OK"
 
     def _get_spread_pips(self, symbol: str, broker=None, category: Optional[str] = None) -> Optional[float]:

@@ -136,42 +136,30 @@ class PortfolioManager:
         except Exception as e:
             self.notify(f"[Portfolio Manager]: Failed to save config: {e}")
 
-    # def add_symbol(self, symbol: str, asset_class: str = None) -> bool:
-    #     symbol = symbol.upper()
-    #     if not asset_class:
-    #         asset_class = self._infer_asset_class(symbol)
 
-    #     if asset_class not in self.asset_classes:
-    #         self.asset_classes[asset_class] = []
 
-    #     if symbol in self.asset_classes[asset_class]:
-    #         return False
-
-    #     self.asset_classes[asset_class].append(symbol)
-    #     self.master_watchlist.append(symbol)
-    #     self.config["asset_classes"] = self.asset_classes
-    #     self._save_config()
-    #     return True
-    
     def add_symbol(self, symbol: str, asset_class: str = None) -> bool:
         symbol = symbol.upper()
-        # FIX: Delegate persistence directly to the single source of truth
         if not asset_class:
             asset_class = self._infer_asset_class(symbol)
 
         if asset_class not in self.asset_classes:
             self.asset_classes[asset_class] = []
 
+        # Guard duplicate in asset_classes list
         if symbol in self.asset_classes[asset_class]:
             return False
 
         self.asset_classes[asset_class].append(symbol)
-        self.master_watchlist.append(symbol)
-        # If you have a config dict, persist here if needed
-        # self.config["asset_classes"] = self.asset_classes
-        # self._save_config()
-        return True
 
+        # FIX #22: Guard duplicate in master_watchlist before appending.
+        # The original code always appended, allowing symbols added via profile
+        # initialisation AND via add_symbol() to appear twice — doubling
+        # position sizes silently on every scan cycle.
+        if symbol not in self.master_watchlist:
+            self.master_watchlist.append(symbol)
+
+        return True
     def _assign_strategy(self, symbol: str, current_state: np.ndarray) -> str:
         """Decides which strategy to use (AI if ready, Config if not)."""
         if not self.is_ai_ready:

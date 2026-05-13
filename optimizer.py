@@ -889,7 +889,7 @@ class PortfolioOptimizer:
             raise RuntimeError("No equity curve data available for any symbol.")
 
         # Align all curves on a common date index
-        combined = pd.DataFrame(equity_curves).dropna(how="all").fillna(method="ffill").dropna()
+        combined = pd.DataFrame(equity_curves).dropna(how="all").ffill().dropna()
 
         best_score  = -math.inf
         best_weights = {s: 1.0 / len(symbols) for s in symbols}

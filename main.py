@@ -29,7 +29,6 @@ _scan_lock = threading.Lock()  # Prevent overlapping scan cycles
 
 def _default_agent_notify(msg: str, priority: str = "normal"):
     timestamp = datetime.now().strftime("%H:%M:%S")
-    # Format directly to your required standard
     print(f"[{timestamp}] [Bot]: {msg}")
 
 def agent_notify(msg: str, priority: str = "normal"):
@@ -43,16 +42,12 @@ def agent_notify(msg: str, priority: str = "normal"):
         _default_agent_notify(msg, priority)
 
 
-# Define the callback handler above the autonomous_scanner function
 def handle_external_close(ticket: int, symbol: str, profit: float, close_price: float, direction: str, lots: float, open_price: float):
     """
     Fired by PositionMonitor when MT5 closes a trade via SL/TP or manual app intervention.
-    Ensures complete history tracking and continuous ML feedback loops.
     """
-    # 1. Fetch the strategy associated with this ticket
     strategy_name = broker._strategy_for(ticket)
     
-    # 2. Log the external close to trade_history.csv
     broker._log_trade_history(
         action="CLOSE_SL_TP",
         symbol=symbol,
@@ -64,16 +59,13 @@ def handle_external_close(ticket: int, symbol: str, profit: float, close_price: 
         profit=profit
     )
     
-    # 3. Update Risk Manager metrics (win/loss counters and cool-downs)
     if profit < 0:
         risk_manager.record_loss(symbol)
     else:
         risk_manager.record_win(symbol)
         
-    # 4. Feed the finalized PnL back into the Portfolio Manager for continuous ML learning
     portfolio_manager.log_trade_for_learning(ticket=ticket, profit=profit)
     
-    # 5. Push real-time alert to the system/interface
     status_icon = "🟢" if profit > 0 else "🔴"
     agent_notify(
         f"{status_icon} External Close Detected -> {symbol} (Ticket #{ticket}) closed at {close_price} | PnL: ${profit:.2f}",
@@ -82,77 +74,69 @@ def handle_external_close(ticket: int, symbol: str, profit: float, close_price: 
     
 def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_seconds: int = 3, notify=agent_notify):
     """
-    This runs in the background forever. It wakes up, scans the market, 
-    executes trades if it finds any, and goes back to sleep.
+    Background scanner. Re-reads profile each cycle so runtime changes
+    (e.g. 'change risk to 0.5%') take effect immediately.
     """
-    
-    r  = _profile.risk()
-    symbols = _profile.symbols()
-    risk_pct = r.risk_pct
-    stop_loss = r.stop_loss_pips
-    max_daily_loss = r.max_daily_loss
-    daily_target = r.daily_goal
-    session_target = r.take_profit_pips  * len(symbols)
-    
-    
     notify(f"🟢 Real-time Market Watch started. Scanning every {scan_interval_seconds} seconds.")
-    
-   
 
     while not shutdown_event.is_set():
-        # Prevent overlapping scan cycles — skip if previous scan still running
         if not _scan_lock.acquire(blocking=False):
             if shutdown_event.wait(timeout=scan_interval_seconds):
                 break
             continue
 
         try:
-            # 1. Check total realized profit for today
+            # FIX #18: Re-read profile on every cycle so chat-driven changes
+            # (risk, symbols, daily goal) are picked up immediately.
+            r  = _profile.risk()
+            symbols = _profile.symbols()
+            risk_pct = r.risk_pct
+            stop_loss = r.stop_loss_pips
+            max_daily_loss = r.max_daily_loss
+            daily_target = r.daily_goal
+            session_target = r.take_profit_pips * len(symbols)
+
             today_profit = portfolio_manager.broker.get_daily_realized_profit()
-            # 2. Check floating profit of open trades (the current session)
             floating_profit = portfolio_manager.broker.get_total_floating_profit()
 
-            # 3. Have we hit the daily goal?
             if today_profit + floating_profit >= daily_target:
                 notify(f"🎉 Daily Goal of ${daily_target} reached! Closing all trades.")
                 portfolio_manager.broker.close_all_positions()
 
-                # +++ TRIGGER CONTINUOUS LEARNING HERE +++
                 for symbol in symbols:
                     portfolio_manager.strategy_manager.continuous_learning_routine(symbol)
 
                 notify("💤 Neural Net optimized. Sleeping until tomorrow.")
-                # FIX: Replace time.sleep(86400) with a cancellable wait
-                if shutdown_event.wait(timeout=86400):
+                # FIX #24: Sleep until midnight rather than a fixed 86400 s offset
+                # so we resume at the next trading day open, not 24h from goal hit.
+                from datetime import date, timedelta
+                import time as _time
+                midnight = datetime.combine(date.today() + timedelta(days=1), datetime.min.time())
+                secs_to_midnight = (midnight - datetime.now()).total_seconds()
+                if shutdown_event.wait(timeout=max(secs_to_midnight, 1)):
                     break
                 continue
 
-            # 4. Have we hit the session goal?
             if floating_profit >= session_target:
                 notify(f"✅ Session Goal of ${session_target} reached! Closing basket and starting a new cycle.")
                 portfolio_manager.broker.close_all_positions()
-                # Continue to next scan
 
-            # 5. Scan portfolio for opportunities (silent operation)
             results = portfolio_manager.evaluate_portfolio_opportunities(
                 risk_pct=risk_pct,
                 stop_loss=stop_loss,
                 max_daily_loss=max_daily_loss
             )
 
-            # 6. Send the results through the agent
             for result in results:
                 priority = "trade_executed" if "EXECUTED" in result else "critical" if "🚑" in result or "FATAL" in result else "normal"
                 notify(result, priority=priority)
 
-            # 7. Wait for the next scan or a shutdown signal.
             if shutdown_event.wait(timeout=scan_interval_seconds):
                 notify("🚑 Shutdown signal received. Scanner stopping gracefully...")
                 break
 
         except Exception as e:
             notify(f"⚠️ Error during autonomous scan: {e}")
-            # Sleep for a minute before retrying to prevent error spam
             if shutdown_event.wait(60):
                 break
         finally:
@@ -161,39 +145,20 @@ def autonomous_scanner(portfolio_manager: PortfolioManager, scan_interval_second
     notify("✅ Background Scanner stopped.")
 
 def signal_handler(signum, frame):
-    """
-    Handle Ctrl+C (SIGINT) and termination signals gracefully.
-    """
     agent_notify("🛑 Shutdown signal received (Ctrl+C or termination).", priority="critical")
     shutdown_event.set()
 
 
-        
 def _resolve_symbols(broker, symbols: list[str]) -> list[str]:
-    """
-    Determine the trading universe for this session.
- 
-    Priority
-    --------
-    1. _profile.json  trading_symbols  — user's explicit configuration.
-    2. Broker query  — if connected and profile is empty, fetch the most
-                       liquid forex pairs from the broker itself.
-    3. Hardcoded fallback — only if the broker is also unavailable.
- 
-    This replaces the previous `cfg.get("trading_symbols", ["EURUSD"])`
-    one-liner that silently dropped to a single hardcoded symbol.
-    """
     from manager.symbol_registry import SymbolRegistry
 
     if symbols:
         return symbols
- 
-    # 2. Ask the broker for liquid forex pairs.
+
     if broker.connected:
         try:
             registry = SymbolRegistry(broker)
             forex    = registry.get_universe("forex")
-            # Limit to the 10 most liquid (registry returns spread-sorted results).
             if forex:
                 agent_notify(
                     f"_profile.json has no trading_symbols — "
@@ -202,19 +167,17 @@ def _resolve_symbols(broker, symbols: list[str]) -> list[str]:
                 return forex[:10]
         except Exception as exc:
             agent_notify(f"⚠️ Could not query broker for default symbols: {exc}")
- 
-    # 3. Last resort — conservative single pair.
+
     agent_notify(
         "⚠️ Broker unavailable and _profile.json has no trading_symbols. "
         "Defaulting to EURUSD."
     )
     return ["EURUSD"]
- 
- 
+
+
 if __name__ == "__main__":
     agent_notify("Initializing Quantitative Trading System...")
 
-    # 1. Initialize the core API connection
     broker = Trader(notify_callback=agent_notify)
     credentials_path = Path("data/credentials.json")
     credentials = {}
@@ -235,35 +198,38 @@ if __name__ == "__main__":
     if not connected:
         agent_notify("⚠️ Broker not connected. LocalCache will still warm up from disk if available.")
 
-    
     symbols = _resolve_symbols(broker, _profile.symbols())
     cache = LocalCache(broker, symbols, notify_callback=agent_notify)
     cache.warm_up()
     cache.start()
 
-    # 3. Initialize the Engines
     strategy_manager = StrategyManager(broker, cache=cache, notify_callback=agent_notify)
-    risk_manager = RiskManager(broker, cache=cache, max_open_trades=len(symbols), min_margin_level=150.0, notify_callback=agent_notify)
 
-    # 4. Initialize the Portfolio Manager
+    # FIX #2: max_open_trades must NOT equal len(symbols) — that bypasses all
+    # position limits and scales exposure linearly with watchlist size.
+    # Read from profile (default 2) and cap at a safe ceiling.
+    _broker_cfg = _profile.broker()
+    _safe_max_trades = min(_broker_cfg.max_open_trades, 5)  # hard ceiling of 5
+    risk_manager = RiskManager(
+        broker,
+        cache=cache,
+        max_open_trades=_safe_max_trades,
+        min_margin_level=150.0,
+        notify_callback=agent_notify,
+    )
+
     portfolio_manager = PortfolioManager(broker, strategy_manager, risk_manager, cache=cache, notify_callback=agent_notify)
     
-    
-    # 5. Start the Background Scanner Thread
-    # Set daemon=False so we can gracefully join it on exit
     scanner_thread = threading.Thread(
         target=autonomous_scanner,
         args=(portfolio_manager, _profile.scanner().interval_seconds, agent_notify)
     )
-
     scanner_thread.daemon = False
     scanner_thread.start()
 
-    # 5. Register signal handlers for graceful shutdown
-    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
-    signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
-    # 6. Boot up ARIA on the Main Thread
     bot = ARIA(
         intents_filepath="intents.json", 
         broker=broker, 
@@ -273,13 +239,13 @@ if __name__ == "__main__":
     )
     current_agent_listener = bot.receive_system_alert
 
-    # FIXED: Boot up SelfOptimizer and AutoOptimizer daemons BEFORE launching the blocking chat loop
+    # FIX #5/#9: Optimizers started here (on main thread, before chat loop)
+    # rather than as dead class-level code that never ran.
     self_optimizer = SelfOptimizer(strategy_manager, broker, notify_callback=agent_notify)
     auto_optimizer = AutoOptimizer(strategy_manager, notify_callback=agent_notify)
     self_optimizer.start()
     auto_optimizer.start()
 
-    # 7. Run chatbot with proper exception handling and cleanup
     try:
         bot.start_chat()
     except KeyboardInterrupt:
@@ -288,31 +254,21 @@ if __name__ == "__main__":
     except Exception as e:
         import traceback
         agent_notify(f"❌ Unexpected error: {e}")
-        traceback.print_exc()  # Print full stack trace for debugging
+        traceback.print_exc()
         shutdown_event.set()
     finally:
-        # === GRACEFUL SHUTDOWN SEQUENCE ===
         agent_notify("Initiating graceful shutdown sequence...")
-        
-        # 1. Signal scanner thread to stop
         shutdown_event.set()
         
-        # if 'position_monitor' in locals() and position_monitor is not None:
-        #     agent_notify("Stopping external position monitor...")
-        #     position_monitor.stop()
-        
-        # 2. Wait for scanner thread to finish (with timeout)
         agent_notify("Waiting for background scanner to stop...")
         scanner_thread.join(timeout=5)
         if scanner_thread.is_alive():
             agent_notify("⚠️ Scanner thread did not stop within timeout.")
         
-        # 3. Stop cache refresh loop
         if 'cache' in locals() and cache is not None:
             agent_notify("Saving cache to disk and stopping background refresh...")
             cache.stop()
 
-        # 4. Disconnect from broker
         if broker.connected:
             agent_notify("Disconnecting from MetaTrader 5...")
             try:
@@ -321,8 +277,5 @@ if __name__ == "__main__":
             except Exception as e:
                 agent_notify(f"⚠️ Error disconnecting broker: {e}")
         
-        # 5. Final goodbye message
         agent_notify("👋 Trading bot shutdown complete. Goodbye!\n")
         sys.exit(0)
-
-    
