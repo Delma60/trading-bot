@@ -1,0 +1,5 @@
+{"loop": "MicroAdaptor", "ts": "2026-05-13T09:01:51.714705", "direction": "nudge_down", "strategy": "Trend_Following", "attr": "adx_threshold", "old": 25.0, "new": 24.5, "rolling_wr": 0.722}
+{"loop": "MicroAdaptor", "ts": "2026-05-13T09:02:51.724191", "direction": "nudge_down", "strategy": "Trend_Following", "attr": "adx_threshold", "old": 24.5, "new": 24.0, "rolling_wr": 0.722}
+{"loop": "MicroAdaptor", "ts": "2026-05-13T09:03:51.732050", "direction": "nudge_down", "strategy": "Trend_Following", "attr": "adx_threshold", "old": 24.0, "new": 23.5, "rolling_wr": 0.722}
+{"loop": "MicroAdaptor", "ts": "2026-05-13T09:05:16.361963", "direction": "nudge_down", "strategy": "Trend_Following", "attr": "adx_threshold", "old": 25.0, "new": 24.5, "rolling_wr": 0.722}
+{"loop": "MicroAdaptor", "ts": "2026-05-13T09:06:17.188847", "direction": "nudge_down", "strategy": "Trend_Following", "attr": "adx_threshold", "old": 24.5, "new": 24.0, "rolling_wr": 0.722}

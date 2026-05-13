@@ -38,15 +38,8 @@ from manager.position_monitor import PositionMonitor
 from manager.self_optimizer import SelfOptimizer
 from manager.auto_optimizer import AutoOptimizer
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ActionExecutor — handles broker operations recommended by the agent
-# ─────────────────────────────────────────────────────────────────────────────
-
 class ActionExecutor:
-    """
-    Performs real broker actions after the agent recommends them.
-    """
-
+    """Performs real broker actions after the agent recommends them."""
     def __init__(self, broker: Trader, strategy_manager: StrategyManager,
                  risk_manager: RiskManager, profile_path: Path):
         self.broker    = broker
@@ -143,20 +136,10 @@ class ActionExecutor:
             return f"Retraining ran into an issue: {e}"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ARIA  —  main chatbot class
-# ─────────────────────────────────────────────────────────────────────────────
-
 class ARIA:
-    """
-    Adaptive Reasoning & Intelligence for Algo-trading.
-
-    Conversational trading partner — not a command-line tool.
-    """
-
+    """Conversational trading partner."""
     PROFILE_FILE = Path("data/profile.json")
 
-    # ── Minimal keyword fallbacks (last resort only) ──────────────────────────
     _HARD_KEYWORDS: list[tuple[list[str], str]] = [
         (["inbox", "notifications", "alerts check", "any updates"], "check_notifications"),
         (["retrain", "update model", "relearn"], "retrain_model"),
@@ -203,7 +186,6 @@ class ARIA:
             "last_setting":   None,
         }
 
-        # ── Cognitive components ──────────────────────────────────────────────
         self.working_memory  = WorkingMemory()
         self.episodic_memory = EpisodicMemory()
         self.user_model      = UserModel()
@@ -218,7 +200,6 @@ class ARIA:
             self.receive_system_alert
         )
 
-        # ── Conversational parser ─────────────────────────────────────────────
         self.conv_parser = ConversationalParser()
 
         self.proactive_engine.start()
@@ -230,26 +211,17 @@ class ARIA:
         self.broker.register_position_monitor(self.position_monitor)
         self.position_monitor.start()
 
-        # Multi-turn state
         self.pending_action: Optional[str] = None
         self.pending_data: dict = {}
 
-        # Notification inbox
         self.notification_inbox: list = []
         self.inbox_lock = threading.Lock()
 
-        # Message processing timeout
         self.message_processor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ARIA-msg")
         self.message_timeout_seconds = 30
 
         self.console = Console()
         self.session = PromptSession()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Public API
-    # ─────────────────────────────────────────────────────────────────────────
-
-    # chat.py — add this method to ARIA class
 
     def _on_external_close(
         self,
@@ -261,22 +233,15 @@ class ARIA:
         lots: float,
         open_price: float,
     ) -> None:
-        """
-        Fired when a position closes outside the bot — SL/TP hit,
-        manual close from the MT5 app, margin call, etc.
-        Keeps all internal state consistent.
-        """
         sign   = "+" if profit >= 0 else ""
         reason = "TP hit" if profit > 0 else "SL hit" if profit < 0 else "break-even close"
 
-        # 1. Notify the user
         self.receive_system_alert(
             f"📱 External close — {symbol} {direction} {lots}L "
             f"@ {close_price} ({reason}): {sign}${profit:.2f}",
             priority="trade_executed",
         )
 
-        # 2. Log to trade history CSV (same format as bot closes)
         strategy = self.broker._strategy_for(ticket)
         self.broker._log_trade_history(
             action="CLOSE",
@@ -289,20 +254,16 @@ class ARIA:
             profit=profit,
         )
 
-        # 3. Apply cooldown so the scanner doesn't immediately re-enter
         self.broker._mark_cooldown(symbol)
 
-        # 4. Update loss-streak tracker (from previous win-rate fix)
         if hasattr(self.rm, "record_win") and hasattr(self.rm, "record_loss"):
             if profit >= 0:
                 self.rm.record_win(symbol)
             else:
                 self.rm.record_loss(symbol)
 
-        # 5. Feed ML learning pipeline with the outcome
         self.pm.log_trade_for_learning(ticket=ticket, profit=profit)
 
-        # 6. Episodic memory — remember this for future context
         self.episodic_memory.store(Episode(
             timestamp=datetime.now().isoformat(),
             episode_type="trade",
@@ -313,8 +274,8 @@ class ARIA:
             tags=["external_close", "sl_hit" if profit < 0 else "tp_hit", symbol],
         ))
 
-        # 7. Update working memory so ARIA knows what just happened
         self.working_memory.remember_symbol(symbol)
+
     def receive_system_alert(self, msg: str, priority: str = "normal"):
         with self.inbox_lock:
             self.notification_inbox.append({"msg": msg, "priority": priority})
@@ -331,10 +292,6 @@ class ARIA:
         greeting = self._make_session_aware_greeting()
         self._type_print(greeting)
         self._run_loop()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Core message pipeline
-    # ─────────────────────────────────────────────────────────────────────────
 
     def process_message(self, user_input: str) -> str:
         try:
@@ -358,39 +315,25 @@ class ARIA:
             return msg
 
     def _process_message_impl(self, user_input: str) -> str:
-        """
-        Conversational pipeline:
-        1. Pending state check (multi-turn confirmation)
-        2. Conversational parser (natural language → intent)
-        3. Hard keyword fallbacks (very specific commands)
-        4. NLP classifier (trained neural model)
-        5. Agent reasoning + cognitive layers
-        """
         text = user_input.strip()
         if not text:
             return ""
 
-        # ── 0. Detect emotion early (shapes everything downstream) ────────────
         emotion = self._detect_emotion(text)
 
-        # ── 1. Log user turn to working memory ───────────────────────────────
-        # (Intent filled in after classification)
         self.working_memory.add_turn(ConversationTurn(
             role="user", text=text, intent="", emotion=emotion
         ))
 
-        # ── 2. Pending multi-turn state takes priority ────────────────────────
         if self.pending_action:
             handled, response = self._handle_pending(text)
             if handled:
                 self._log_aria_turn(response, self.memory.get("last_intent", ""))
                 return response
 
-        # ── 3. Conversational parser (natural language first) ─────────────────
         parsed = self.conv_parser.parse(text, self.working_memory)
 
         if parsed:
-            # Special confirm/cancel handled conversationally
             if parsed.intent == "__confirm__" and self.pending_action:
                 handled, response = self._handle_pending("yes")
                 if handled:
@@ -407,7 +350,6 @@ class ARIA:
                 self._log_aria_turn(response, "cancel")
                 return response
 
-            # Update entities from conversational parse
             entities = {
                 "symbols": parsed.symbols,
                 "direction": parsed.direction,
@@ -417,7 +359,6 @@ class ARIA:
                 "percentages": [],
                 "sentiment": "neutral",
             }
-            # Merge with NLP entities for symbol coverage
             nlp_entities = self.nlp.extract_entities(text)
             if nlp_entities.get("symbols") and not parsed.symbols:
                 entities["symbols"] = nlp_entities["symbols"]
@@ -427,13 +368,11 @@ class ARIA:
             intent = parsed.intent
             confidence = parsed.confidence
 
-            # Note if we used context to fill gaps — show it naturally
             context_note = ""
             if parsed.context_used and self.working_memory.last_symbol:
                 context_note = f"(using {self.working_memory.last_symbol} from earlier)"
 
         else:
-            # ── 4. Hard keyword fallbacks ─────────────────────────────────────
             lower = text.lower()
             keyword_intent = None
             for keywords, kw_intent in self._HARD_KEYWORDS:
@@ -447,12 +386,10 @@ class ARIA:
                 intent = keyword_intent
                 confidence = 1.0
             else:
-                # ── 5. NLP classifier ─────────────────────────────────────────
                 intent_data = self.nlp.process(text)
                 intent = intent_data.get("intent", "general")
                 confidence = intent_data.get("confidence", 0.0)
 
-                # Symbol mentioned but low confidence → default to analyze
                 syms = entities.get("symbols", [])
                 if syms and confidence < 0.60 and intent not in (
                     "execute_trade", "open_buy", "open_sell",
@@ -462,30 +399,25 @@ class ARIA:
 
             context_note = ""
 
-        # ── 6. Update short-term memory ───────────────────────────────────────
         self._update_memory(entities)
         if entities.get("symbols"):
             for sym in entities["symbols"]:
                 self.working_memory.remember_symbol(sym)
 
-        # Update the turn we logged with the resolved intent
         if self.working_memory.turns:
             self.working_memory.turns[-1].intent = intent
 
-        # ── 7. Inline setting change ──────────────────────────────────────────
         setting_response = self._try_setting_change(text)
         if setting_response:
             self._log_aria_turn(setting_response, intent)
             return setting_response
 
-        # ── 8. Direct action handlers (no agent pipeline needed) ──────────────
         quick = self._handle_quick_action(intent, text, entities)
         if quick is not None:
             self._log_aria_turn(quick, intent)
             self.memory["last_intent"] = intent
             return quick
 
-        # ── 9. Agent pipeline ─────────────────────────────────────────────────
         response = self.agent.run(
             intent   = intent,
             entities = entities,
@@ -493,7 +425,6 @@ class ARIA:
             step_callback = self._step_callback,
         )
 
-        # ── 10. Cognitive layers: inner monologue → voice naturalizer ─────────
         agent_result = {
             "action":     self.agent.last_plan.context.get("action", "WAIT") if self.agent.last_plan else "WAIT",
             "confidence": self.agent.last_plan.context.get("confidence", 0.0) if self.agent.last_plan else 0.0,
@@ -501,18 +432,15 @@ class ARIA:
         thoughts = self.inner_monologue.think(intent, entities, agent_result)
         natural_response = self.voice_layer.render(response, thoughts, intent)
 
-        # Prepend context note naturally if we used memory to fill gaps
         if context_note:
             natural_response = f"{context_note} — {natural_response}"
 
-        # ── 11. Offer to execute if agent recommended a trade ─────────────────
         plan = self.agent.last_plan
         if plan and plan.suggested_action and intent in (
             "execute_trade", "open_buy", "open_sell", "trade_execution"
         ):
             natural_response = self._maybe_execute(natural_response, plan, entities)
 
-        # ── 12. Update cognitive state ────────────────────────────────────────
         self._log_aria_turn(natural_response, intent)
         if intent in ("execute_trade", "open_buy", "open_sell"):
             self.user_model.observe("asked_for_execution", {"symbol": self.memory.get("last_symbol")})
@@ -521,17 +449,12 @@ class ARIA:
         return natural_response
 
     def _log_aria_turn(self, text: str, intent: str):
-        """Log ARIA's response to working memory."""
         self.working_memory.add_turn(ConversationTurn(
             role="aria", text=text, intent=intent, emotion="neutral"
         ))
 
     def notify(self, msg: str, priority: str = "normal"):
         return self.receive_system_alert(msg, priority)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Emotion Detection
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _detect_emotion(self, text: str) -> str:
         lower = text.lower()
@@ -545,10 +468,6 @@ class ARIA:
             return "confident"
         return "neutral"
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Memory
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _update_memory(self, entities: dict):
         if entities.get("symbols"):
             sym = entities["symbols"][0]
@@ -557,15 +476,9 @@ class ARIA:
         if entities.get("timeframes"):
             self.memory["last_timeframe"] = entities["timeframes"][0]
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Quick-action handlers
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _handle_quick_action(self, intent: str, text: str, entities: dict) -> Optional[str]:
-        # Optimizer trigger
         if text.lower().startswith("run optimizer on "):
             symbol = text.lower().split("run optimizer on ")[-1].strip().upper()
-            # Optionally parse dates from entities/text, here we use defaults
             report = run_full_optimization(
                 self.sm,
                 symbol=symbol,
@@ -579,15 +492,12 @@ class ARIA:
             return report.summary()
         lower = text.lower()
 
-        # Backtesting
         if "backtest" in lower or "back test" in lower or "test the strategy" in lower:
             return self._handle_backtest(text, entities)
 
-        # Explicit trade execution
         if intent in ("execute_trade", "open_buy", "open_sell") and self._is_explicit_execute(lower):
             return self._execute_trade_now(entities, intent)
 
-        # Close specific symbol
         if intent == "close_position":
             symbol = (entities.get("symbols") or [self.memory.get("last_symbol")])[0]
             if not symbol:
@@ -606,7 +516,6 @@ class ARIA:
                 )
             return f"Close {symbol}? Say yes to confirm."
 
-        # Close profitable positions
         if intent == "close_profitable_positions" or any(k in lower for k in ["close all profitable", "close profitable", "take profit", "take profits"]):
             symbols = entities.get("symbols", [])
             symbol = symbols[0] if symbols else None
@@ -625,7 +534,6 @@ class ARIA:
                 result = self.broker.close_profitable_positions()
             return result
 
-        # Close all
         if intent == "close_all":
             positions = self.broker.getPositions()
             n = len(positions) if positions else 0
@@ -639,32 +547,26 @@ class ARIA:
                 f"Close everything?"
             )
 
-        # Retrain
         if intent == "retrain_model":
             symbol = self.memory.get("last_symbol")
             if not symbol:
                 return "Which symbol should I retrain the model on? Mention it first."
             return self.executor.retrain(symbol)
 
-        # Market status
         if intent == "market_status":
             return self._handle_market_status()
 
-        # Check notifications
         if intent == "check_notifications":
             guard = self.profit_guard.status()
             inbox = self._drain_inbox()
             return f"{inbox}\n\n{guard}"
 
-        # Browse symbols
         if intent == "browse_symbols":
             return self._handle_symbol_browser(text, entities)
 
-        # Add symbols
         if intent == "add_symbols" or any(k in lower for k in ["add to portfolio", "add symbols", "add pairs"]):
             return self.add_symbols_to_portfolio(text)
 
-        # Portfolio / trading symbols
         if intent == "trading_symbols" or "portfolio" in lower:
             return self._handle_trading_symbols_intent(lower)
 
@@ -678,7 +580,6 @@ class ARIA:
         if not symbol:
             return "Which symbol do you want to backtest? Mention it and I'll run the numbers."
 
-        # Parse optional date range from text:  "backtest EURUSD from Jan to June"
         start, end = "", ""
         yr_match = re.search(r"20\d{2}", text)
         year = yr_match.group(0) if yr_match else "2024"
@@ -928,10 +829,6 @@ class ARIA:
         lines.append("To add any: 'add EURUSD to portfolio'")
         return "\n".join(lines)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Post-analysis action offer
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _maybe_execute(self, response: str, plan, entities: dict) -> str:
         suggested = plan.suggested_action
         if not suggested:
@@ -957,10 +854,6 @@ class ARIA:
             response += random.choice(confirms)
 
         return response
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Multi-turn pending state machine
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _handle_pending(self, text: str) -> tuple[bool, str]:
         lower  = text.lower().strip()
@@ -1007,7 +900,6 @@ class ARIA:
 
         if action == "awaiting_trade_symbol":
             entities = self.nlp.extract_entities(text)
-            # Also try conversational parser for symbol
             parsed = self.conv_parser.parse(text, self.working_memory)
             symbols = (parsed.symbols if parsed else []) or entities.get("symbols", [])
             if symbols:
@@ -1049,10 +941,6 @@ class ARIA:
         self.pending_action = None
         self.pending_data   = {}
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Cleanup
-    # ─────────────────────────────────────────────────────────────────────────
-
     def shutdown(self):
         try:
             self.episodic_memory.flush()
@@ -1063,10 +951,6 @@ class ARIA:
             self.message_processor.shutdown(wait=False)
         except Exception as e:
             print(f"Error during shutdown: {e}")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Setting change handler
-    # ─────────────────────────────────────────────────────────────────────────
 
     _SETTING_MAP = {
         "daily loss":       ("max_daily_loss",  "Max Daily Loss"),
@@ -1186,10 +1070,6 @@ class ARIA:
             f"Portfolio now tracking {len(updated)} symbol(s): {', '.join(updated)}."
         )
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Notification inbox
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _drain_inbox(self) -> str:
         with self.inbox_lock:
             if not self.notification_inbox:
@@ -1203,17 +1083,9 @@ class ARIA:
             lines.append(f"  {icon} {item['msg']}")
         return "\n".join(lines)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Agent step callback
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _step_callback(self, name: str, description: str):
         ts = datetime.now().strftime("%H:%M:%S")
         print(f"[{ts}] [ARIA ▸]: {description}", flush=True)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Startup helpers
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _broker_login(self):
         if self.broker.connected:
@@ -1278,7 +1150,10 @@ class ARIA:
 
         symbols    = symbols or ["EURUSD"]
         daily_goal = float(profit_m.group(1)) if profit_m else 10.0
-        target_profit = round(daily_goal / max(len(symbols), 1), 2)
+        
+        # FIXED: Decoupled take_profit_pips assignment from dollar targets to prevent single-pip instant exits
+        take_profit_pips = 40.0
+        target_profit_usd = round(daily_goal / max(len(symbols), 1), 2)
         risk_pct = float(risk_m.group(1)) if risk_m else 1.0
 
         cfg = {
@@ -1299,9 +1174,10 @@ class ARIA:
             "risk": {
                 "defaults": {
                     "risk_pct": risk_pct, "stop_loss_pips": 20.0,
-                    "take_profit_pips": target_profit, "max_daily_loss": daily_goal * 2,
+                    "take_profit_pips": take_profit_pips, "max_daily_loss": daily_goal * 2,
                     "daily_goal": daily_goal, "cooldown_minutes": 5,
                     "lock_amount": 0.0, "lock_pct": 0.0,
+                    "target_profit": target_profit_usd
                 },
                 "symbol_overrides": {},
                 "drawdown_recovery": {
@@ -1310,7 +1186,7 @@ class ARIA:
                 }
             },
             "broker": {
-                "max_open_trades": 3, "min_margin_level": 150.0,
+                "max_open_trades": 2, "min_margin_level": 150.0,
                 "spread_tolerance_pips": 3.0, "magic_number": 1000, "slippage_points": 20
             },
             "sessions": {
@@ -1318,15 +1194,16 @@ class ARIA:
                 "asian_session_pairs": ["USDJPY", "AUDUSD", "NZDUSD", "CADJPY", "CHFJPY", "GBPJPY"]
             },
             "scanner": {
-                "interval_seconds": 3, "dry_run": False,
-                "mtf_min_alignment": 0.50, "volatility_spike_atr": 2.5, "dead_volume_ratio": 0.3
+                "interval_seconds": 60, "dry_run": False,
+                "mtf_min_alignment": 0.75, "volatility_spike_atr": 3.5, "dead_volume_ratio": 0.13,
+                "min_signal_confidence": 0.65, "timeframe": "H1"
             }
         }
         self.PROFILE_FILE.parent.mkdir(exist_ok=True)
         self.PROFILE_FILE.write_text(json.dumps(cfg, indent=4))
         self._type_print(
             f"Config saved — tracking {len(symbols)} symbol(s), "
-            f"{risk_pct}% risk, ${target_profit} target per symbol."
+            f"{risk_pct}% risk, {take_profit_pips} TP pips default."
         )
 
     def _print_banner(self):
@@ -1335,15 +1212,11 @@ class ARIA:
         print("\n" + "=" * 60)
         print(
             f"🤖  ARIA ONLINE | Risk: {r.risk_pct}% | "
-            f"TP: ${r.take_profit_pips} | SL: {r.stop_loss_pips} pips"
+            f"TP: {r.take_profit_pips} pips | SL: {r.stop_loss_pips} pips"
         )
         if syms:
             print(f"📊  Tracking ({len(syms)}): {', '.join(syms)}")
         print("=" * 60)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Main chat loop
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _run_loop(self):
         try:
@@ -1378,10 +1251,6 @@ class ARIA:
         except KeyboardInterrupt:
             self._type_print("Shutting down.")
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Output helpers
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _type_print(self, msg: str, delay: float = 0.010) -> None:
         ts    = datetime.now().strftime("%H:%M:%S")
         clean = msg.replace("[Bot]: ", "").replace("[ARIA]: ", "").strip()
@@ -1405,9 +1274,5 @@ class ARIA:
             return f"Done — {action_result}"
         return self.process_message(user_message)
 
-    # --- Optimizer integration ---
-        self.self_optimizer = SelfOptimizer(strategy_manager, broker, notify_callback=self.receive_system_alert)
-        self.auto_optimizer = AutoOptimizer(strategy_manager, notify_callback=self.receive_system_alert)
-        self.self_optimizer.start()
-        self.auto_optimizer.start()
-        # --- End optimizer integration ---
+    # FIXED: Cleaned out the misplaced duplicate optimizer integration block that caused syntax errors at class termination.
+    

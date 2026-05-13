@@ -273,6 +273,12 @@ if __name__ == "__main__":
     )
     current_agent_listener = bot.receive_system_alert
 
+    # FIXED: Boot up SelfOptimizer and AutoOptimizer daemons BEFORE launching the blocking chat loop
+    self_optimizer = SelfOptimizer(strategy_manager, broker, notify_callback=agent_notify)
+    auto_optimizer = AutoOptimizer(strategy_manager, notify_callback=agent_notify)
+    self_optimizer.start()
+    auto_optimizer.start()
+
     # 7. Run chatbot with proper exception handling and cleanup
     try:
         bot.start_chat()
@@ -291,9 +297,9 @@ if __name__ == "__main__":
         # 1. Signal scanner thread to stop
         shutdown_event.set()
         
-        if 'position_monitor' in locals() and position_monitor is not None:
-            agent_notify("Stopping external position monitor...")
-            position_monitor.stop()
+        # if 'position_monitor' in locals() and position_monitor is not None:
+        #     agent_notify("Stopping external position monitor...")
+        #     position_monitor.stop()
         
         # 2. Wait for scanner thread to finish (with timeout)
         agent_notify("Waiting for background scanner to stop...")
@@ -319,9 +325,4 @@ if __name__ == "__main__":
         agent_notify("👋 Trading bot shutdown complete. Goodbye!\n")
         sys.exit(0)
 
-    # --- Optimizer initialization ---
-    self_optimizer = SelfOptimizer(strategy_manager, broker, notify_callback=agent_notify)
-    auto_optimizer = AutoOptimizer(strategy_manager, notify_callback=agent_notify)
-    self_optimizer.start()
-    auto_optimizer.start()
-    # --- End optimizer initialization ---
+    

@@ -1099,12 +1099,20 @@ class AgentSynthesizer:
         if best_strat  == "Unknown": best_strat  = "N/A — label your strategies"
         if worst_strat == "Unknown": worst_strat = "N/A — label your strategies"
 
+        # Calculate expectancy
+        avg_win = perf.get('avg_win', 0)
+        avg_loss = perf.get('avg_loss', 0)
+        win_rate = perf.get('win_rate', 0) / 100  # convert percent to fraction
+        loss_rate = 1 - win_rate
+        expectancy = (avg_win * win_rate) + (avg_loss * loss_rate)  # avg_loss is negative
+
         lines = [
             "📊 ARIA Personal Performance Analytics",
             "──────────────────────────────────────",
             f"Win Rate:       {perf.get('win_rate')}% ({perf.get('total_trades')} trades)",
             f"Profit Factor:  {perf.get('profit_factor')}",
             f"Avg Win/Loss:   +${perf.get('avg_win')} / -${abs(perf.get('avg_loss', pd.isna))}",
+            f"Expectancy:     ${expectancy:.2f} per trade",
             "",
             f"Best Strategy:  {best_strat} (Highest Win Rate)",
             f"Worst Strategy: {worst_strat} (Needs Retraining)",
