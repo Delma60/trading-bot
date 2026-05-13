@@ -174,7 +174,7 @@ class RiskManager:
     LOSS_STREAK_LIMIT = 2
     LOSS_STREAK_PAUSE_MINUTES = 60
 
-    def __init__(self, broker, cache=None, max_open_trades: int = 2, min_margin_level: float = 150.0, notify_callback=print,
+    def __init__(self, broker, cache=None, max_open_trades: int = 3, min_margin_level: float = 150.0, notify_callback=print,
                  pyramid_min_pips: float = 1.0, spread_tolerance_pips: float = 1.0):
         self.broker = broker
         self.cache = cache

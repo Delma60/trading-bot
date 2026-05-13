@@ -81,25 +81,25 @@
                 "risk_pct": 1.0,
                 "stop_loss_pips": 20.0,
                 "take_profit_pips": 40.0,
-                "max_open_trades": 2
+                "max_open_trades": 3
             },
             "forex": {
                 "risk_pct": 1.0,
                 "stop_loss_pips": 20.0,
                 "take_profit_pips": 40.0,
-                "max_open_trades": 2
+                "max_open_trades": 3
             },
             "crypto": {
                 "risk_pct": 0.5,
                 "stop_loss_pips": 100.0,
                 "take_profit_pips": 200.0,
-                "max_open_trades": 1
+                "max_open_trades": 3
             },
             "metals": {
                 "risk_pct": 0.7,
                 "stop_loss_pips": 80.0,
                 "take_profit_pips": 160.0,
-                "max_open_trades": 1
+                "max_open_trades": 2
             }
         },
         "symbol_overrides": {
@@ -117,7 +117,7 @@
         }
     },
     "broker": {
-        "max_open_trades": 2,
+        "max_open_trades": 5,
         "min_margin_level": 150.0,
         "spread_tolerance_pips": 3.0,
         "magic_number": 1000,
