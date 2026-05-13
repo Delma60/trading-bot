@@ -159,15 +159,7 @@ class PortfolioManager:
             self.master_watchlist.append(symbol)
 
         return True
-    def _assign_strategy(self, symbol: str, current_state: np.ndarray) -> str:
-        """Decides which strategy to use (AI if ready, Config if not)."""
-        if not self.is_ai_ready:
-            return self._assign_strategy_fallback(symbol)
-            
-        predictions = self._predict_strategy_safe(current_state)[0]
-        best_strategy_index = np.argmax(predictions)
-        return self.available_strategies[best_strategy_index]
-
+    
     def evaluate_portfolio_opportunities(self, risk_pct: float, stop_loss: float, max_daily_loss: float, dry_run: bool = False) -> list:
         results = []
         session_manager = MarketSessionManager()
@@ -340,43 +332,168 @@ class PortfolioManager:
                 else:
                     results.append(f"❌ {symbol} [{strategy_name}]: Rejected. {trade_plan['reason']}")
         return results if results else ["⚠️ No high-probability entries found."]
-    
+     
+    def _assign_strategy(self, symbol: str, current_state: np.ndarray) -> str:
+        """
+        Selects a strategy using an Epsilon-Greedy exploration model to prevent sample starvation.
+        Transitions smoothly to AI exploitation once sufficient baseline regimes are mapped.
+        """
+        import random
+        
+        # Epsilon rates: 30% exploration during warm-up; 5% ongoing environment adaptation
+        exploration_rate = 0.05 if self.is_ai_ready else 0.30
+        
+        # Active Experimentation Override
+        if random.random() < exploration_rate and self.available_strategies:
+            selected_strategy = random.choice(self.available_strategies)
+            if hasattr(self, 'notify'):
+                self.notify(f"🔬 [Exploration Engine]: Testing experimental allocation -> {selected_strategy} on {symbol}")
+            return selected_strategy
+            
+        # Standard Profile Fallback Flow (Pre-Training)
+        if not self.is_ai_ready:
+            return self._assign_strategy_fallback(symbol)
+            
+        # Thread-Safe AI Exploitation Flow
+        predictions = self._predict_strategy_safe(current_state)[0]
+        best_strategy_index = int(np.argmax(predictions))
+        return self.available_strategies[best_strategy_index]
+
+    def _assign_strategy_fallback(self, symbol: str) -> str:
+        """
+        Traverses nested configuration profiles accurately ('symbol_overrides', 
+        'asset_class_defaults', and 'default') before defaulting to fallback defaults.
+        """
+        symbol = symbol.upper()
+        
+        if hasattr(self, 'strategy_mapping') and isinstance(self.strategy_mapping, dict):
+            # 1. Evaluate explicit symbol-level overrides
+            overrides = self.strategy_mapping.get("symbol_overrides", {})
+            if symbol in overrides:
+                return overrides[symbol]
+            
+            # 2. Identify asset class and resolve class defaults
+            asset_class = None
+            for ac, symbols_list in self.asset_classes.items():
+                if symbol in [s.upper() for s in symbols_list]:
+                    asset_class = ac
+                    break
+            
+            if not asset_class:
+                asset_class = self._infer_asset_class(symbol)
+                
+            defaults = self.strategy_mapping.get("asset_class_defaults", {})
+            for ac_key, assigned_strategy in defaults.items():
+                if ac_key.lower() == asset_class.lower():
+                    return assigned_strategy
+                    
+            # 3. Apply the base global portfolio default
+            if "default" in self.strategy_mapping:
+                return self.strategy_mapping["default"]
+        
+        # 4. Ultimate execution fallback if mapping dictionaries are empty
+        if self.available_strategies:
+            for strat in self.available_strategies:
+                if "trend" in strat.lower():
+                    return strat
+            return self.available_strategies[0]
+            
+        return "Unknown"
+
     def log_trade_for_learning(self, ticket: int = None, symbol: str = None, profit: float = None):
-        """Call this when a trade CLOSES to log the result."""
-        if ticket is not None:
-            trade_data = self._temporary_trade_states.pop(ticket, None)
-        elif symbol is not None:
-            matching = [t for t, data in self._temporary_trade_states.items() if data.get("symbol") == symbol]
-            if len(matching) == 1:
-                trade_data = self._temporary_trade_states.pop(matching[0])
+        """
+        Persists closed trade states and outcomes to JSON storage. Formats labels as one-hot 
+        categorical vectors to support categorical cross-entropy optimization.
+        """
+        # Resolve active tracking state safely using the state lock
+        with self._state_lock:
+            if ticket is not None:
+                trade_data = self._temporary_trade_states.pop(ticket, None)
+            elif symbol is not None:
+                matching = [t for t, data in self._temporary_trade_states.items() if data.get("symbol") == symbol]
+                if len(matching) == 1:
+                    trade_data = self._temporary_trade_states.pop(matching[0])
+                else:
+                    trade_data = None
             else:
                 trade_data = None
-        else:
-            trade_data = None
 
         if not trade_data or profit is None:
             return
 
+        # 1. Forward raw outcomes to the secondary strategy and feature scoring layers
         fv = np.array(trade_data["state"])
         action = trade_data.get("action", "BUY")
+        strategy_used = trade_data.get("strategy", "Unknown")
         self.strategy_manager.record_trade_outcome(fv, action, profit)
 
-        # Feedback loop for news classifier if trade was news-based
+        # 2. Prepare Categorical One-Hot Target Vectors for Keras Optimization
+        if strategy_used in self.available_strategies:
+            target_idx = self.available_strategies.index(strategy_used)
+            num_classes = len(self.available_strategies)
+            
+            # Initialize baseline probability distribution
+            one_hot_label = [0.0] * num_classes
+            
+            if profit > 0:
+                # Positive Reinforcement: Model maps this indicator state directly to the winning strategy
+                one_hot_label[target_idx] = 1.0
+            else:
+                # Negative Reinforcement: Distribute target weights across alternative strategies
+                import random
+                alt_indices = [i for i in range(num_classes) if i != target_idx]
+                if alt_indices:
+                    chosen_alt = random.choice(alt_indices)
+                    one_hot_label[chosen_alt] = 1.0
+                else:
+                    one_hot_label[target_idx] = 1.0
+
+            # 3. Safely persist state records to local storage to satisfy the readiness check
+            with self._model_lock:
+                history = self._load_json(self.TRAINING_DATA_PATH, fallback=[])
+                
+                # Wrap state array inside an outer list to align with retrain_model array indexing logic
+                record_entry = {
+                    "state": [trade_data["state"]],
+                    "label": one_hot_label,
+                    "symbol": trade_data.get("symbol"),
+                    "profit": profit,
+                    "timestamp": datetime.now().isoformat()
+                }
+                history.append(record_entry)
+                
+                try:
+                    self.TRAINING_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    with self.TRAINING_DATA_PATH.open("w") as f:
+                        json.dump(history, f, indent=4)
+                except Exception as e:
+                    if hasattr(self, 'notify'):
+                        self.notify(f"⚠️ [Portfolio Manager]: Failed to persist training history: {e}")
+
+                # Dynamic Engine Promotion Check
+                if not self.is_ai_ready and len(history) >= 50:
+                    if hasattr(self, 'notify'):
+                        self.notify("🧠 [Portfolio Manager]: Collected 50 operational baseline records. Executing primary meta-model pre-training sequence...")
+                    self.retrain_model()
+                    self.is_ai_ready = True
+                    if hasattr(self, 'notify'):
+                        self.notify("🚀 [Portfolio Manager]: AI Core fully initialized and online. Transitioning to predictive asset allocation.")
+
+        # Evaluate peripheral sentiment classification impacts if news records are associated
         article_ids = trade_data.get("article_ids", [])
         entry_price = trade_data.get("entry_price")
-        symbol = trade_data.get("symbol")
+        sym = trade_data.get("symbol")
         
-        if article_ids and entry_price is not None and symbol:
+        if article_ids and entry_price is not None and sym:
             try:
-                tick_data = self.broker.get_tick_data(symbol)
+                tick_data = self.broker.get_tick_data(sym)
                 if tick_data:
                     current_price = tick_data.get("bid") if action == "SELL" else tick_data.get("ask")
                     if current_price:
                         for article_id in article_ids:
                             self.evaluate_news_impact(article_id, entry_price, current_price, action)
-            except:
-                pass  # Silently fail if price fetch doesn't work
-        
+            except Exception:
+                pass
     def evaluate_news_impact(self, article_id: str, entry_price: float, current_price: float, action: str = "BUY"):
         """
         Evaluates the impact of news on price movement and feeds back to the news classifier.
@@ -435,35 +552,6 @@ class PortfolioManager:
         with self._model_lock:
             self.model.fit(X, y, epochs=50, batch_size=8, verbose=0)  # Changed verbose=1 to verbose=0
             self.model.save(str(self.MODEL_PATH))
-        
-    def _assign_strategy_fallback(self, symbol: str) -> str:
-        """
-        Fallback method to assign a strategy based on profile configuration 
-        when the AI model lacks sufficient data to make predictions.
-        """
-        symbol = symbol.upper()
-        
-        # 1. Check if the specific symbol is mapped directly
-        if hasattr(self, 'strategy_mapping') and self.strategy_mapping:
-            if symbol in self.strategy_mapping:
-                return self.strategy_mapping[symbol]
-            
-            # 2. Find the asset class for the symbol and check class-level mapping
-            for asset_class, symbols in self.asset_classes.items():
-                if symbol in symbols:
-                    if asset_class in self.strategy_mapping:
-                        return self.strategy_mapping[asset_class]
-        
-        # 3. Default fallback if no configuration mapping matches
-        if self.available_strategies:
-            # Prefer trend following if available, otherwise default to the first initialized engine
-            for strat in self.available_strategies:
-                if "trend" in strat.lower():
-                    return strat
-            return self.available_strategies[0]
-            
-        return "Unknown"
-
     def _predict_strategy_safe(self, current_state: np.ndarray) -> np.ndarray:
         """
         Performs thread-safe Keras model predictions using the dedicated model lock.
