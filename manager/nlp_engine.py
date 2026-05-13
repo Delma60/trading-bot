@@ -310,8 +310,13 @@ class NLPEngine:
         ticker_symbols = []
         
         valid_quotes = ("USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD")
-        filler_words = {"BUY", "SELL", "LONG", "SHORT", "THE", "AND", "LOT", "LOTS", "PERCENT", "DAILY"}
-        
+        filler_words = {
+            "BUY", "SELL", "LONG", "SHORT", "THE", "AND", "FOR", "ALL", "DAY", "NOW", 
+            "P&L", "PNL", "LOT", "LOTS", "PERCENT", "DAILY", "TODAY", "SCAN", "HELP", 
+            "RISK", "NEWS", "QUIT", "EXIT", "TEST", "RUN", "STOP", "START", "BOT", 
+            "CHAT", "TRADE", "FLAT", "OPEN", "CLOSE", "STATS", "VIEW", "CHART", 
+            "LIST", "SHOW", "FIND", "CHECK", "ANY"
+        }
         for token in raw_candidates:
             if token in filler_words:
                 continue

@@ -396,7 +396,12 @@ class ConversationalParser:
         for match in re.findall(r'\b([A-Z]{2,7}[0-9]{0,3}(?:\.[A-Z]{1,4})?)\b', original.upper()):
             # If it's a short token without a dot suffix, ensure it's not a standard English word
             if len(match) <= 4 and "." not in match:
-                ignore_words = {"BUY", "SELL", "LONG", "THE", "AND", "FOR", "ALL", "DAY", "NOW", "P&L", "LOT"}
+                ignore_words = {
+                    "BUY", "SELL", "LONG", "SHORT", "THE", "AND", "FOR", "ALL", "DAY", "NOW", 
+                    "P&L", "PNL", "LOT", "LOTS", "SCAN", "HELP", "RISK", "NEWS", "QUIT", "EXIT", 
+                    "TEST", "RUN", "STOP", "START", "BOT", "CHAT", "TRADE", "FLAT", "OPEN", "CLOSE",
+                    "STATS", "VIEW", "CHART", "LIST", "SHOW", "FIND", "CHECK", "DAILY", "TODAY", "ANY"
+                }
                 if match not in ignore_words and match not in found:
                     found.append(match)
             else:
@@ -427,6 +432,7 @@ class ConversationalParser:
         VALID_SINGLES = {
             "positions", "account", "balance", "history", "retrain",
             "scan", "news", "risk", "settings", "portfolio", "help",
+            "pnl", "stats", "exit", "quit", "close", "open"
         }
         if len(lower.split()) <= 2:
             if lower.strip() in VALID_SINGLES:
