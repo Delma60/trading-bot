@@ -23,6 +23,7 @@ from strategies.momentum import MomentumStrategy
 from strategies.scalping import ScalpingStrategy
 from strategies.trend_following import TrendFollowingStrategy
 from strategies.news_trading import NewsTradingStrategy
+from strategies.sentiment_analysis import SentimentAnalysisStrategy
 from trader import Trader
 from .mean_reversion import MeanReversionStrategy
 from strategies.features.feature_engineer import FeatureEngineer
@@ -268,6 +269,7 @@ class StrategyManager:
         use_ensemble:  bool = True,
         retrain_lstm:  bool = False,
     ) -> dict:
+        
         # 1. Fetch OHLCV / features uniformly via the unified cache interface
         feat_df = self.cache.get_features(symbol)
         raw_df  = self.cache.get_raw_ohlcv(symbol)

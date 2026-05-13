@@ -551,95 +551,52 @@ class BacktestEngine:
             return (mid - pos.entry_price) * self._pip_mult * pip_val
         return (pos.entry_price - mid) * self._pip_mult * pip_val
 
-    # ── FIX 4: Walk-forward validation ───────────────────────────────────────
 
-    def _run_wfo(
-        self, raw_df: pd.DataFrame, base_result: BacktestResult, notify_callback
-    ) -> BacktestResult:
+    def _run_wfo(self, strategy_name: str, symbol: str, rates: pd.DataFrame, param_grid: dict) -> dict:
         """
-        FIX 4: Rolling walk-forward over cfg.wfo_folds folds.
-        Each fold: train on IS window → evaluate on OOS window.
-        Final reported Sharpe = average of OOS fold Sharpes.
+        Executes Walk-Forward Optimization (WFO) utilizing rolling chronological evaluation windows.
+        Prevents look-ahead biases and historical parameter stagnation.
         """
-        n = len(raw_df)
-        fold_size = n // self.cfg.wfo_folds
-        fold_results = []
-        is_sharpes   = []
-        oos_sharpes  = []
-
-        notify_callback(
-            f"[WFO] Running {self.cfg.wfo_folds} folds "
-            f"(fold size ≈ {fold_size} bars)..."
-        )
-
-        for fold in range(self.cfg.wfo_folds):
-            fold_start = fold * fold_size
-            fold_end   = fold_start + fold_size if fold < self.cfg.wfo_folds - 1 else n
-
-            split      = int((fold_end - fold_start) * (1 - self.cfg.wfo_oos_ratio))
-            is_end     = fold_start + split
-            oos_end    = fold_end
-
-            if is_end <= fold_start + self.cfg.warmup_bars:
-                continue
-            if oos_end <= is_end:
-                continue
-
-            is_slice  = raw_df.iloc[fold_start: is_end]
-            oos_slice = raw_df.iloc[is_end:     oos_end]
-
-            # IS backtest
-            is_cfg = BacktestConfig(
-                symbol=self.cfg.symbol, timeframe=self.cfg.timeframe,
-                initial_equity=self.cfg.initial_equity,
-                risk_pct=self.cfg.risk_pct, sl_pips=self.cfg.sl_pips,
-                tp_pips=self.cfg.tp_pips, min_confidence=self.cfg.min_confidence,
-                min_grade=self.cfg.min_grade, warmup_bars=self.cfg.warmup_bars,
-                run_wfo=False, enforce_oos=False,
-                next_bar_fill=self.cfg.next_bar_fill,
-                vol_slippage=self.cfg.vol_slippage,
-            )
-            is_engine = BacktestEngine(self.sm, is_cfg)
-            is_res    = is_engine._run_on_slice(is_slice)
-
-            # OOS backtest (use same params — no re-optimisation in WFO)
-            oos_engine = BacktestEngine(self.sm, is_cfg)
-            oos_res    = oos_engine._run_on_slice(oos_slice)
-
-            fold_summary = {
-                "fold":          fold + 1,
-                "is_bars":       len(is_slice),
-                "oos_bars":      len(oos_slice),
-                "is_sharpe":     is_res.sharpe_ratio,
-                "oos_sharpe":    oos_res.sharpe_ratio,
-                "is_trades":     is_res.total_trades,
-                "oos_trades":    oos_res.total_trades,
-                "oos_win_rate":  oos_res.win_rate,
-                "oos_net_pnl":   oos_res.net_pnl,
-            }
-            fold_results.append(fold_summary)
-            is_sharpes.append(is_res.sharpe_ratio)
-            oos_sharpes.append(oos_res.sharpe_ratio)
-            notify_callback(
-                f"[WFO] Fold {fold+1}: IS Sharpe={is_res.sharpe_ratio:.2f}  "
-                f"OOS Sharpe={oos_res.sharpe_ratio:.2f}  "
-                f"OOS Trades={oos_res.total_trades}"
-            )
-
-        avg_oos_sharpe = float(np.mean(oos_sharpes)) if oos_sharpes else 0.0
-        avg_is_sharpe  = float(np.mean(is_sharpes))  if is_sharpes  else 1.0
-        robustness     = avg_oos_sharpe / avg_is_sharpe if avg_is_sharpe > 0 else 0.0
-
-        base_result.wfo_avg_oos_sharpe   = round(avg_oos_sharpe, 3)
-        base_result.wfo_robustness_ratio = round(robustness,     3)
-        base_result.wfo_fold_results     = fold_results
-
-        notify_callback(
-            f"[WFO] Done. Avg OOS Sharpe={avg_oos_sharpe:.2f}  "
-            f"Robustness={robustness:.2f}"
-        )
-        return base_result
-    
+        total_bars = len(rates)
+        # Allocate exactly 5 rolling chronological steps
+        window_size = int(total_bars * 0.30)
+        step_size = int(total_bars * 0.14)
+        
+        wfo_results = []
+        oos_equity = 10000.0
+        
+        for i in range(5):
+            is_start = i * step_size
+            is_end = is_start + window_size
+            oos_start = is_end
+            oos_end = min(oos_start + step_size, total_bars)
+            
+            if oos_start >= total_bars:
+                break
+                
+            is_slice = rates.iloc[is_start:is_end].reset_index(drop=True)
+            oos_slice = rates.iloc[oos_start:oos_end].reset_index(drop=True)
+            
+            # Process parameter hyper-grids across operational indices safely
+            best_params = self._grid_search_slice(strategy_name, symbol, is_slice, param_grid)
+            
+            # Bug 7 Fixed: Retain single authoritative definition supporting accurate zero-index alignment
+            oos_metrics = self._run_single_slice(strategy_name, symbol, oos_slice, best_params, start_idx=0)
+            
+            oos_equity += oos_metrics.get("net_profit", 0.0)
+            wfo_results.append({
+                "window": i + 1,
+                "params": best_params,
+                "is_bars": len(is_slice),
+                "oos_bars": len(oos_slice),
+                "oos_profit": oos_metrics.get("net_profit", 0.0)
+            })
+            
+        return {
+            "wfo_windows": wfo_results,
+            "final_oos_equity": oos_equity,
+            "net_wfo_profit": oos_equity - 10000.0
+        }
     def _run_on_slice(
         self,
         raw_df: pd.DataFrame,
@@ -719,96 +676,6 @@ class BacktestEngine:
             total_bars,
             effective_oos_start,   # FIX: was always total_bars
         )
-
-
-    def _run_wfo(
-        self, raw_df: pd.DataFrame, base_result: "BacktestResult", notify_callback
-    ) -> "BacktestResult":
-        """
-        FIX 4 (continued): pass explicit OOS boundary when calling _run_on_slice
-        so OOS stats in each fold are computed correctly.
-        """
-        n         = len(raw_df)
-        fold_size = n // self.cfg.wfo_folds
-        fold_results = []
-        is_sharpes   = []
-        oos_sharpes  = []
-
-        notify_callback(
-            f"[WFO] Running {self.cfg.wfo_folds} folds "
-            f"(fold size ≈ {fold_size} bars)..."
-        )
-
-        for fold in range(self.cfg.wfo_folds):
-            fold_start = fold * fold_size
-            fold_end   = fold_start + fold_size if fold < self.cfg.wfo_folds - 1 else n
-
-            split  = int((fold_end - fold_start) * (1 - self.cfg.wfo_oos_ratio))
-            is_end = fold_start + split
-            oos_end = fold_end
-
-            if is_end <= fold_start + self.cfg.warmup_bars:
-                continue
-            if oos_end <= is_end:
-                continue
-
-            is_slice  = raw_df.iloc[fold_start: is_end]
-            oos_slice = raw_df.iloc[is_end:     oos_end]
-
-            fold_cfg = BacktestConfig(
-                symbol=self.cfg.symbol, timeframe=self.cfg.timeframe,
-                initial_equity=self.cfg.initial_equity,
-                risk_pct=self.cfg.risk_pct, sl_pips=self.cfg.sl_pips,
-                tp_pips=self.cfg.tp_pips, min_confidence=self.cfg.min_confidence,
-                min_grade=self.cfg.min_grade, warmup_bars=self.cfg.warmup_bars,
-                run_wfo=False, enforce_oos=False,
-                next_bar_fill=self.cfg.next_bar_fill,
-                vol_slippage=self.cfg.vol_slippage,
-            )
-
-            # IS backtest — no OOS split within an IS-only slice
-            is_engine = BacktestEngine(self.sm, fold_cfg)
-            is_res    = is_engine._run_on_slice(is_slice)
-
-            # OOS backtest — entire slice is OOS (pass 0 as boundary)
-            oos_engine = BacktestEngine(self.sm, fold_cfg)
-            oos_res    = oos_engine._run_on_slice(oos_slice, oos_start_idx=0)  # FIX
-
-            fold_summary = {
-                "fold":         fold + 1,
-                "is_bars":      len(is_slice),
-                "oos_bars":     len(oos_slice),
-                "is_sharpe":    is_res.sharpe_ratio,
-                "oos_sharpe":   oos_res.sharpe_ratio,
-                "is_trades":    is_res.total_trades,
-                "oos_trades":   oos_res.total_trades,
-                "oos_win_rate": oos_res.win_rate,
-                "oos_net_pnl":  oos_res.net_pnl,
-            }
-            fold_results.append(fold_summary)
-            is_sharpes.append(is_res.sharpe_ratio)
-            oos_sharpes.append(oos_res.sharpe_ratio)
-            notify_callback(
-                f"[WFO] Fold {fold+1}: IS Sharpe={is_res.sharpe_ratio:.2f}  "
-                f"OOS Sharpe={oos_res.sharpe_ratio:.2f}  "
-                f"OOS Trades={oos_res.total_trades}"
-            )
-
-        import numpy as np
-        avg_oos_sharpe = float(np.mean(oos_sharpes)) if oos_sharpes else 0.0
-        avg_is_sharpe  = float(np.mean(is_sharpes))  if is_sharpes  else 1.0
-        robustness     = avg_oos_sharpe / avg_is_sharpe if avg_is_sharpe > 0 else 0.0
-
-        base_result.wfo_avg_oos_sharpe   = round(avg_oos_sharpe, 3)
-        base_result.wfo_robustness_ratio = round(robustness,     3)
-        base_result.wfo_fold_results     = fold_results
-
-        notify_callback(
-            f"[WFO] Done. Avg OOS Sharpe={avg_oos_sharpe:.2f}  "
-            f"Robustness={robustness:.2f}"
-        )
-        return base_result
-
     # ── Sizing ────────────────────────────────────────────────────────────────
 
     def _size_position(self, equity: float, sl_pips: float) -> float:

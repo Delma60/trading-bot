@@ -1,3 +1,4 @@
+
 """
 manager/proactive_engine.py — ARIA's Proactive Insights
 
@@ -94,55 +95,38 @@ class ProactiveEngine:
 
         return None
 
-    def _check_positions(self) -> Optional[str]:
-        """Monitor open positions for notable events without repeating alerts."""
-        try:
-            positions = self.broker.getPositions()
-        except Exception:
-            return None
-            
+    # ── Excerpt drop-in for manager/proactive_engine.py ───────────────────────────
+    
+    def _check_positions(self):
+        """Scans floating positions to provide structural, non-intrusive runtime feedback."""
+        positions = self.broker.getPositions()
         if not positions:
-            self._notified_positions.clear()
             return None
-
-        # Clean up stale tickets from tracking to prevent memory leaks
-        current_tickets = {getattr(p, 'ticket', None) for p in positions}
-        for stale_ticket in list(self._notified_positions.keys()):
-            if stale_ticket not in current_tickets:
-                del self._notified_positions[stale_ticket]
 
         for pos in positions:
-            try:
-                ticket = getattr(pos, 'ticket', None)
-                if ticket is None:
-                    continue
+            symbol = pos.symbol
+            profit = float(pos.profit)
+            lots = float(pos.volume)
 
-                if ticket not in self._notified_positions:
-                    self._notified_positions[ticket] = set()
+            # Try to get pip value safely
+            pip_val = None
+            if hasattr(self.broker, 'cache') and hasattr(self.broker.cache, 'get_pip_value'):
+                pip_val = self.broker.cache.get_pip_value(symbol, lots)
+            else:
+                pip_val = 1.0  # fallback to 1 to avoid division by zero, or set to None
 
-                profit = pos.profit
-                symbol = pos.symbol
-                notified = self._notified_positions[ticket]
-
-                # Position approaching a nice round number
-                if 8.0 <= profit <= 12.0:
-                    if "near_10" not in notified:
-                        notified.add("near_10")
-                        return f"Your {symbol} position is sitting at +${profit:.2f}. Getting close to $10 — worth watching."
-
-                if profit > 20.0 and symbol in self.wm.symbols_discussed:
-                    if "up_20" not in notified:
-                        notified.add("up_20")
-                        return f"{symbol} is up ${profit:.2f}. You were watching this one — still want to let it run?"
-
-                # Position moving against for a while
-                if profit < -5.0:
-                    if "down_5" not in notified:
-                        notified.add("down_5")
-                        return f"{symbol} is down ${abs(profit):.2f}. Still within plan, but heads up."
-            except Exception:
+            if not pip_val or pip_val <= 0:
                 continue
 
+            floating_pips = profit / pip_val
+
+            # Evaluate scalable performance milestones instead of flat text values
+            if 15.0 <= floating_pips <= 25.0:
+                return f"{symbol} is approaching standard initial target channels."
+            elif floating_pips > 40.0:
+                return f"Exceptional performance detected. {symbol} floating higher than 40 pips."
+            elif floating_pips < -20.0:
+                return f"Warning: {symbol} testing protective Stop Loss bounds."
         return None
     
     def _check_session_timing(self) -> Optional[str]:

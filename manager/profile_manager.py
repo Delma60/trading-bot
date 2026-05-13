@@ -127,7 +127,7 @@ _REQUIRED_SECTIONS = ["portfolio", "risk", "broker", "sessions", "scanner"]
 _REQUIRED_RISK_KEYS = [
     "risk_pct", "stop_loss_pips", "take_profit_pips",
     "max_daily_loss", "daily_goal", "cooldown_minutes",
-    "lock_amount", "lock_pct",
+    "lock_amount", "lock_pct","max_spread_pips",
 ]
 
 _REQUIRED_BROKER_KEYS = [
@@ -147,12 +147,15 @@ def _validate(raw: dict, path: Path) -> None:
                 f"Add it or re-run first-time setup."
             )
 
-    defaults = raw["risk"].get("defaults", {})
-    for key in _REQUIRED_RISK_KEYS:
-        if key not in defaults:
-            raise ValueError(
-                f"[ProfileManager] Missing risk.defaults.{key} in {path}."
-            )
+        risk_defaults = raw.get("risk", {}).get("defaults", {})
+        for key in _REQUIRED_RISK_KEYS:
+            if key not in risk_defaults:
+                # Provide backward compatibility default values silently if legacy profiles omit the property
+                if key == "max_spread_pips":
+                    risk_defaults[key] = raw.get("broker", {}).get("spread_tolerance_pips", 3.0)
+                else:
+                    raise KeyError(f"Configuration structure validation failed: Missing required property '{key}' under risk.defaults")
+            
 
     for key in _REQUIRED_BROKER_KEYS:
         if key not in raw["broker"]:
@@ -275,7 +278,7 @@ class ProfileManager:
                 risk_pct             = float(base["risk_pct"]),
                 stop_loss_pips       = float(base["stop_loss_pips"]),
                 take_profit_pips     = float(base["take_profit_pips"]),
-                max_spread_pips      = float(base["max_spread_pips"]),
+                max_spread_pips      = float(base["max_spread_pips"], 3.0),
                 max_daily_loss       = float(base.get("max_daily_loss", 500.0)),
                 daily_goal           = float(base.get("daily_goal", 50.0)),
                 cooldown_minutes     = int(base.get("cooldown_minutes", 5)),

@@ -395,20 +395,23 @@ class RiskManager:
             if max_daily_loss > 0 and daily_loss_from_start >= max_daily_loss:
                 return False, f"Daily loss limit reached. Net decline from baseline: ${daily_loss_from_start:,.2f}."
         return True, "System healthy."
-    
-    def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float, portfolio_size: int) -> Dict[str, Any]:
+   # ── Excerpt drop-in for manager/risk_manager.py ───────────────────────────────
+
+    def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float, portfolio_size: int) -> dict:
+        """Evaluates live market indicators and active drawdown levels to authorize trade parameters."""
         with self._sync_lock:
             allowed, reason = self.is_trading_allowed(symbol, max_daily_loss, portfolio_size)
             if not allowed:
                 return {"approved": False, "reason": reason}
 
+            # ... account data retrieval and active drawdown protection layers ...
             account = self.cache.get_account() if self.cache is not None else self.broker.getAccountInfo()
             if account is None:
                 account = self.broker.getAccountInfo()
 
             if account is None:
                 return {"approved": False, "reason": "Account data not available."}
-
+            
             current_equity = account.equity
             trailing_drawdown = self.daily_high_watermark - current_equity
             actual_risk_pct = base_risk_pct
@@ -422,6 +425,7 @@ class RiskManager:
                     actual_risk_pct = base_risk_pct * 0.5
                     self.notify(f"⚠️ Elevated Drawdown ({dd_ratio:.0%}). Recovery Mode: Risk cut to {actual_risk_pct}%.")
 
+
             tradeable = self.lock_guard.tradeable_balance(account.balance)
             if tradeable <= 0:
                 return {
@@ -432,29 +436,26 @@ class RiskManager:
                     )
                 }
 
-            max_risk_usd = tradeable * (actual_risk_pct / 100)
 
             dynamic_targets = self.targeter.calculate_targets(symbol)
             atr_pips        = dynamic_targets.get("atr_pips", 0.0)
-            safe_sl_pips    = self.balance_pip_sizer.get_sl_pips(
-                tradeable_balance = tradeable,
-                atr_pips          = atr_pips,
-            )
-            self.notify(
-                f"[RiskManager] {self.balance_pip_sizer.describe(tradeable, atr_pips)}"
-            )
+            safe_sl_pips    = self.balance_pip_sizer.get_sl_pips(tradeable, atr_pips)
+            max_risk_usd = tradeable * (actual_risk_pct / 100)
             
-            symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
-            if symbol_info is None:
+            
+            # Bug 5 Fixed: Resolve valid Take Profit targets from dynamic feature extraction or core defaults
+            safe_tp_pips    = dynamic_targets.get("tp_buy_pips") or (_profile.risk(symbol).take_profit_pips)
+            
+            symbol_info = self.cache.get_symbol_info(symbol) if self.cache else mt5.symbol_info(symbol)
+            if not symbol_info:
                 return {"approved": False, "reason": "Symbol info missing."}
 
             pip_multiplier = 1.0 if any(x in symbol for x in ["BTC", "ETH"]) else 10.0
             safe_sl_points = int(safe_sl_pips * pip_multiplier)
-            
             optimal_lots = self.calculate_position_size(symbol, max_risk_usd, safe_sl_points)
             
             if optimal_lots == 0.0:
-                 return {"approved": False, "reason": "Volatility/Spread too high for minimum lot size."}
+                return {"approved": False, "reason": "Spread or volatility too high for operational minimum lots."}
 
             return {
                 "approved": True,
@@ -463,9 +464,10 @@ class RiskManager:
                 "lots": optimal_lots,
                 "risk_usd": max_risk_usd,
                 "applied_risk_pct": actual_risk_pct,
-                "stop_loss_pips": safe_sl_pips
+                "stop_loss_pips": safe_sl_pips,
+                # Bug 5 Fixed: Included take_profit_pips directly inside output validation mapping
+                "take_profit_pips": safe_tp_pips
             }
-
     def calculate_micro_lot(self, symbol: Optional[str] = None) -> float:
         if symbol:
             symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)

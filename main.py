@@ -261,25 +261,30 @@ if __name__ == "__main__":
         traceback.print_exc()
         shutdown_event.set()
     finally:
-        agent_notify("Initiating graceful shutdown sequence...")
+        # Bug 6 Fixed: Full cascading framework breakdown preventing operational resource leaks
         shutdown_event.set()
         
-        agent_notify("Waiting for background scanner to stop...")
-        scanner_thread.join(timeout=5)
-        if scanner_thread.is_alive():
-            agent_notify("⚠️ Scanner thread did not stop within timeout.")
-        
-        if 'cache' in locals() and cache is not None:
-            agent_notify("Saving cache to disk and stopping background refresh...")
+        if 'scanner_thread' in locals() and scanner_thread.is_alive():
+            scanner_thread.join(timeout=5)
+            
+        # Secure structural closure mappings
+        if 'cache' in locals():
             cache.stop()
-
-        if broker.connected:
-            agent_notify("Disconnecting from MetaTrader 5...")
-            try:
-                broker.disconnect()
-                agent_notify("✅ Broker disconnected successfully.")
-            except Exception as e:
-                agent_notify(f"⚠️ Error disconnecting broker: {e}")
-        
+            
+        if 'self_optimizer' in locals():
+            self_optimizer.stop()
+            
+        if 'auto_optimizer' in locals():
+            auto_optimizer.stop()
+            
+        if 'bot' in locals():
+            bot.shutdown()  # Flushes episodic_memory records safely to local disk
+            
+        if 'broker' in locals():
+            broker.disconnect()
+            
+        print("[System] Core runtime successfully terminated. Operational logs finalized.") 
         agent_notify("👋 Trading bot shutdown complete. Goodbye!\n")
         sys.exit(0)
+        
+        

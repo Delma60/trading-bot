@@ -358,7 +358,11 @@ class AgentExecutor:
             return {"grade": "D", "score": 0, "proceed": False, "notes": ["Reasoning engine unavailable."]}
 
         regime   = regime_r.get("regime", "Unknown") if regime_r else "Unknown"
-        risk_plan = risk_r.get("risk_plan", {"stop_loss_pips": 20, "take_profit_pips": 40}) 
+        default_risk = {
+            "stop_loss_pips": profile.risk(plan.context.get("symbol")).stop_loss_pips,
+            "take_profit_pips": profile.risk(plan.context.get("symbol")).take_profit_pips
+        }
+        risk_plan = risk_r.get("risk_plan", default_risk)
         htf_trend = htf_r.get("trend", "NEUTRAL") if htf_r else "NEUTRAL"
         
         return self.reasoning.reasoner.score(
