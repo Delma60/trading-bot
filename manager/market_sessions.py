@@ -7,7 +7,7 @@ Knows which markets are open right now and what's tradeable.
 from datetime import datetime, timezone
 from typing import Optional
 from manager.symbol_registry import SymbolRegistry
-
+import re
 
 class MarketSession:
     def __init__(
@@ -169,6 +169,10 @@ class MarketSessionManager:
         if any(sym[:3] in forex_currencies or sym[3:6] in forex_currencies
                for _ in [None]):
             return "forex"
+        if re.search(r"\d", sym):
+            if any(x in sym for x in ["US", "GER", "UK", "FRA", "JPN", "AUS", "HK"]):
+                return "indices_us" if "US" in sym else "indices_eu"
+            return "commodities"  # NGAS, BRENT, WTI etc.
 
         return "forex"
 

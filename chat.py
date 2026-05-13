@@ -1148,7 +1148,7 @@ class ARIA:
         ).strip()
 
         text_upper = user_input.upper()
-        symbols = list(set(re.findall(r"\b[A-Z]{6}\b", text_upper)))
+        symbols = list(set(re.findall(r"\b[A-Z]{4,7}[0-9]{0,3}\b", text_upper)))
         risk_m  = re.search(r"(\d+(?:\.\d+)?)\s*%", user_input)
         profit_m = re.search(r"\$?(\d+(?:\.\d+)?)\s*(?:daily|per day)?", user_input)
 

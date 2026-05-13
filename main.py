@@ -158,13 +158,17 @@ def _resolve_symbols(broker, symbols: list[str]) -> list[str]:
     if broker.connected:
         try:
             registry = SymbolRegistry(broker)
-            forex    = registry.get_universe("forex")
-            if forex:
+            result = []
+            result.extend(registry.get_universe("forex")[:5])
+            result.extend(registry.get_universe("metals")[:2])
+            result.extend(registry.get_universe("indices_us")[:2])
+            result.extend(registry.get_universe("crypto")[:2])
+            if result:
                 agent_notify(
-                    f"_profile.json has no trading_symbols — "
-                    f"defaulting to {len(forex[:10])} broker-sourced forex pairs."
+                    f"profile.json has no symbols — defaulting to "
+                    f"{len(result)} broker-sourced symbols across asset classes."
                 )
-                return forex[:10]
+                return result
         except Exception as exc:
             agent_notify(f"⚠️ Could not query broker for default symbols: {exc}")
 
