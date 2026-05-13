@@ -782,10 +782,7 @@ class Trader:
                     )
                     self._mark_cooldown(symbol)
                     self.notify(f"✅ Successfully closed {symbol} (Ticket #{position.ticket}) at {result.price}")
-                    if hasattr(self, '_position_monitor'):
-                        self._position_monitor.mark_bot_closed(position.ticket)
-
-                    # In close_all_positions(), same place inside the per-position loop:
+                    # FIX 10: mark_bot_closed called exactly once.
                     if hasattr(self, '_position_monitor'):
                         self._position_monitor.mark_bot_closed(position.ticket)
         return success

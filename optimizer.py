@@ -499,9 +499,12 @@ class EnsembleWeightOptimizer:
         notify:     Callable = None,
     ) -> OptimizationResult:
         from strategies.models.meta_scorer import REGIME_WEIGHTS
+        import math, copy
 
         notify = notify or self.notify
-        strategies = ENSEMBLE_REGIME_STRATEGIES.get(regime, list(REGIME_WEIGHTS.get(regime, {}).keys()))
+        strategies = ENSEMBLE_REGIME_STRATEGIES.get(
+            regime, list(REGIME_WEIGHTS.get(regime, {}).keys())
+        )
         if not strategies:
             return OptimizationResult(
                 optimizer="EnsembleWeightOptimizer", symbol=symbol,
@@ -509,7 +512,10 @@ class EnsembleWeightOptimizer:
                 backtest=None, notes=f"Unknown regime: {regime}",
             )
 
-        notify(f"[EnsembleOpt] Regime={regime} | {len(strategies)} strategies | {n_trials} trials")
+        notify(
+            f"[EnsembleOpt] Regime={regime} | "
+            f"{len(strategies)} strategies | {n_trials} trials"
+        )
         t0 = time.perf_counter()
 
         original_weights = copy.deepcopy(REGIME_WEIGHTS.get(regime, {}))
@@ -518,11 +524,10 @@ class EnsembleWeightOptimizer:
         best_bt     = None
         trials      = []
 
+        import strategies.models.meta_scorer as ms_module
+
         for i in range(n_trials):
             weights = {s: random.choice(WEIGHT_VALUES) for s in strategies}
-
-            # Patch MetaScorer's REGIME_WEIGHTS in-place
-            import strategies.models.meta_scorer as ms_module
             ms_module.REGIME_WEIGHTS[regime] = weights
 
             bt = run_backtest(
@@ -539,11 +544,23 @@ class EnsembleWeightOptimizer:
                 best_bt     = bt
 
             if (i + 1) % 10 == 0:
-                notify(f"[EnsembleOpt] {i+1}/{n_trials} | best {metric}: {best_score:.4f}")
+                notify(
+                    f"[EnsembleOpt] {i+1}/{n_trials} | best {metric}: {best_score:.4f}"
+                )
 
-        # Apply best weights permanently
-        ms_module.REGIME_WEIGHTS[regime] = best_params if best_params else original_weights
-        notify(f"[EnsembleOpt] Applied best weights for {regime}: {best_params}")
+        # FIX 7: only apply new weights if at least one trial produced a finite
+        # improvement.  When best_score is still -inf (no trades, bad data, etc.)
+        # restore the original weights so we don't leave random noise in place.
+        if best_params and best_score > -math.inf:
+            ms_module.REGIME_WEIGHTS[regime] = best_params
+            notify(f"[EnsembleOpt] Applied best weights for {regime}: {best_params}")
+        else:
+            ms_module.REGIME_WEIGHTS[regime] = original_weights
+            notify(
+                f"[EnsembleOpt] No valid trials for {regime} "
+                f"(best score {best_score:.4f}) — original weights restored."
+            )
+            best_params = original_weights   # surface originals in the result
 
         return OptimizationResult(
             optimizer   = f"EnsembleWeightOptimizer[{regime}]",

@@ -276,14 +276,22 @@ class StrategyManager:
             return {
                 "action":     "WAIT",
                 "confidence": 0.0,
-                "reason":     f"Could not fetch data or features for {symbol} are warming up.",
+                "reason":     (
+                    f"Could not fetch data or features for {symbol} "
+                    f"are warming up."
+                ),
             }
 
-        # Market condition pre-filter
+        # FIX 9: Market condition filter is re-enabled.
+        # The original code computed the result then immediately discarded it
+        # with `pass`, meaning volatility spikes were never blocked.
         is_suitable, mc_reason = self._mc_filter.is_market_suitable(symbol)
         if not is_suitable:
-            # return {"action": "WAIT", "confidence": 0.0, "reason": mc_reason}
-            pass
+            return {
+                "action":     "WAIT",
+                "confidence": 0.0,
+                "reason":     mc_reason,
+            }
 
         # MTF confluence check
         mtf_data = self._mtf_engine.get_confluence_score(symbol, cache=self.cache)
@@ -313,6 +321,7 @@ class StrategyManager:
             self.learner.ingest_market_bar(latest_features)
 
         # Collect signals from every strategy engine
+        from inspect import signature
         strategy_signals: dict[str, dict] = {}
         for name in self.active_ensemble_strategies:
             engine = self.engines[name]
@@ -369,8 +378,10 @@ class StrategyManager:
             "strategy_signals": strategy_signals,
             "feature_vector":   fv,
             "timeframe":        effective_tf,
-        }
-        
+            # FIX 7 (auto_optimizer): persist the active regime so the CSV
+            # logger can write it and EnsembleCalibrator can read it back.
+            "regime":           regime,
+        }  
 
 class OHLCVCache:
     """

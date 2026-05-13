@@ -53,11 +53,12 @@ class EpisodicMemory:
         """Store an episode and auto-prune if needed. Batches writes for efficiency."""
         self._episodes.append(episode)
         self._unsaved_count += 1
-        
+
         if len(self._episodes) > self.MAX_EPISODES:
             # Keep most recent and highest-impact episodes
             self._episodes = self._episodes[-self.MAX_EPISODES:]
-        
+            self._unsaved_count = 0  # FIX 11: Reset after prune to avoid redundant immediate re-save
+
         # Flush to disk every BATCH_SAVE_INTERVAL episodes or when max is exceeded
         if self._unsaved_count >= self.BATCH_SAVE_INTERVAL or len(self._episodes) >= self.MAX_EPISODES:
             self.flush()

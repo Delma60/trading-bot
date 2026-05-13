@@ -424,6 +424,44 @@ class StrategyTuner:
 # Loop 3 — EnsembleCalibrator
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _load_closed_trades_with_regime(limit: int = 500) -> list[dict]:
+    """
+    Extended version of _load_closed_trades that also reads the
+    optional 'Regime' column written by check_signals().
+    Falls back to empty string when the column is absent.
+    """
+    if not TRADE_CSV.exists():
+        return []
+    rows = []
+    try:
+        with open(TRADE_CSV, encoding="utf-8", errors="replace") as f:
+            for row in csv.DictReader(f):
+                action = row.get("Action", "").upper()
+                if action not in ("CLOSE", "CLOSE_SL_TP"):
+                    continue
+                raw = row.get("Profit", "") or row.get("Comment", "")
+                try:
+                    profit = float(str(raw).replace("Profit:", "").strip())
+                except Exception:
+                    continue
+                rows.append({
+                    "timestamp": row.get("Timestamp", ""),
+                    "symbol":    row.get("Symbol", ""),
+                    "strategy":  row.get("Strategy", "Unknown"),
+                    "profit":    profit,
+                    # FIX: read the regime that was active when the trade opened.
+                    # Empty string means the column didn't exist (legacy CSV).
+                    "regime":    row.get("Regime", ""),
+                })
+    except Exception:
+        pass
+    return rows[-limit:]
+ 
+def _append_log(record: dict):
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+ 
 class EnsembleCalibrator:
     """
     Daily rebalance of MetaScorer's REGIME_WEIGHTS based on actual outcomes.
@@ -474,34 +512,31 @@ class EnsembleCalibrator:
         """Manually trigger calibration."""
         return self._calibrate()
 
-    def _calibrate(self) -> str:
-        trades = _load_closed_trades(limit=500)
+    def _calibrate(self, learner, strategy_manager) -> str:
+        trades = _load_closed_trades_with_regime(limit=500)
         if len(trades) < 30:
             return "Insufficient trade history for ensemble calibration."
-
-        # Get regime labels from unsupervised learner if available
-        learner = getattr(self.sm, "learner", None)
-
-        # Build (regime, strategy) → [profit] map
-        # Since we don't store regime per trade, we use a heuristic:
-        # treat the timestamp to infer regime from the learner's stored history
-        # Fallback: use strategy performance overall to adjust weights globally
+ 
+        current_regime_fallback = (
+            learner.get_current_regime() if learner else "Unknown"
+        )
+ 
+        # Build (regime, strategy) → [profit] map using per-trade regime
         regime_strat: dict[tuple, list] = defaultdict(list)
-
         for t in trades:
             strat  = t.get("strategy", "Unknown")
             profit = t.get("profit", 0) or 0
-            # Use current regime as a proxy (best we can do without per-trade labels)
-            regime = learner.get_current_regime() if learner else "Unknown"
-            regime_strat[(regime, strat)].append(profit)
-
-        # Load current weights
+            # FIX: use the regime stored with this trade, not today's regime
+            regime = t.get("regime") or current_regime_fallback
+            if regime:
+                regime_strat[(regime, strat)].append(profit)
+ 
         try:
             from strategies.models.meta_scorer import REGIME_WEIGHTS
             import strategies.models.meta_scorer as ms_module
         except ImportError:
             return "Could not load MetaScorer module."
-
+ 
         changes = []
         for regime, strat_weights in REGIME_WEIGHTS.items():
             regime_trades = [
@@ -510,41 +545,39 @@ class EnsembleCalibrator:
             ]
             if not regime_trades:
                 continue
-
+ 
             regime_wr = sum(1 for p in regime_trades if p > 0) / len(regime_trades)
             if regime_wr == 0:
                 continue
-
+ 
             for strat, current_w in strat_weights.items():
                 strat_trades = regime_strat.get((regime, strat), [])
                 if len(strat_trades) < self.MIN_TRADES_REQ:
                     continue
-
+ 
                 strat_wr = sum(1 for p in strat_trades if p > 0) / len(strat_trades)
                 ratio    = strat_wr / regime_wr
                 new_w    = round(
                     max(self.MIN_WEIGHT, min(current_w * ratio, self.MAX_WEIGHT)), 2
                 )
-
+ 
                 if abs(new_w - current_w) > 0.05:
                     ms_module.REGIME_WEIGHTS[regime][strat] = new_w
                     changes.append(f"{regime}/{strat}: {current_w:.1f}→{new_w:.1f}")
-
+ 
         _append_log({
             "loop":    "EnsembleCalibrator",
             "ts":      datetime.now().isoformat(),
             "changes": changes,
         })
-
+ 
         if changes:
-            self.notify(
-                f"[AutoOptimizer] Ensemble recalibrated — {len(changes)} weight(s) updated.",
-                priority="normal",
+            return (
+                f"Ensemble calibrated. {len(changes)} weight change(s): "
+                + ", ".join(changes[:5])
             )
-            return f"Ensemble calibrated. {len(changes)} weight change(s): " + ", ".join(changes[:5])
         return "Ensemble calibration ran — no significant weight changes needed."
-
-
+    
 # ─────────────────────────────────────────────────────────────────────────────
 # AutoOptimizer — orchestrator
 # ─────────────────────────────────────────────────────────────────────────────

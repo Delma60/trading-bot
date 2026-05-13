@@ -172,10 +172,11 @@ class ARIA:
                                broker, self.reasoning)
         self.executor = ActionExecutor(broker, strategy_manager, risk_manager, self.PROFILE_FILE)
 
+        _broker_modify_lock = threading.RLock()
         self.dynamic_targeter = DynamicRiskTargeter(self.broker)
-        self.trailing_manager = TrailingStopManager(self.broker, self.dynamic_targeter)
+        self.trailing_manager = TrailingStopManager(self.broker, self.dynamic_targeter, _trail_lock=_broker_modify_lock)
         self.trailing_manager.start()
-        self.profit_guard = ProfitGuard(self.broker, notify_callback=self.receive_system_alert)
+        self.profit_guard = ProfitGuard(self.broker, notify_callback=self.receive_system_alert, api_lock=_broker_modify_lock)
         self.profit_guard.start()
 
         self.memory: dict[str, Any] = {
@@ -943,11 +944,14 @@ class ARIA:
 
     def shutdown(self):
         try:
-            self.episodic_memory.flush()
+             # 1. Stop all background threads that could write new episodes
             self.proactive_engine.stop()
             self.trailing_manager.stop()
             self.profit_guard.stop()
             self.position_monitor.stop()
+            # 2. Only now flush — no more writers are running
+            self.episodic_memory.flush()
+            # 3. Shut down the message processor
             self.message_processor.shutdown(wait=False)
         except Exception as e:
             print(f"Error during shutdown: {e}")

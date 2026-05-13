@@ -639,9 +639,20 @@ class BacktestEngine:
             f"Robustness={robustness:.2f}"
         )
         return base_result
+    
+    def _run_on_slice(
+        self,
+        raw_df: pd.DataFrame,
+        oos_start_idx: int = None,   # FIX: accept explicit OOS boundary
+    ) -> "BacktestResult":
+        """
+        Run a backtest on an already-sliced DataFrame (used by WFO).
 
-    def _run_on_slice(self, raw_df: pd.DataFrame) -> "BacktestResult":
-        """Run a backtest on an already-sliced DataFrame (used by WFO)."""
+        FIX 4: The original always passed len(raw_df) as oos_start_idx inside
+        _compute_result, meaning no trade was ever tagged is_oos=True and the
+        OOS breakdown was always zero.  Callers can now pass an explicit split
+        point so OOS stats are populated correctly.
+        """
         self._positions      = []
         self._closed         = []
         self._equity_history = []
@@ -651,12 +662,17 @@ class BacktestEngine:
         if len(raw_df) < min_bars:
             return self._empty_result()
 
+        total_bars = len(raw_df)
+        # Default: treat entire slice as IS (backward-compatible for non-WFO callers)
+        effective_oos_start = oos_start_idx if oos_start_idx is not None else total_bars
+
         equity = self.cfg.initial_equity
 
-        for bar_idx in range(self.cfg.warmup_bars, len(raw_df) - 1):
+        for bar_idx in range(self.cfg.warmup_bars, total_bars - 1):
             current_bar = raw_df.iloc[bar_idx]
             next_bar    = raw_df.iloc[bar_idx + 1]
             ts          = raw_df.index[bar_idx]
+            is_oos      = bar_idx >= effective_oos_start   # FIX: was always False
 
             self._check_exits(current_bar, bar_idx, ts)
 
@@ -688,7 +704,7 @@ class BacktestEngine:
 
             pos = self._open_position_next_bar(
                 action, current_bar, next_bar, bar_idx + 1,
-                raw_df.index[bar_idx + 1], lots, signal, sl_pips, False
+                raw_df.index[bar_idx + 1], lots, signal, sl_pips, is_oos
             )
             if pos:
                 self._positions.append(pos)
@@ -696,13 +712,102 @@ class BacktestEngine:
         last_bar = raw_df.iloc[-2]
         last_ts  = raw_df.index[-2]
         for pos in list(self._positions):
-            self._close_position(pos, last_bar["close"], len(raw_df) - 2, last_ts, "EOD")
+            self._close_position(pos, last_bar["close"], total_bars - 2, last_ts, "EOD")
 
         return self._compute_result(
             sum(p.pnl for p in self._closed),
-            len(raw_df),
-            len(raw_df),   # no OOS split within a fold slice
+            total_bars,
+            effective_oos_start,   # FIX: was always total_bars
         )
+
+
+    def _run_wfo(
+        self, raw_df: pd.DataFrame, base_result: "BacktestResult", notify_callback
+    ) -> "BacktestResult":
+        """
+        FIX 4 (continued): pass explicit OOS boundary when calling _run_on_slice
+        so OOS stats in each fold are computed correctly.
+        """
+        n         = len(raw_df)
+        fold_size = n // self.cfg.wfo_folds
+        fold_results = []
+        is_sharpes   = []
+        oos_sharpes  = []
+
+        notify_callback(
+            f"[WFO] Running {self.cfg.wfo_folds} folds "
+            f"(fold size ≈ {fold_size} bars)..."
+        )
+
+        for fold in range(self.cfg.wfo_folds):
+            fold_start = fold * fold_size
+            fold_end   = fold_start + fold_size if fold < self.cfg.wfo_folds - 1 else n
+
+            split  = int((fold_end - fold_start) * (1 - self.cfg.wfo_oos_ratio))
+            is_end = fold_start + split
+            oos_end = fold_end
+
+            if is_end <= fold_start + self.cfg.warmup_bars:
+                continue
+            if oos_end <= is_end:
+                continue
+
+            is_slice  = raw_df.iloc[fold_start: is_end]
+            oos_slice = raw_df.iloc[is_end:     oos_end]
+
+            fold_cfg = BacktestConfig(
+                symbol=self.cfg.symbol, timeframe=self.cfg.timeframe,
+                initial_equity=self.cfg.initial_equity,
+                risk_pct=self.cfg.risk_pct, sl_pips=self.cfg.sl_pips,
+                tp_pips=self.cfg.tp_pips, min_confidence=self.cfg.min_confidence,
+                min_grade=self.cfg.min_grade, warmup_bars=self.cfg.warmup_bars,
+                run_wfo=False, enforce_oos=False,
+                next_bar_fill=self.cfg.next_bar_fill,
+                vol_slippage=self.cfg.vol_slippage,
+            )
+
+            # IS backtest — no OOS split within an IS-only slice
+            is_engine = BacktestEngine(self.sm, fold_cfg)
+            is_res    = is_engine._run_on_slice(is_slice)
+
+            # OOS backtest — entire slice is OOS (pass 0 as boundary)
+            oos_engine = BacktestEngine(self.sm, fold_cfg)
+            oos_res    = oos_engine._run_on_slice(oos_slice, oos_start_idx=0)  # FIX
+
+            fold_summary = {
+                "fold":         fold + 1,
+                "is_bars":      len(is_slice),
+                "oos_bars":     len(oos_slice),
+                "is_sharpe":    is_res.sharpe_ratio,
+                "oos_sharpe":   oos_res.sharpe_ratio,
+                "is_trades":    is_res.total_trades,
+                "oos_trades":   oos_res.total_trades,
+                "oos_win_rate": oos_res.win_rate,
+                "oos_net_pnl":  oos_res.net_pnl,
+            }
+            fold_results.append(fold_summary)
+            is_sharpes.append(is_res.sharpe_ratio)
+            oos_sharpes.append(oos_res.sharpe_ratio)
+            notify_callback(
+                f"[WFO] Fold {fold+1}: IS Sharpe={is_res.sharpe_ratio:.2f}  "
+                f"OOS Sharpe={oos_res.sharpe_ratio:.2f}  "
+                f"OOS Trades={oos_res.total_trades}"
+            )
+
+        import numpy as np
+        avg_oos_sharpe = float(np.mean(oos_sharpes)) if oos_sharpes else 0.0
+        avg_is_sharpe  = float(np.mean(is_sharpes))  if is_sharpes  else 1.0
+        robustness     = avg_oos_sharpe / avg_is_sharpe if avg_is_sharpe > 0 else 0.0
+
+        base_result.wfo_avg_oos_sharpe   = round(avg_oos_sharpe, 3)
+        base_result.wfo_robustness_ratio = round(robustness,     3)
+        base_result.wfo_fold_results     = fold_results
+
+        notify_callback(
+            f"[WFO] Done. Avg OOS Sharpe={avg_oos_sharpe:.2f}  "
+            f"Robustness={robustness:.2f}"
+        )
+        return base_result
 
     # ── Sizing ────────────────────────────────────────────────────────────────
 

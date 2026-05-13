@@ -2,21 +2,12 @@
 manager/market_sessions.py — Market Session Awareness
 
 Knows which markets are open right now and what's tradeable.
-
-On Saturday, for example:
-  Crypto (BTC, ETH…)   → OPEN 24/7
-  Forex (EUR/USD…)     → CLOSED
-  Metals (XAU, XAG)   → CLOSED
-  US Stocks / Indices  → CLOSED
-
-Used by TradeGatekeeper, PortfolioManager scanner, and the chat layer
-so the bot never wastes time analysing instruments that can't be traded.
 """
-
 
 from datetime import datetime, timezone
 from typing import Optional
 from manager.symbol_registry import SymbolRegistry
+
 
 class MarketSession:
     def __init__(
@@ -60,6 +51,31 @@ class MarketSession:
             return hour >= self.open_hour or hour < self.close_hour
 
 
+# ── Friendly display names (module-level, used by MarketSessionManager) ──────
+_FRIENDLY_NAMES = {
+    "crypto":       "Crypto (BTC, ETH…)",
+    "forex":        "Forex (EUR/USD, GBP/USD…)",
+    "metals":       "Metals (Gold, Silver…)",
+    "indices_us":   "US Indices (US30, NAS100…)",
+    "indices_eu":   "EU Indices (GER40, UK100…)",
+    "indices_asia": "Asia Indices (JPN225, AUS200…)",
+    "commodities":  "Commodities (Oil, Gas…)",
+    "stocks":       "US Stocks (AAPL, TSLA…)",
+}
+
+# Hardcoded fallback if profile has no market_sessions section
+_FALLBACK_SESSIONS: dict[str, MarketSession] = {
+    "forex":        MarketSession("Forex",        0,  0,  weekdays_only=False, all_day_weekdays=True),
+    "metals":       MarketSession("Metals",       23, 22, weekdays_only=False, all_day_weekdays=True),
+    "crypto":       MarketSession("Crypto",       0,  0,  weekdays_only=False, always_open=True),
+    "indices_us":   MarketSession("US Markets",   13, 21, weekdays_only=True),
+    "indices_eu":   MarketSession("EU Markets",   7,  17, weekdays_only=True),
+    "indices_asia": MarketSession("Asia Markets", 0,  9,  weekdays_only=True),
+    "commodities":  MarketSession("Commodities",  1,  21, weekdays_only=True),
+    "stocks":       MarketSession("US Stocks",    13, 21, weekdays_only=True),
+}
+
+
 class MarketSessionManager:
     """
     Single source of truth for session awareness across the entire bot.
@@ -74,51 +90,9 @@ class MarketSessionManager:
         # Split a watchlist into open / closed buckets
         open_syms, closed_syms = mgr.filter_tradeable_symbols(["EURUSD", "BTCUSD"])
 
-        # What to trade on a Saturday?
-        suFmary = mgr.get_market_status_summary(["EURUSD", "BTCUSD", "ETHUSD"])
+        # Market status summary
+        summary = mgr.get_market_status_summary(["EURUSD", "BTCUSD", "ETHUSD"])
     """
-
-    CATEGORY_MAP: dict[str, list[str]] = {
-        "crypto":       ["BTC", "ETH", "LTC", "XBT", "DOGE", "ADA", "SOL",
-                         "XRP", "BNB", "MATIC", "DOT", "LINK", "UNI", "AVAX",
-                         "SHIB", "PEPE", "NEAR", "FET", "INJ"],
-        "metals":       ["XAU", "XAG", "XPT", "XPD"],
-        "indices_us":   ["US30", "US500", "NAS100", "SPX", "NDX", "DOW",
-                         "SP500", "US2000", "VIX"],
-        "indices_eu":   ["GER40", "UK100", "FRA40", "ESP35", "DAX",
-                         "FTSE", "CAC", "EUSTX50"],
-        "indices_asia": ["JPN225", "AUS200", "HKG33", "NKY", "CN50", "SG30"],
-        "commodities":  ["USOIL", "BRENT", "NGAS", "CORN", "WHEAT",
-                         "COFFEE", "COCOA", "SUGAR"],
-        "stocks":       ["AAPL", "TSLA", "AMZN", "GOOGL", "MSFT", "META",
-                         "NVDA", "NFLX", "BABA"],
-    }
-
-_FRIENDLY_NAMES = {
-    "crypto":       "Crypto (BTC, ETH…)",
-    "forex":        "Forex (EUR/USD, GBP/USD…)",
-    "metals":       "Metals (Gold, Silver…)",
-    "indices_us":   "US Indices (US30, NAS100…)",
-    "indices_eu":   "EU Indices (GER40, UK100…)",
-    "indices_asia": "Asia Indices (JPN225, AUS200…)",
-    "commodities":  "Commodities (Oil, Gas…)",
-    "stocks":       "US Stocks (AAPL, TSLA…)",
-}
-
-# Hardcoded fallback if profile has no market_sessions section
-_FALLBACK_SESSIONS = {
-    "forex":        MarketSession("Forex",        0,  0,  weekdays_only=False, all_day_weekdays=True),
-    "metals":       MarketSession("Metals",       23, 22, weekdays_only=False, all_day_weekdays=True),
-    "crypto":       MarketSession("Crypto",       0,  0,  weekdays_only=False, always_open=True),
-    "indices_us":   MarketSession("US Markets",   13, 21, weekdays_only=True),
-    "indices_eu":   MarketSession("EU Markets",   7,  17, weekdays_only=True),
-    "indices_asia": MarketSession("Asia Markets", 0,  9,  weekdays_only=True),
-    "commodities":  MarketSession("Commodities",  1,  21, weekdays_only=True),
-    "stocks":       MarketSession("US Stocks",    13, 21, weekdays_only=True),
-}
-
-
-class MarketSessionManager:
 
     CATEGORY_MAP: dict[str, list[str]] = {
         "crypto":       ["BTC", "ETH", "LTC", "XBT", "DOGE", "ADA", "SOL",
@@ -137,7 +111,7 @@ class MarketSessionManager:
     }
 
     def __init__(self):
-        self.SESSIONS      = self._build_sessions()
+        self.SESSIONS       = self._build_sessions()
         self.FRIENDLY_NAMES = _FRIENDLY_NAMES
 
     def _build_sessions(self) -> dict[str, MarketSession]:
@@ -151,7 +125,6 @@ class MarketSessionManager:
             if not ms_config.sessions:
                 return _FALLBACK_SESSIONS
 
-            built = {}
             name_map = {
                 "forex":        "Forex",
                 "metals":       "Metals",
@@ -162,6 +135,7 @@ class MarketSessionManager:
                 "commodities":  "Commodities",
                 "stocks":       "US Stocks",
             }
+            built: dict[str, MarketSession] = {}
             for category, cfg in ms_config.sessions.items():
                 built[category] = MarketSession(
                     name             = name_map.get(category, category.title()),
@@ -206,7 +180,7 @@ class MarketSessionManager:
             now_utc = datetime.now(timezone.utc)
 
         category = self.get_symbol_category(symbol)
-        session = self.SESSIONS.get(category, self.SESSIONS["forex"])
+        session  = self.SESSIONS.get(category, self.SESSIONS["forex"])
 
         if session.is_open(now_utc):
             return True, f"{session.name} is open"
@@ -247,23 +221,10 @@ class MarketSessionManager:
     def get_market_status_summary(
         self, portfolio_symbols: list[str] = None, now_utc: datetime = None
     ) -> str:
-        """
-        Human-readable market status — ideal for chat responses.
-
-        Example output (Saturday):
-            Market status — Saturday 10:32 UTC:
-              ✅ Crypto (BTC, ETH…)        — OPEN
-              ❌ Forex (EUR/USD…)           — CLOSED
-              ❌ Metals (Gold, Silver…)     — CLOSED
-              ❌ US Indices (US30, NAS100…) — CLOSED
-
-            Your portfolio — tradeable now: BTCUSD, ETHUSD
-            Closed right now: EURUSD, XAUUSD
-        """
         if now_utc is None:
             now_utc = datetime.now(timezone.utc)
 
-        weekday = now_utc.weekday()
+        weekday  = now_utc.weekday()
         day_name = ["Monday", "Tuesday", "Wednesday", "Thursday",
                     "Friday", "Saturday", "Sunday"][weekday]
         time_str = now_utc.strftime("%H:%M UTC")
@@ -300,7 +261,7 @@ class MarketSessionManager:
             now_utc = datetime.now(timezone.utc)
 
         category = self.get_symbol_category(symbol)
-        ok, _ = self.is_symbol_tradeable(symbol, now_utc)
+        ok, _    = self.is_symbol_tradeable(symbol, now_utc)
         if ok:
             return "now (market is open)"
 

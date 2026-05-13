@@ -60,7 +60,6 @@ class PortfolioManager:
         # Thread-safe lock for model predictions (prevents race conditions between main and background threads)
         # FIX: Added a dedicated lock for trade state management
         self._state_lock = threading.Lock()
-        self._temporary_trade_states: dict[int, dict] = {}
         self._model_lock = threading.Lock()
         self._temporary_trade_states: dict[int, dict] = {}
         

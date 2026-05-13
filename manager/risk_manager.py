@@ -569,7 +569,7 @@ class DynamicRiskTargeter:
 class TrailingStopManager:
     MAX_MODIFY_ATTEMPTS = 5
 
-    def __init__(self, broker, targeter, trail_atr_multiplier: float = 1.5):
+    def __init__(self, broker, targeter, trail_atr_multiplier: float = 1.5, _trail_lock=None):
         self.broker = broker
         self.targeter = targeter
         self.trail_multiplier = trail_atr_multiplier
@@ -577,7 +577,7 @@ class TrailingStopManager:
         self._thread: Optional[threading.Thread] = None
         self.peak_prices: Dict[int, float] = {}
         self._failed_attempts: dict[int, int] = {}
-        self._trail_lock = threading.Lock() # FIXED: Prevents thread races against active ProfitGuard executions
+        self._trail_lock = _trail_lock or threading.Lock()
 
     def start(self):
         if self.running:
@@ -720,7 +720,7 @@ class ProfitGuard:
         (float("inf"), 0.35),  
     ]
 
-    def __init__(self, broker, notify_callback=print):
+    def __init__(self, broker, notify_callback=print, api_lock=None):
         self.broker = broker
         self.notify = notify_callback
 
@@ -732,7 +732,7 @@ class ProfitGuard:
         self._be_attempted: set[int] = set()
         self._closed_this_cycle: set[int] = set()
 
-        self._api_lock = threading.Lock()
+        self._api_lock = api_lock or threading.Lock()
         self.running = False
         self._thread: Optional[threading.Thread] = None
         self._exp_guard = ExpectancyGuard(notify_callback=notify_callback)
@@ -958,27 +958,30 @@ class ProfitGuard:
         self._be_attempted.discard(ticket)
         self._exp_guard.clear_ticket(ticket)
 
-    def status(self) -> str:
+
+    def status_fixed(self) -> str:
         with self._api_lock:
             if not self._peak:
-                return "No positions currently under active guard."
+                base = "No positions currently under active guard."
+            else:
+                eq_base = self._get_equity_base()
+                lines = [f"Dynamic ProfitGuard status (Equity Base: ${eq_base:,.2f}):"]
+                for ticket, peak in self._peak.items():
+                    peak_pips = self._peak_pips.get(ticket, 0.0)
+                    pip_val   = self._pip_val.get(ticket, 0.0)
+                    peak_pct  = peak / eq_base
+                    threshold = self._threshold_for_normalized(peak_pct)
+                    be_locked = "✅ BE Locked" if ticket in self._breakeven_set else "⚠️ Pending BE"
+                    lines.append(
+                        f"  #{ticket} | Peak +${peak:.2f} ({peak_pips:.1f} pips, {peak_pct:.2%} Eq) | "
+                        f"1 pip = ${pip_val:.4f} | Secure on {threshold:.0%} retrace | {be_locked}"
+                    )
+                base = "\n".join(lines)
 
-            eq_base = self._get_equity_base()
-            lines = [f"Dynamic ProfitGuard status (Equity Base: ${eq_base:,.2f}):"]
-            for ticket, peak in self._peak.items():
-                peak_pips = self._peak_pips.get(ticket, 0.0)
-                pip_val   = self._pip_val.get(ticket, 0.0)
-                peak_pct  = peak / eq_base
-                threshold = self._threshold_for_normalized(peak_pct)
-                be_locked = "✅ BE Locked" if ticket in self._breakeven_set else "⚠️ Pending BE"
-                lines.append(
-                    f"  #{ticket} | Peak +${peak:.2f} ({peak_pips:.1f} pips, {peak_pct:.2%} Eq) | "
-                    f"1 pip = ${pip_val:.4f} | Secure on {threshold:.0%} retrace | {be_locked}"
-                )
-            return "\n".join(lines)
+        # FIX: exp_guard summary is now assembled OUTSIDE the with-block and
+        # appended before returning — it was previously unreachable dead code.
         exp_summary = self._exp_guard.summary()
         return f"{base}\n\n{exp_summary}"
-
 class TradeGatekeeper:
     """
     Pre-trade session and spread guard.
