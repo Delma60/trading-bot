@@ -119,7 +119,7 @@ class InnerMonologue:
     def _assess_user_state(self):
         """How is the user feeling right now?"""
         tone = self.wm.session_tone
-        emotion_recent = self.wm.user_emotion_history[-3:] if self.wm.user_emotion_history else []
+        emotion_recent = list(self.wm.user_emotion_history)[-3:] if self.wm.user_emotion_history else []
         
         if tone == "tense":
             self._think("observation",

@@ -101,6 +101,10 @@ class BrokerManager:
         self._magic          = magic
         self._cooldown_secs  = cooldown_seconds
 
+        self.platforms = {
+            "mt5": MT5Broker,
+            "paper": PaperBroker,
+        }
         self._adapter: BrokerInterface = self._build_adapter(platform)
         self._lock    = threading.RLock()
         self._credentials: dict = {}
@@ -109,10 +113,6 @@ class BrokerManager:
         self._health_running = False
         self._health_thread: Optional[threading.Thread] = None
         
-        self.platforms = {
-            "mt5": MT5Broker,
-            "paper": PaperBroker,
-        }
 
     # ── Factory helpers ───────────────────────────────────────────────────────
 

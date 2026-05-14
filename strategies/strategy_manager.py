@@ -51,10 +51,14 @@ class _ScannerSnapshot:
     """Immutable snapshot of the scanner config section."""
     timeframes: list
     primary_tf: str
+    mtf_min_alignment: float
     expires_at: float   # monotonic timestamp
  
 class MTFConfluenceEngine:
     """Multi-Timeframe Confluence engine (Feature #4)."""
+    
+    _CACHE_TTL = 10.0
+    
     def __init__(self, broker:Trader):
         self.broker = broker
         self.broker_timeout_seconds = 5.0
@@ -88,6 +92,7 @@ class MTFConfluenceEngine:
                 timeframes = sc.mtf_timeframes,
                 primary_tf = sc.timeframe,
                 expires_at = now + self._CACHE_TTL,
+                mtf_min_alignment = sc.mtf_min_alignment,
             )
             return self._snapshot
     

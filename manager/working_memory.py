@@ -99,7 +99,7 @@ class WorkingMemory:
         """Infer session tone from recent emotion history."""
         if len(self.user_emotion_history) < 3:
             return
-        recent = self.user_emotion_history[-5:]
+        recent = list(self.user_emotion_history)[-5:]
         neg = recent.count("frustrated") + recent.count("anxious") + recent.count("negative")
         pos = recent.count("confident") + recent.count("positive") + recent.count("excited")
         if neg >= 2:

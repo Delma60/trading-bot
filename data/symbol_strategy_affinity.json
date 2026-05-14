@@ -22,5 +22,17 @@
         "ts": "2026-05-14T06:13:45.928638"
       }
     ]
+  },
+  "USDJPY|Mean_Reversion|Unknown": {
+    "symbol": "USDJPY",
+    "strategy": "Mean_Reversion",
+    "regime": "Unknown",
+    "outcomes": [
+      {
+        "profit": 1.51,
+        "win": true,
+        "ts": "2026-05-14T12:09:32.518783"
+      }
+    ]
   }
 }
