@@ -154,11 +154,13 @@ class ARIA:
         strategy_manager: StrategyManager,
         portfolio_manager: PortfolioManager,
         risk_manager: RiskManager,
+        auto_optimizer: AutoOptimizer = None,
     ):
         self.broker    = broker
         self.sm        = strategy_manager
         self.pm        = portfolio_manager
         self.rm        = risk_manager
+        self._auto_optimizer = auto_optimizer
 
         self.nlp = NLPEngine(
             intents_filepath=intents_filepath,
@@ -276,6 +278,8 @@ class ARIA:
         ))
 
         self.working_memory.remember_symbol(symbol)
+        if hasattr(self, '_auto_optimizer') and self._auto_optimizer:
+            self._auto_optimizer.on_trade_closed(symbol, profit)
 
     def receive_system_alert(self, msg: str, priority: str = "normal"):
         with self.inbox_lock:
@@ -570,7 +574,11 @@ class ARIA:
 
         if intent == "trading_symbols" or "portfolio" in lower:
             return self._handle_trading_symbols_intent(lower)
-
+        if any(k in lower for k in ["optimizer status", "auto optimizer", "tuner status"]):
+            ao = getattr(self, '_auto_optimizer', None)
+            if ao:
+                return ao.status()
+            return "Auto-optimizer not attached."
         return None
 
     def _handle_backtest(self, text: str, entities: dict) -> str:

@@ -49,6 +49,7 @@ _PATTERN_GROUPS = [
             r"^(?:tell|show) me about\b",
             r"\b(?:chart|chart out|pull up|open chart)\b",
             r"\bworth (?:a look|trading|watching|a punt)(?:\?|$)",
+            
         ],
     },
 
@@ -94,6 +95,7 @@ _PATTERN_GROUPS = [
             r"\bany(?:thing)? (?:open|running|live|on)\b",
             r"\bwhat am i (?:in|holding|carrying)\b",
             r"^(?:check|review)(?: my)? (?:positions?|trades?|exposure|book)\b",
+            r"^(?:positions?|trades?|exposure|book)$",
         ],
     },
 
@@ -129,6 +131,9 @@ _PATTERN_GROUPS = [
             r"\bwhere(?:'s)? my (?:money|account|balance)\b",
             r"\bam i (?:up|down)(?: overall| today)?\b",
             r"\bwhat(?:'s| is) (?:my|the) (?:balance|equity|margin|pnl)\b",
+            r"^(?:balance|equity|account|margin)$",           # bare single words
+            r"^(?:my\s+)?(?:balance|equity|account|margin)$", # "my balance", "my equity"
+            r"^(?:positions?|trades?)$",                       # bare "positions" or "trades"
         ],
     },
 
@@ -432,7 +437,9 @@ class ConversationalParser:
         VALID_SINGLES = {
             "positions", "account", "balance", "history", "retrain",
             "scan", "news", "risk", "settings", "portfolio", "help",
-            "pnl", "stats", "exit", "quit", "close", "open"
+            "pnl", "stats", "exit", "quit", "close", "open",
+            "equity", "margin", "exposure", "notifications", "alerts",
+            "inbox", "trades", "performance", "status", "drawdown",
         }
         if len(lower.split()) <= 2:
             if lower.strip() in VALID_SINGLES:

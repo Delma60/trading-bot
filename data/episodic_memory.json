@@ -1,0 +1,93 @@
+[
+  {
+    "timestamp": "2026-05-14T00:36:33.393365",
+    "episode_type": "trade",
+    "symbol": "XAGUSD",
+    "summary": "XAGUSD SELL closed externally (SL hit)",
+    "outcome": "$-6.15",
+    "emotional_tag": null,
+    "tags": [
+      "external_close",
+      "sl_hit",
+      "XAGUSD"
+    ]
+  },
+  {
+    "timestamp": "2026-05-14T00:45:50.171819",
+    "episode_type": "trade",
+    "symbol": "XAGUSD",
+    "summary": "XAGUSD SELL closed externally (TP hit)",
+    "outcome": "+$6.60",
+    "emotional_tag": null,
+    "tags": [
+      "external_close",
+      "tp_hit",
+      "XAGUSD"
+    ]
+  },
+  {
+    "timestamp": "2026-05-14T00:47:56.770278",
+    "episode_type": "trade",
+    "symbol": "XAGUSD",
+    "summary": "XAGUSD SELL closed externally (SL hit)",
+    "outcome": "$-6.05",
+    "emotional_tag": null,
+    "tags": [
+      "external_close",
+      "sl_hit",
+      "XAGUSD"
+    ]
+  },
+  {
+    "timestamp": "2026-05-14T00:52:28.467497",
+    "episode_type": "trade",
+    "symbol": "XAGUSD",
+    "summary": "XAGUSD SELL closed externally (TP hit)",
+    "outcome": "+$4.65",
+    "emotional_tag": null,
+    "tags": [
+      "external_close",
+      "tp_hit",
+      "XAGUSD"
+    ]
+  },
+  {
+    "timestamp": "2026-05-14T00:55:40.074810",
+    "episode_type": "trade",
+    "symbol": "XAGUSD",
+    "summary": "XAGUSD SELL closed externally (SL hit)",
+    "outcome": "$-6.15",
+    "emotional_tag": null,
+    "tags": [
+      "external_close",
+      "sl_hit",
+      "XAGUSD"
+    ]
+  },
+  {
+    "timestamp": "2026-05-14T01:00:06.688986",
+    "episode_type": "trade",
+    "symbol": "XAGUSD",
+    "summary": "XAGUSD SELL closed externally (SL hit)",
+    "outcome": "$-7.25",
+    "emotional_tag": null,
+    "tags": [
+      "external_close",
+      "sl_hit",
+      "XAGUSD"
+    ]
+  },
+  {
+    "timestamp": "2026-05-14T04:38:51.214437",
+    "episode_type": "trade",
+    "symbol": "XAGUSD",
+    "summary": "XAGUSD BUY closed externally (SL hit)",
+    "outcome": "$-4.45",
+    "emotional_tag": null,
+    "tags": [
+      "external_close",
+      "sl_hit",
+      "XAGUSD"
+    ]
+  }
+]

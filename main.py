@@ -65,6 +65,8 @@ def handle_external_close(ticket: int, symbol: str, profit: float, close_price: 
         risk_manager.record_win(symbol)
         
     portfolio_manager.log_trade_for_learning(ticket=ticket, profit=profit)
+    if 'auto_optimizer' in dir():
+        auto_optimizer.on_trade_closed(symbol, profit)
     
     status_icon = "🟢" if profit > 0 else "🔴"
     agent_notify(
@@ -242,11 +244,13 @@ if __name__ == "__main__":
         risk_manager=risk_manager
     )
     current_agent_listener = bot.receive_system_alert
+    
 
     # FIX #5/#9: Optimizers started here (on main thread, before chat loop)
     # rather than as dead class-level code that never ran.
     self_optimizer = SelfOptimizer(strategy_manager, broker, notify_callback=agent_notify)
     auto_optimizer = AutoOptimizer(strategy_manager, notify_callback=agent_notify)
+    bot._auto_optimizer = auto_optimizer 
     self_optimizer.start()
     auto_optimizer.start()
 
