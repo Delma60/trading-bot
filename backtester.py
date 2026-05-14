@@ -268,8 +268,8 @@ class BacktestEngine:
         self._equity_history: list = []
         self._pip_mult = self._infer_pip_multiplier(config.symbol)
 
-        # FIX 1: feature cache keyed by bar_idx to avoid recomputing
         self._feat_cache: dict[int, Optional[pd.DataFrame]] = {}
+        self._cache_capacity = 50
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -371,6 +371,9 @@ class BacktestEngine:
 
             # Cache to avoid recomputing identical windows in the same run
             if bar_idx not in self._feat_cache:
+                if len(self._feat_cache) >= self._cache_capacity:
+                    oldest_key = min(self._feat_cache.keys())
+                    del self._feat_cache[oldest_key]
                 feat_df = FeatureEngineer.compute(window)
                 self._feat_cache[bar_idx] = feat_df if (feat_df is not None and not feat_df.empty) else None
 
@@ -568,32 +571,34 @@ class BacktestEngine:
         if fold_size < 100:
             notify_callback("[WFO] Insufficient historical bars per fold to execute meaningful WFO.")
             return base_result
-
+        
+        # Apply inside BacktestEngine._run_wfo
         for i in range(self.cfg.wfo_folds):
             start_idx = self.cfg.warmup_bars + i * fold_size
             end_idx   = start_idx + 2 * fold_size
-            if end_idx > total_bars:
-                end_idx = total_bars
-
-            # Determine Out-Of-Sample split index relative to the fold slice
             oos_start = int(start_idx + (end_idx - start_idx) * (1.0 - self.cfg.wfo_oos_ratio))
-            slice_df  = raw_df.iloc[start_idx:end_idx]
-
-            # Execute standard backtest logic on the designated slice
-            fold_res = self._run_on_slice(slice_df, oos_start_idx=(oos_start - start_idx))
+            
+            # 1. Evaluate the Out-Of-Sample (OOS) reporting slice directly
+            oos_slice = raw_df.iloc[start_idx:end_idx]
+            fold_res  = self._run_on_slice(oos_slice, oos_start_idx=(oos_start - start_idx))
+            
+            # 2. Evaluate the true corresponding In-Sample (IS) training period independently
+            is_slice  = raw_df.iloc[start_idx:oos_start]
+            is_res    = self._run_on_slice(is_slice, oos_start_idx=len(is_slice)) # Entirely IS
             
             fold_results.append({
                 "window":       i + 1,
                 "oos_trades":   fold_res.oos_trades,
                 "oos_profit":   fold_res.oos_net_pnl,
-                "oos_win_rate": fold_res.oos_win_rate,
-                "oos_sharpe":   fold_res.sharpe_ratio
+                "oos_sharpe":   fold_res.sharpe_ratio,
+                "is_sharpe":    is_res.sharpe_ratio
             })
             oos_sharpes.append(fold_res.sharpe_ratio)
-            is_sharpes.append(max(0.01, fold_res.sharpe_ratio * 1.2))  # Baseline IS proxy for robustness checks
+            is_sharpes.append(max(0.01, is_res.sharpe_ratio)) # True IS performance baseline
 
-        avg_oos_sharpe = sum(oos_sharpes) / len(oos_sharpes) if oos_sharpes else 0.0
-        avg_is_sharpe  = sum(is_sharpes) / len(is_sharpes) if is_sharpes else 1.0
+        # Calculate authentic robustness
+        avg_oos_sharpe = np.mean(oos_sharpes) if oos_sharpes else 0.0
+        avg_is_sharpe  = np.mean(is_sharpes) if is_sharpes else 1.0
         robustness     = avg_oos_sharpe / avg_is_sharpe if avg_is_sharpe > 0 else 0.0
 
         base_result.wfo_fold_results     = fold_results

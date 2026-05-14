@@ -12,7 +12,7 @@ from .risk_manager import RiskManager
 from typing import Dict
 from manager.market_sessions import MarketSessionManager
 from manager.risk_manager import TradeGatekeeper, CorrelationGuard
-from strategies.strategy_manager import OHLCVCache
+from strategies.strategy_manager import OHLCVCache, StrategyManager
 from manager.market_sessions import MarketSessionManager
 from manager.profile_manager import profile as _profile
 from manager.correlation_matrix import PortfolioHeatCheck
@@ -24,7 +24,7 @@ class PortfolioManager:
     TRAINING_DATA_PATH = Path("data/trade_history.json")
     PROFILE_PATH = Path("data/profile.json")  # Single source of truth
     
-    def __init__(self, broker, strategy_manager, risk_manager: RiskManager, cache=None, notify_callback=print):
+    def __init__(self, broker, strategy_manager:StrategyManager, risk_manager: RiskManager, cache=None, notify_callback=print):
         self.broker = broker
         b = _profile.broker()
         s = _profile.sessions()

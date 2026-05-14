@@ -220,7 +220,7 @@ class ARIA:
         self.notification_inbox: list = []
         self.inbox_lock = threading.Lock()
 
-        self.message_processor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ARIA-msg")
+        self.message_processor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="ARIA-msg")
         self.message_timeout_seconds = 30
 
         self.console = Console()
@@ -322,141 +322,47 @@ class ARIA:
 
             self.notify(msg, priority="critical")
             return msg
-
     def _process_message_impl(self, user_input: str) -> str:
-        text = user_input.strip()
-        if not text:
-            return ""
+            text = user_input.strip()
+            if not text:
+                return ""
 
-        emotion = self._detect_emotion(text)
+            # Phase 1: Cognitive State Parsing
+            emotion = self._detect_emotion(text)
+            self.working_memory.add_turn(ConversationTurn(role="user", text=text, intent="", emotion=emotion))
 
-        self.working_memory.add_turn(ConversationTurn(
-            role="user", text=text, intent="", emotion=emotion
-        ))
+            # Phase 2: Intent Classification & Extraction
+            parsed_intent, entities = self._classify_intent_and_entities(text)
+            self._update_memory(entities)
 
-        if self.pending_action:
-            handled, response = self._handle_pending(text)
-            if handled:
-                self._log_aria_turn(response, self.memory.get("last_intent", ""))
-                return response
-
-        parsed = self.conv_parser.parse(text, self.working_memory)
-
-        if parsed:
-            if parsed.intent == "__confirm__" and self.pending_action:
-                handled, response = self._handle_pending("yes")
+            # Phase 3: Pending UI Task Interrupts
+            if self.pending_action:
+                handled, pending_resp = self._handle_pending(text)
                 if handled:
-                    self._log_aria_turn(response, "confirm")
-                    return response
+                    self._log_aria_turn(pending_resp, self.memory.get("last_intent", ""))
+                    return pending_resp
 
-            if parsed.intent == "__cancel__" and self.pending_action:
-                self._clear_pending()
-                response = random.choice([
-                    "Sure, leaving it. What else?",
-                    "No problem, cancelled.",
-                    "Got it, moving on. What do you want to do?",
-                ])
-                self._log_aria_turn(response, "cancel")
-                return response
+            # Phase 4: Core Action Routing
+            quick_action = self._handle_quick_action(parsed_intent, text, entities)
+            if quick_action is not None:
+                self._log_aria_turn(quick_action, parsed_intent)
+                self.memory["last_intent"] = parsed_intent
+                return quick_action
 
-            entities = {
-                "symbols": parsed.symbols,
-                "direction": parsed.direction,
-                "timeframes": [],
-                "money": [],
-                "lots": None,
-                "percentages": [],
-                "sentiment": "neutral",
-            }
-            nlp_entities = self.nlp.extract_entities(text)
-            if nlp_entities.get("symbols") and not parsed.symbols:
-                entities["symbols"] = nlp_entities["symbols"]
-            if nlp_entities.get("lots"):
-                entities["lots"] = nlp_entities["lots"]
+            # Phase 5: Autonomous Plan Generation & Voice Rendering
+            agent_resp = self.agent.run(parsed_intent, entities, self.memory, step_callback=self._step_callback)
+            agent_context = {"action": self.agent.last_plan.context.get("action", "WAIT") if self.agent.last_plan else "WAIT"}
+            
+            thoughts = self.inner_monologue.think(parsed_intent, entities, agent_context)
+            final_response = self.voice_layer.render(agent_resp, thoughts, parsed_intent)
+            
+            # Phase 6: Interactive Execution Triggers
+            if self.agent.last_plan and self.agent.last_plan.suggested_action:
+                final_response = self._maybe_execute(final_response, self.agent.last_plan, entities)
 
-            intent = parsed.intent
-            confidence = parsed.confidence
-
-            context_note = ""
-            if parsed.context_used and self.working_memory.last_symbol:
-                context_note = f"(using {self.working_memory.last_symbol} from earlier)"
-
-        else:
-            lower = text.lower()
-            keyword_intent = None
-            for keywords, kw_intent in self._HARD_KEYWORDS:
-                if any(k in lower for k in keywords):
-                    keyword_intent = kw_intent
-                    break
-
-            entities = self.nlp.extract_entities(text)
-
-            if keyword_intent:
-                intent = keyword_intent
-                confidence = 1.0
-            else:
-                intent_data = self.nlp.process(text)
-                intent = intent_data.get("intent", "general")
-                confidence = intent_data.get("confidence", 0.0)
-
-                syms = entities.get("symbols", [])
-                if syms and confidence < 0.60 and intent not in (
-                    "execute_trade", "open_buy", "open_sell",
-                    "close_position", "get_price", "ai_analysis",
-                ):
-                    intent = "analyze_symbol"
-
-            context_note = ""
-
-        self._update_memory(entities)
-        if entities.get("symbols"):
-            for sym in entities["symbols"]:
-                self.working_memory.remember_symbol(sym)
-
-        if self.working_memory.turns:
-            self.working_memory.turns[-1].intent = intent
-
-        setting_response = self._try_setting_change(text)
-        if setting_response:
-            self._log_aria_turn(setting_response, intent)
-            return setting_response
-
-        quick = self._handle_quick_action(intent, text, entities)
-        if quick is not None:
-            self._log_aria_turn(quick, intent)
-            self.memory["last_intent"] = intent
-            return quick
-
-        response = self.agent.run(
-            intent   = intent,
-            entities = entities,
-            memory   = self.memory,
-            step_callback = self._step_callback,
-        )
-
-        agent_result = {
-            "action":     self.agent.last_plan.context.get("action", "WAIT") if self.agent.last_plan else "WAIT",
-            "confidence": self.agent.last_plan.context.get("confidence", 0.0) if self.agent.last_plan else 0.0,
-        }
-        thoughts = self.inner_monologue.think(intent, entities, agent_result)
-        natural_response = self.voice_layer.render(response, thoughts, intent)
-
-        if context_note:
-            natural_response = f"{context_note} — {natural_response}"
-
-        plan = self.agent.last_plan
-        if plan and plan.suggested_action and intent in (
-            "execute_trade", "open_buy", "open_sell", "trade_execution"
-        ):
-            natural_response = self._maybe_execute(natural_response, plan, entities)
-
-        self._log_aria_turn(natural_response, intent)
-        if intent in ("execute_trade", "open_buy", "open_sell"):
-            self.user_model.observe("asked_for_execution", {"symbol": self.memory.get("last_symbol")})
-        self.memory["last_intent"] = intent
-
-        return natural_response
-
+            self._log_aria_turn(final_response, parsed_intent)
+            self.memory["last_intent"] = parsed_intent
+            return final_response
     def _log_aria_turn(self, text: str, intent: str):
         self.working_memory.add_turn(ConversationTurn(
             role="aria", text=text, intent=intent, emotion="neutral"

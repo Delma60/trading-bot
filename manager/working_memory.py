@@ -38,7 +38,7 @@ class WorkingMemory:
         self.topic_depth: int = 0           # how deep into a topic we are
         
         # Emotional arc of the conversation
-        self.user_emotion_history: list = []
+        self.user_emotion_history: deque = deque(maxlen=max_turns)
         self.session_tone: str = "neutral"  # neutral, tense, confident, frustrated
         
         # What the user wants (inferred goals, not just stated)

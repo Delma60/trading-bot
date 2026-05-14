@@ -113,6 +113,27 @@ class NewsClassifier:
             relevance=round(relevance, 2),
             title=get_field("title") or "Unknown Event"
         )
+    def inject_price_label(self, article_id: str, symbol: str, price_change_pct: float, horizon_hours: int = 4) -> None:
+        """
+        Records post-publication market outcomes to fine-tune future sentiment classification weights.
+        """
+        try:
+            # Map percentage continuous direction to empirical sentiment classes
+            empirical_label = "POSITIVE" if price_change_pct > 0.15 else ("NEGATIVE" if price_change_pct < -0.15 else "NEUTRAL")
+            
+            # Log mapping update for next epoch background fine-tuning
+            if hasattr(self, "_training_buffer"):
+                self._training_buffer.append({
+                    "article_id": article_id,
+                    "symbol": symbol,
+                    "actual_label": empirical_label,
+                    "impact_magnitude": abs(price_change_pct),
+                    "horizon": horizon_hours
+                })
+        except Exception as e:
+            # Ensure integrated logging records classification injection dropouts
+            if hasattr(self, "notify"):
+                self.notify(f"[NewsClassifier] Failed injection tracking for {article_id}: {e}", priority="normal")
 
 
 import hashlib

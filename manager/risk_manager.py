@@ -476,6 +476,17 @@ class RiskManager:
         return 0.01
 
     def calculate_position_size(self, symbol: str, risk_amount_usd: float, stop_loss_points: int) -> float:
+        # 1. Fetch account state securely to enforce absolute equity limits
+        account = self.cache.get_account() if self.cache is not None else self.broker.getAccountInfo()
+        if account is None:
+            account = self.broker.getAccountInfo()
+
+        # 2. Enforce Hard Absolute Risk Cap: No individual position can ever risk > 3.0% of available equity
+        if account and getattr(account, 'equity', 0.0) > 0:
+            max_absolute_risk_cap = account.equity * 0.03
+            risk_amount_usd = min(risk_amount_usd, max_absolute_risk_cap)
+
+        # 3. Retrieve symbol specifications
         symbol_info = self.cache.get_symbol_info(symbol) if self.cache is not None else mt5.symbol_info(symbol)
         if symbol_info is None:
             return 0.0
@@ -504,7 +515,7 @@ class RiskManager:
 
         clean_lot_size = math.floor(raw_lot_size / step_lot) * step_lot
 
-        # FIXED: Removed the 2.0x multiplier loophole. Now strictly rejects any trade exceeding the intended dollar risk limit.
+        # Strictly reject any trade where the minimum lot size exceeds the capped dollar risk limit
         if clean_lot_size < min_lot:
             risk_at_min_lot = min_lot * risk_per_1_lot
             if risk_at_min_lot > risk_amount_usd:
@@ -515,7 +526,7 @@ class RiskManager:
             return max_lot
 
         return round(clean_lot_size, 2)
-
+    
 class DynamicRiskTargeter:
     def __init__(self, broker):
         self.broker = broker
