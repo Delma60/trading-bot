@@ -1014,7 +1014,7 @@ class ProfitGuard:
         self._be_attempted.discard(ticket)
         self._exp_guard.clear_ticket(ticket)
 
-    def status_fixed(self) -> str:
+    def status(self) -> str:
         with self._api_lock:
             if not self._peak:
                 base = "No positions currently under active guard."

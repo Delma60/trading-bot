@@ -1,0 +1,26 @@
+{
+  "EURAUD|Mean_Reversion|Unknown": {
+    "symbol": "EURAUD",
+    "strategy": "Mean_Reversion",
+    "regime": "Unknown",
+    "outcomes": [
+      {
+        "profit": 1.73,
+        "win": true,
+        "ts": "2026-05-14T05:44:58.871046"
+      }
+    ]
+  },
+  "EURGBP|Mean_Reversion|Unknown": {
+    "symbol": "EURGBP",
+    "strategy": "Mean_Reversion",
+    "regime": "Unknown",
+    "outcomes": [
+      {
+        "profit": 1.19,
+        "win": true,
+        "ts": "2026-05-14T06:13:45.928638"
+      }
+    ]
+  }
+}

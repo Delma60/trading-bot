@@ -266,7 +266,6 @@ class StrategyManager:
                 f"[StrategyManager] Retrained models for {symbol}. "
                 f"Meta accuracy: {acc:.1%}"
             )
-
     def check_signals(
         self,
         symbol:        str,
@@ -290,9 +289,7 @@ class StrategyManager:
                 ),
             }
 
-        # FIX 9: Market condition filter is re-enabled.
-        # The original code computed the result then immediately discarded it
-        # with `pass`, meaning volatility spikes were never blocked.
+        # Market condition filter check
         is_suitable, mc_reason = self._mc_filter.is_market_suitable(symbol)
         if not is_suitable:
             return {
@@ -328,26 +325,42 @@ class StrategyManager:
             latest_features = feat_df.iloc[-1]
             self.learner.ingest_market_bar(latest_features)
 
-        strategy_signals: dict[str, dict] = {}
-
-        ranked = self.affinity.get_top_strategies(
-          symbol, regime, self.active_ensemble_strategies, top_n=-1
-      )
-        for name, affinity_weight in ranked:
-            engine = self.engines[name]
-            sig = engine.analyze(...)
-            sig["affinity_weight"] = affinity_weight  # pass to MetaScorer
-            strategy_signals[name] = sig
-            # Train / load LSTM
-            with self._model_lock:
-                self.lstm.train(feat_df, symbol=symbol, force=retrain_lstm)
-                lstm_pred = self.lstm.predict(feat_df, symbol=symbol)
-
-        # Meta-scorer final decision
-        market_snapshot = feat_df.iloc[-1]
+        # ── FIX A: Resolve active regime prior to affinity lookup ──
         regime = "Unknown"
         if self.learner:
             regime = self.learner.get_current_regime()
+
+        ranked = self.affinity.get_top_strategies(
+            symbol, regime, self.active_ensemble_strategies, top_n=-1
+        )
+
+        # ── FIX C: Train and execute LSTM exactly once outside the loop ──
+        with self._model_lock:
+            self.lstm.train(feat_df, symbol=symbol, force=retrain_lstm)
+            lstm_pred = self.lstm.predict(feat_df, symbol=symbol)
+
+        strategy_signals: dict[str, dict] = {}
+        for name, affinity_weight in ranked:
+            engine = self.engines[name]
+            
+            # ── FIX B: Dynamically inspect signature to pass correct parameters ──
+            try:
+                sig_params = signature(engine.analyze).parameters
+                if len(sig_params) >= 3 and "broker" in sig_params:
+                    sig = engine.analyze(feat_df, symbol=symbol, broker=self.broker)
+                elif len(sig_params) >= 2 and "symbol" in sig_params:
+                    sig = engine.analyze(feat_df, symbol=symbol)
+                else:
+                    sig = engine.analyze(feat_df)
+            except Exception as e:
+                self.notify(f"[StrategyManager] Error evaluating {name}: {e}")
+                continue
+
+            sig["affinity_weight"] = affinity_weight  # pass to MetaScorer
+            strategy_signals[name] = sig
+
+        # Meta-scorer final decision
+        market_snapshot = feat_df.iloc[-1]
 
         with self._model_lock:
             final = self.meta.score(
@@ -379,11 +392,8 @@ class StrategyManager:
             "strategy_signals": strategy_signals,
             "feature_vector":   fv,
             "timeframe":        effective_tf,
-            # FIX 7 (auto_optimizer): persist the active regime so the CSV
-            # logger can write it and EnsembleCalibrator can read it back.
             "regime":           regime,
-        }  
-
+        }
 class OHLCVCache:
     """
     Thread-safe time-to-live cache for OHLCV DataFrames.

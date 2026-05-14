@@ -89,5 +89,31 @@
       "sl_hit",
       "XAGUSD"
     ]
+  },
+  {
+    "timestamp": "2026-05-14T05:44:58.870859",
+    "episode_type": "trade",
+    "symbol": "EURAUD",
+    "summary": "EURAUD SELL closed externally (TP hit)",
+    "outcome": "+$1.73",
+    "emotional_tag": null,
+    "tags": [
+      "external_close",
+      "tp_hit",
+      "EURAUD"
+    ]
+  },
+  {
+    "timestamp": "2026-05-14T06:13:45.928435",
+    "episode_type": "trade",
+    "symbol": "EURGBP",
+    "summary": "EURGBP BUY closed externally (TP hit)",
+    "outcome": "+$1.19",
+    "emotional_tag": null,
+    "tags": [
+      "external_close",
+      "tp_hit",
+      "EURGBP"
+    ]
   }
 ]

@@ -23,7 +23,7 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 from typing import Optional
-
+from datetime import datetime
 
 # Conservative fallback used only when no SymbolRegistry is injected.
 _FALLBACK_UNIVERSE = [
