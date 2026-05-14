@@ -242,9 +242,8 @@ class MetaScorer:
                 continue  # exclude unimplemented strategies
             action = sig.get("action", "WAIT")
             conf = float(sig.get("confidence", 0.0))
-            weight = weights.get(name, 1.0)
-            if action in votes:
-                votes[action] += conf * weight
+            weight = weights.get(name, 1.0) * sig.get("affinity_weight", 1.0)
+            votes[action] += conf * weight
 
         lstm_action = LSTM_TO_ACTION.get(
             lstm_prediction.get("direction", "NEUTRAL"), "WAIT"

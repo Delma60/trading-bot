@@ -276,6 +276,10 @@ class ARIA:
             emotional_tag=None,
             tags=["external_close", "sl_hit" if profit < 0 else "tp_hit", symbol],
         ))
+        
+        regime   = getattr(self.sm, 'learner', None)
+        regime   = regime.get_current_regime() if regime else "Unknown"
+        self.sm.affinity.record_outcome(symbol, strategy, regime, profit)
 
         self.working_memory.remember_symbol(symbol)
         if hasattr(self, '_auto_optimizer') and self._auto_optimizer:

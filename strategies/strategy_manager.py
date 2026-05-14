@@ -32,6 +32,7 @@ from strategies.models.meta_scorer import MetaScorer
 from manager.symbol_registry import SymbolRegistry
 from manager.profile_manager import profile as _profile
 from manager.local_cache import LocalCache
+from strategies.symbol_strategy_affinity import SymbolStrategyAffinityMap
 
 
 class DummyStrategy:
@@ -171,6 +172,7 @@ class StrategyManager:
         self.lstm     = LSTMPredictor()
         self.meta     = MetaScorer()
         self.features = FeatureEngineer()
+        self.affinity = SymbolStrategyAffinityMap()
 
         # Unsupervised learning engine
         try:
@@ -212,9 +214,13 @@ class StrategyManager:
     def execute_strategy(self, strategy_name: str):
         return self.engines.get(strategy_name, DummyStrategy())
 
-    def record_trade_outcome(self, feature_vector, action: str, profit: float):
+    def record_trade_outcome(self, feature_vector, action, profit,
+                               symbol="", strategy="", regime=""):
+        
         label = action if profit > 0 else "WAIT"
         self.meta.collect_sample(feature_vector, label)
+        self.affinity.record_outcome(symbol, strategy, regime, profit)
+        
 
         sample_count = len(self.meta._samples)
         if sample_count >= 200 and sample_count % 50 == 0:
@@ -322,27 +328,20 @@ class StrategyManager:
             latest_features = feat_df.iloc[-1]
             self.learner.ingest_market_bar(latest_features)
 
-        # Collect signals from every strategy engine
-        from inspect import signature
         strategy_signals: dict[str, dict] = {}
-        for name in self.active_ensemble_strategies:
-            engine = self.engines[name]
-            try:
-                method_sig = signature(engine.analyze)
-                args = [feat_df]
-                if len(method_sig.parameters) >= 2:
-                    args.append(symbol)
-                if len(method_sig.parameters) >= 3:
-                    args.append(self.broker)
-                strategy_signals[name] = engine.analyze(*args)
-            except Exception as exc:
-                self.notify(f"[StrategyManager] {name} raised: {exc}")
-                strategy_signals[name] = {"action": "WAIT", "confidence": 0.0}
 
-        # Train / load LSTM
-        with self._model_lock:
-            self.lstm.train(feat_df, symbol=symbol, force=retrain_lstm)
-            lstm_pred = self.lstm.predict(feat_df, symbol=symbol)
+        ranked = self.affinity.get_top_strategies(
+          symbol, regime, self.active_ensemble_strategies, top_n=-1
+      )
+        for name, affinity_weight in ranked:
+            engine = self.engines[name]
+            sig = engine.analyze(...)
+            sig["affinity_weight"] = affinity_weight  # pass to MetaScorer
+            strategy_signals[name] = sig
+            # Train / load LSTM
+            with self._model_lock:
+                self.lstm.train(feat_df, symbol=symbol, force=retrain_lstm)
+                lstm_pred = self.lstm.predict(feat_df, symbol=symbol)
 
         # Meta-scorer final decision
         market_snapshot = feat_df.iloc[-1]
