@@ -34,5 +34,17 @@
         "ts": "2026-05-14T12:09:32.518783"
       }
     ]
+  },
+  "GBPUSD|Mean_Reversion|Unknown": {
+    "symbol": "GBPUSD",
+    "strategy": "Mean_Reversion",
+    "regime": "Unknown",
+    "outcomes": [
+      {
+        "profit": 1.5,
+        "win": true,
+        "ts": "2026-05-14T12:25:04.364636"
+      }
+    ]
   }
 }

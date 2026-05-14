@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Optional
+import pandas as pd
 
 
 # ── Shared data models ────────────────────────────────────────────────────────
