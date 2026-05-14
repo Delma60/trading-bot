@@ -1,7 +1,8 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.pyd
 
 # C extensions
 *.so
@@ -122,3 +123,12 @@ models/weights/
 *.log
 data/cache/
 data/auto_optimizer_log.jsonl
+
+# ── Runtime Data & Logs ──
+data/*.json
+data/*.jsonl
+data/*.pickle
+*.log
+
+# ── Local Model Weights (Optional but recommended) ──
+data/*.keras
