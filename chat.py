@@ -370,6 +370,29 @@ class ARIA:
 
     def notify(self, msg: str, priority: str = "normal"):
         return self.receive_system_alert(msg, priority)
+    
+    def _classify_intent_and_entities(self, text: str) -> tuple[str, dict]:
+        """Classify intent and extract entities from user input."""
+        # 1. Try conversational parser first (faster, handles casual speech)
+        parsed = self.conv_parser.parse(text, self.working_memory)
+        entities = self.nlp.extract_entities(text)
+
+        if parsed and parsed.confidence >= 0.75:
+            if parsed.symbols:
+                entities["symbols"] = parsed.symbols
+            if parsed.direction:
+                entities["direction"] = parsed.direction
+            return parsed.intent, entities
+
+        # 2. Fall back to NLP model
+        intent, confidence = self.nlp.predict_intent(text)
+        
+        # Hard keyword overrides for reliability
+        for keywords, hard_intent in self._HARD_KEYWORDS:
+            if any(kw in text.lower() for kw in keywords):
+                return hard_intent, entities
+
+        return intent, entities
 
     def _detect_emotion(self, text: str) -> str:
         lower = text.lower()

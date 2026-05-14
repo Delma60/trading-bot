@@ -33,7 +33,8 @@ from manager.symbol_registry import SymbolRegistry
 from manager.profile_manager import profile as _profile
 from manager.local_cache import LocalCache
 from strategies.symbol_strategy_affinity import SymbolStrategyAffinityMap
-
+from dataclasses import dataclass
+from typing import Optional
 
 class DummyStrategy:
     """Safe placeholder for strategies not yet implemented."""
@@ -45,27 +46,69 @@ class DummyStrategy:
         }
 
 
+@dataclass
+class _ScannerSnapshot:
+    """Immutable snapshot of the scanner config section."""
+    timeframes: list
+    primary_tf: str
+    expires_at: float   # monotonic timestamp
+ 
 class MTFConfluenceEngine:
     """Multi-Timeframe Confluence engine (Feature #4)."""
     def __init__(self, broker:Trader):
         self.broker = broker
         self.broker_timeout_seconds = 5.0
+        
+        self._snapshot: Optional[_ScannerSnapshot] = None
+        self._cache_lock = threading.Lock()
+    
+    def _get_snapshot(self) -> _ScannerSnapshot:
+        """
+        Return a fresh-or-cached scanner snapshot.
+ 
+        Only one thread refreshes at a time; others wait on the lock and
+        then reuse the snapshot the first thread just populated.
+        """
+        now = time.monotonic()
+ 
+        # Fast-path: snapshot still valid, no lock needed
+        snap = self._snapshot
+        if snap is not None and now < snap.expires_at:
+            return snap
+ 
+        # Slow-path: refresh under lock
+        with self._cache_lock:
+            # Re-check inside lock (another thread may have refreshed while we waited)
+            snap = self._snapshot
+            if snap is not None and now < snap.expires_at:
+                return snap
+ 
+            sc = _profile.scanner()
+            self._snapshot = _ScannerSnapshot(
+                timeframes = sc.mtf_timeframes,
+                primary_tf = sc.timeframe,
+                expires_at = now + self._CACHE_TTL,
+            )
+            return self._snapshot
     
     @property
     def TIMEFRAMES(self) -> list:
         """Live property — always reflects the current profile setting."""
-        return _profile.scanner().mtf_timeframes
+        return self._get_snapshot().timeframes
     
     @property
     def _primary_tf(self) -> str:
-        return _profile.scanner().timeframe
+        return self._get_snapshot().primary_tf
     
     def get_confluence_score(self, symbol: str, cache:LocalCache=None) -> dict:
         signals = {}
-        for tf in self.TIMEFRAMES:
+        snap = self._get_snapshot()          # one profile read for the whole method
+        timeframes  = snap.timeframes
+        primary_tf  = snap.primary_tf
+        for tf in timeframes:
             try:
                 # FIXED: Strictly evaluate timeframe to prevent reading duplicate H1 cache frames
-                if cache and tf == self._primary_tf:
+                if cache and tf == primary_tf:
                     df = cache.get_raw_ohlcv(symbol)
                 else:
                     from threading import Thread
@@ -121,7 +164,7 @@ class MTFConfluenceEngine:
             "direction": dominant,
             "alignment": alignment,
             "signals":   signals,
-            "tradeable": alignment >= _profile.scanner().mtf_min_alignment,
+            "tradeable": alignment >= snap.mtf_min_alignment,
         }
 
 

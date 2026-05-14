@@ -187,7 +187,7 @@ class RiskManager:
         self._loss_lock = threading.Lock()
         self._sync_lock = threading.Lock() # Global operations level thread barrier
 
-        self.daily_high_watermark = 0.0
+        self.daily_high_watermark = None
         self.daily_low_watermark = 0.0
         self.watermark_date = None
 
@@ -399,8 +399,8 @@ class RiskManager:
 
     def calculate_safe_trade(self, symbol: str, base_risk_pct: float, stop_loss_pips: float, max_daily_loss: float, portfolio_size: int) -> dict:
         """Evaluates live market indicators and active drawdown levels to authorize trade parameters."""
+        allowed, reason = self.is_trading_allowed(symbol, max_daily_loss, portfolio_size)
         with self._sync_lock:
-            allowed, reason = self.is_trading_allowed(symbol, max_daily_loss, portfolio_size)
             if not allowed:
                 return {"approved": False, "reason": reason}
 
@@ -412,9 +412,13 @@ class RiskManager:
             if account is None:
                 return {"approved": False, "reason": "Account data not available."}
             
+            if self.daily_high_watermark is None:
+                self.daily_high_watermark = account.equity
+                
             current_equity = account.equity
-            trailing_drawdown = self.daily_high_watermark - current_equity
+            trailing_drawdown = max(0.0, self.daily_high_watermark - current_equity)
             actual_risk_pct = base_risk_pct
+            
 
             if max_daily_loss > 0:
                 dd_ratio = trailing_drawdown / max_daily_loss

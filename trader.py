@@ -9,7 +9,7 @@ from pathlib import Path
 
 class Trader:
     
-    def __init__(self, login="", password="", server="MetaQuotes-Demo", notify_callback=print, magic=1000):
+    def __init__(self, login="", password="", server="MetaQuotes-Demo", notify_callback=print, magic=234000):
         self.login = login
         self.password = password
         self.server = server
@@ -671,7 +671,7 @@ class Trader:
                     "position": position.ticket,
                     "price": price,
                     "deviation": 20,
-                    "magic": 234000,
+                    "magic": self.magic,
                     "comment": "Bot manual close",
                     "type_time": mt5.ORDER_TIME_GTC,
                     "type_filling": type_filling,
@@ -775,7 +775,7 @@ class Trader:
                         symbol=symbol,
                         lots=position.volume,
                         price=result.price,
-                        ticket=result.order,
+                        ticket=position.ticket,
                         comment=f"Profit: {position.profit}",
                         strategy=self._strategy_for(position.ticket),
                         profit=position.profit,
@@ -876,7 +876,7 @@ class Trader:
                     "position": position.ticket,
                     "price": price,
                     "deviation": 20,
-                    "magic": 234000,
+                    "magic": self.magic,
                     "comment": "Close profitable trade",
                     "type_time": mt5.ORDER_TIME_GTC,
                     "type_filling": type_filling,

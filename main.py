@@ -65,8 +65,7 @@ def handle_external_close(ticket: int, symbol: str, profit: float, close_price: 
         risk_manager.record_win(symbol)
         
     portfolio_manager.log_trade_for_learning(ticket=ticket, profit=profit)
-    if 'auto_optimizer' in dir():
-        auto_optimizer.on_trade_closed(symbol, profit)
+    auto_optimizer.on_trade_closed(symbol, profit)
     
     status_icon = "🟢" if profit > 0 else "🔴"
     agent_notify(
