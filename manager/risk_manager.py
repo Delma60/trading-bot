@@ -82,9 +82,9 @@ class SmartReEntrySystem:
             
         time_elapsed = (datetime.now() - record["time"]).total_seconds() / 3600
         if time_elapsed <= 4.0 and new_signal_direction == record["direction"]:
-            if new_signal_direction == "BUY" and current_price <= record["price"]:
+            if new_signal_direction == "BUY" and current_price >= record["price"]:
                 return True
-            if new_signal_direction == "SELL" and current_price >= record["price"]:
+            if new_signal_direction == "SELL" and current_price <= record["price"]:
                 return True
         return False
 
@@ -448,13 +448,18 @@ class RiskManager:
             
             
             # Bug 5 Fixed: Resolve valid Take Profit targets from dynamic feature extraction or core defaults
-            safe_tp_pips    = dynamic_targets.get("tp_buy_pips") or (_profile.risk(symbol).take_profit_pips)
+            target_key = "tp_buy_pips" if direction == "buy" else "tp_sell_pips"
+            safe_tp_pips = dynamic_targets.get(target_key) or _profile.risk(symbol).take_profit_pips
             
             symbol_info = self.cache.get_symbol_info(symbol) if self.cache else mt5.symbol_info(symbol)
             if not symbol_info:
                 return {"approved": False, "reason": "Symbol info missing."}
 
-            pip_multiplier = 1.0 if any(x in symbol for x in ["BTC", "ETH"]) else 10.0
+            if any(symbol.startswith(p) for p in ["XAU", "XAG", "XPT", "XPD"]) or any(t in symbol for t in ["BTC", "ETH", "US30", "SPX"]):
+                pip_multiplier = 1.0
+            else:
+                pip_multiplier = 10.0
+                
             safe_sl_points = int(safe_sl_pips * pip_multiplier)
             optimal_lots = self.calculate_position_size(symbol, max_risk_usd, safe_sl_points)
             
@@ -508,7 +513,9 @@ class RiskManager:
         if stop_loss_points == 0:
             return 0.0
 
-        risk_per_1_lot = stop_loss_points * tick_value
+        point = float(symbol_info.get("point", 0.0))
+        # true dollar risk per lot requires dividing point by tick_size
+        risk_per_1_lot = stop_loss_points * (point / tick_size) * tick_value
         if risk_per_1_lot == 0.0:
             return 0.0
 
@@ -702,7 +709,7 @@ class TrailingStopManager:
                 if profit_distance > (breakeven_trigger_distance * 1.5):
                     seventy_five_percent_mark = peak - (profit_distance * 0.75)
                     if seventy_five_percent_mark > current_sl:
-                        if (seventy_five_percent_mark - open_price) >= min_stop:
+                        if (current_price - seventy_five_percent_mark) >= min_stop:
                             self._try_modify(ticket, symbol, round(seventy_five_percent_mark, 5), "75% lock")
 
             elif order_type == 1:
@@ -720,7 +727,7 @@ class TrailingStopManager:
                 if profit_distance > (breakeven_trigger_distance * 1.5):
                     seventy_five_percent_mark = peak + (profit_distance * 0.75)
                     if current_sl == 0.0 or seventy_five_percent_mark < current_sl:
-                        if (open_price - seventy_five_percent_mark) >= min_stop:
+                        if (seventy_five_percent_mark - current_price) >= min_stop:
                             self._try_modify(ticket, symbol, round(seventy_five_percent_mark, 5), "75% lock")
 
 class ProfitGuard:
@@ -979,37 +986,64 @@ class ProfitGuard:
         return 0.35
 
     def _set_breakeven_atomic(self, pos, trigger_amt: float):
-        ticket     = pos.ticket
-        symbol     = pos.symbol
-        entry      = float(pos.price_open)
-        current_sl = float(pos.sl or 0.0)
+        ticket        = pos.ticket
+        symbol        = pos.symbol
+        entry         = float(pos.price_open)
+        current_price = float(pos.price_current)
+        current_sl    = float(pos.sl or 0.0)
 
         if ticket in self._be_attempted:
             return
 
-        if pos.type == 0:
+        # 1. Check if Stop Loss is already at or better than entry
+        if pos.type == 0:  # BUY
             if current_sl >= entry:
                 self._breakeven_set.add(ticket)
                 self._be_attempted.add(ticket)
                 return
-        else:
+        else:              # SELL
             if 0 < current_sl <= entry:
                 self._breakeven_set.add(ticket)
                 self._be_attempted.add(ticket)
                 return
 
+        # 2. Resolve safe minimum operational stop distance
+        min_stop = 0.0005
+        info = getattr(self.broker, "get_symbol_info", lambda s: None)(symbol)
+        if info and hasattr(info, "stops_level") and hasattr(info, "point"):
+            min_stop = info.stops_level * info.point
+        else:
+            sym_upper = symbol.upper()
+            if "XAU" in sym_upper or "XAG" in sym_upper:
+                min_stop = 0.5
+            elif "JPY" in sym_upper:
+                min_stop = 0.05
+
+        # 3. Validate distance against real-time market price to prevent broker rejections
+        if pos.type == 0:  # BUY: current price must be safely above the entry SL
+            if (current_price - entry) < min_stop:
+                # Too close to modify safely right now. Return without adding to _be_attempted
+                return
+        else:              # SELL: current price must be safely below the entry SL
+            if (entry - current_price) < min_stop:
+                return
+
         new_sl = round(entry, 5)
-        self._be_attempted.add(ticket)
         
+        # 4. Dispatch modification securely
         ok = self.broker.modify_position(ticket, symbol, new_sl)
         if ok:
             self._breakeven_set.add(ticket)
+            self._be_attempted.add(ticket)
             self.notify(
                 f"🔐 Dynamic ProfitGuard: {symbol} SL locked to entry @ {new_sl} "
                 f"(triggered at structural threshold ${trigger_amt:.2f})",
                 priority="normal",
             )
-
+        else:
+            # If modification failed due to temporary connection drops or sudden spread spikes,
+            # do not flag as attempted so the guard retries cleanly on the next cycle loop.
+            pass
     def _close_atomic(self, pos, reason: str):
         ticket = pos.ticket
         if ticket in self._closed_this_cycle:
@@ -1114,6 +1148,16 @@ class TradeGatekeeper:
         spread = self._get_spread_pips(symbol, broker)
         ceiling = profile.risk(symbol).max_spread_pips
         
+        asset_class = profile.get_asset_class(symbol)
+        if asset_class == "crypto":
+            # Utilize the dedicated crypto ceiling initialized on the class if higher than default profile baseline
+            ceiling = max(ceiling, self.max_spread_crypto)
+        elif asset_class in ("metals", "indices", "commodities"):
+            # Metals like Gold (XAUUSD) and Indices routinely exhibit normal spreads between 20 to 60 points.
+            # If the profile ceiling inherits the tight global default (e.g., <= 5.0), scale it safely.
+            if ceiling <= 5.0:
+                ceiling = 50.0
+                
         if spread is not None and spread > ceiling:
             return False, f"Spread too high: {spread:.1f} pips (ceiling {ceiling:.1f})."
 

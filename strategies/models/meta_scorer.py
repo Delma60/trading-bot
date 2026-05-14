@@ -21,7 +21,7 @@ LSTM_TO_ACTION = {"UP": "BUY", "DOWN": "SELL", "NEUTRAL": "WAIT"}
 
 # Ordered list so the feature vector is always assembled in the same order.
 STRATEGY_NAMES = [
-    "Mean_Reversion", "Momentum", "Breakout",
+    "Mean_Reversion", "Momentum", "Breakout", "Trend_Following",
     "Scalping", "News_Trading", "Sentiment_Analysis", "Arbitrage",
 ]
 
@@ -53,6 +53,8 @@ REGIME_WEIGHTS = {
 
 
 # ── Public class ─────────────────────────────────────────────────────────────
+_LABEL_MAP = {"WAIT": 0, "BUY": 1, "SELL": 2}
+_INVERSE_LABEL_MAP = {0: "WAIT", 1: "BUY", 2: "SELL"}
 
 class MetaScorer:
     """
@@ -174,19 +176,21 @@ class MetaScorer:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _fit(self, X: np.ndarray, y: np.ndarray) -> float:
+        # Flaw 9 Correction: Safely map target strings to native XGBoost integer targets
+        y_encoded = np.array([self._LABEL_MAP.get(label, 0) for label in y], dtype=int)
+
         X_tr, X_val, y_tr, y_val = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
+            X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
         )
 
-        # Compute class weights to handle "WAIT" label imbalance
-        # This ensures BUY/SELL trades aren't underweighted despite being less frequent
+        # Compute class weights to handle label imbalance natively using encoded integer keys
         unique_labels, label_counts = np.unique(y_tr, return_counts=True)
         total_samples = len(y_tr)
         class_weights = {
             label: total_samples / (len(unique_labels) * count)
             for label, count in zip(unique_labels, label_counts)
         }
-        # Normalize to reasonable scale (max weight shouldn't exceed 5x min)
+        
         min_w = min(class_weights.values())
         max_w = max(class_weights.values())
         if max_w / min_w > 5:
@@ -204,6 +208,7 @@ class MetaScorer:
             random_state=42,
             verbosity=0,
         )
+        
         self.model.fit(
             X_tr, y_tr,
             eval_set=[(X_val, y_val)],
@@ -224,15 +229,18 @@ class MetaScorer:
     ) -> dict:
         X       = self.build_feature_vector(strategy_signals, lstm_prediction, market_row)
         probs   = self.model.predict_proba(X)[0]
-        labels  = list(self.model.classes_)
+        
+        # Flaw 9 Correction: Safely map integer model outputs back to operational string directives
+        encoded_classes = list(self.model.classes_)
+        string_labels   = [self._INVERSE_LABEL_MAP.get(c, "WAIT") for c in encoded_classes]
+        
         idx     = int(np.argmax(probs))
         return {
-            "action":        labels[idx],
+            "action":        string_labels[idx],
             "confidence":    float(probs[idx]),
-            "probabilities": dict(zip(labels, probs.tolist())),
+            "probabilities": dict(zip(string_labels, probs.tolist())),
             "source":        "meta_model",
         }
-
     def _weighted_vote(self, strategy_signals: dict, lstm_prediction: dict, regime: str = "Unknown") -> dict:
         votes = {"BUY": 0.0, "SELL": 0.0, "WAIT": 0.0}
         weights = REGIME_WEIGHTS.get(regime, {})
