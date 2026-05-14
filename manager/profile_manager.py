@@ -278,7 +278,7 @@ class ProfileManager:
                 risk_pct             = float(base["risk_pct"]),
                 stop_loss_pips       = float(base["stop_loss_pips"]),
                 take_profit_pips     = float(base["take_profit_pips"]),
-                max_spread_pips      = float(base["max_spread_pips"], 3.0),
+                max_spread_pips      = float(base.get("max_spread_pips", 3.0)),
                 max_daily_loss       = float(base.get("max_daily_loss", 500.0)),
                 daily_goal           = float(base.get("daily_goal", 50.0)),
                 cooldown_minutes     = int(base.get("cooldown_minutes", 5)),
